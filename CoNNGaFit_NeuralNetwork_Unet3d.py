@@ -14,18 +14,23 @@ modelShape = np.array([40,40,1])
 model_size = modelShape[0]*modelShape[1]*modelShape[2]
 print("model_size=",model_size);
 
+#Network Class for a 3-d Unet
+#Network reads in a 40x40x77 data cube and performs 3d convolutions on each dimension.
+#Upsampling branch of the Unet is down with convolutional layers.
+#Network is parameterized as follows:
+####nFilt0 : number of filters in the inital convolutional layer
+####kernel0 : kernel size of the initial convolutional layer. Used to reduce overall data size
+####kernel1 : kernel size of the convolutional/deconvolutional blocks
+####nFC : number of nodes in final FC layer
+####
+####Written By Cameron Trapp (ctrapped@gmail.com)
+####Updated 11/21/2023
 
-##  Hyperparameters  ##
-#nFilt0=3
-
-#kernel0 = (9,9,9) #increase first kernel size for spectra??
-#kernel1 = (3,3,3)
-#nFC = 100
-
+#### Class for convolutional on the left side of the unet
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, downsample, kernel1):
         super().__init__()
-        if downsample:
+        if downsample: #reduce dimensionality
             self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=1)
             self.shortcut = nn.Sequential(
                 nn.Conv3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(2,2,2)),
@@ -33,7 +38,7 @@ class ResidualBlock(nn.Module):
             )
         else:
             self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding=1)
-            self.shortcut = nn.Sequential() #??Like identity function?
+            self.shortcut = nn.Sequential()
             
             
         self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding=1)
@@ -44,13 +49,14 @@ class ResidualBlock(nn.Module):
         shortcut = self.shortcut(x)
         x = nn.ReLU()(self.bn1(self.conv1(x))) #Try replacing with leaky
         x = nn.ReLU()(self.bn2(self.conv2(x)))
-        x = x + shortcut
+        x = x + shortcut 
         return nn.ReLU()(x)
 
+#### Class for deconvolutional blocks on the right side of the unet
 class DeconvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, downsample,kernel1):
+    def __init__(self, in_channels, out_channels, upsample,kernel1):
         super().__init__()
-        if downsample:
+        if upsample: #increase dimensionality
             self.conv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=1)
             self.shortcut = nn.Sequential(
                 nn.ConvTranspose3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(2,2,2)),
@@ -58,7 +64,7 @@ class DeconvBlock(nn.Module):
             )
         else:
             self.conv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding=1)
-            self.shortcut = nn.Sequential() #??Like identity function?
+            self.shortcut = nn.Sequential()
             
             
         self.conv2 = nn.ConvTranspose3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding=1)
@@ -72,6 +78,7 @@ class DeconvBlock(nn.Module):
         x = x + shortcut
         return nn.ReLU()(x)
 
+#### Actual Network ####
 class NeuralNetwork(nn.Module):
     def __init__(self, nFilt0, kernel0, kernel1, nFC):
         print("output size=",modelShape[0]*modelShape[1]*modelShape[2])
@@ -82,45 +89,45 @@ class NeuralNetwork(nn.Module):
         self.layer0 = nn.Sequential(
             nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=3),
             nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
-            nn.LeakyReLU() ##??Need batchnorm too? Leaky or normal?
+            nn.LeakyReLU() 
         )
         
         ##  Residual Layers  ##
         self.layer1 = nn.Sequential(
-            ResidualBlock(nFilt0,nFilt0,downsample=False,kernel1=kernel1),
+            ResidualBlock(nFilt0,nFilt0,downsample=False,kernel1=kernel1), ##Downsample
             ResidualBlock(nFilt0,nFilt0,downsample=False,kernel1=kernel1)
         )
         
         self.layer2=nn.Sequential(
-            ResidualBlock(nFilt0,2*nFilt0,downsample=True,kernel1=kernel1),
+            ResidualBlock(nFilt0,2*nFilt0,downsample=True,kernel1=kernel1), ##Downsample
             ResidualBlock(2*nFilt0,2*nFilt0,downsample=False,kernel1=kernel1)
         )
         
         self.layer3=nn.Sequential(
-            ResidualBlock(2*nFilt0,4*nFilt0,downsample=True,kernel1=kernel1),
+            ResidualBlock(2*nFilt0,4*nFilt0,downsample=True,kernel1=kernel1), ##Downsample
             ResidualBlock(4*nFilt0,4*nFilt0,downsample=False,kernel1=kernel1)
         )        
         
         self.layer4=nn.Sequential(
-            ResidualBlock(4*nFilt0,8*nFilt0,downsample=True,kernel1=kernel1),
+            ResidualBlock(4*nFilt0,8*nFilt0,downsample=True,kernel1=kernel1), ##Downsample
             ResidualBlock(8*nFilt0,8*nFilt0,downsample=False,kernel1=kernel1)
         )  
         #######################
         
         ## Deconvolutional Layers ##
         self.dc_layer1 = nn.Sequential(
-            DeconvBlock(8*nFilt0,4*nFilt0,downsample=True,kernel1=kernel1), ##Upsample
-            DeconvBlock(4*nFilt0,4*nFilt0,downsample=False,kernel1=kernel1)
+            DeconvBlock(8*nFilt0,4*nFilt0,upsample=True,kernel1=kernel1), ##Upsample
+            DeconvBlock(4*nFilt0,4*nFilt0,upsample=False,kernel1=kernel1)
         )
         
         self.dc_layer2=nn.Sequential(
-            DeconvBlock(4*nFilt0,2*nFilt0,downsample=True,kernel1=kernel1),
-            DeconvBlock(2*nFilt0,2*nFilt0,downsample=False,kernel1=kernel1)
+            DeconvBlock(4*nFilt0,2*nFilt0,upsample=True,kernel1=kernel1), ##Upsample
+            DeconvBlock(2*nFilt0,2*nFilt0,upsample=False,kernel1=kernel1)
         )
         
         self.dc_layer3=nn.Sequential(
-            DeconvBlock(2*nFilt0,nFilt0,downsample=True,kernel1=kernel1),
-            DeconvBlock(nFilt0,nFilt0,downsample=False,kernel1=kernel1)
+            DeconvBlock(2*nFilt0,nFilt0,upsample=True,kernel1=kernel1), ##Upsample
+            DeconvBlock(nFilt0,nFilt0,upsample=False,kernel1=kernel1)
         )        
 
         #######################
@@ -138,61 +145,39 @@ class NeuralNetwork(nn.Module):
         else:
             self.fc1 = nn.Linear(in_features=128*nFilt0,out_features=model_size)
 
-        
-        
-
-        
+   
     def forward(self, x):
         nBatch,nSpec,nX,nY = x.size() 
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
 
         ##  Initial convolutional layer and pooling  ##
-        #print("SHAPES OF IMAGE:")
-        #print(np.shape(x))
         x = self.layer0(x)
         
 
         ##  Residual Blocks  ##
         x = self.layer1(x)
-        #print(np.shape(x))
 
         featureMap1 = self.featureForwarding(x)
         x = self.layer2(x)
-       # print(np.shape(x))
 
         featureMap2 = self.featureForwarding(x)
         x = self.layer3(x)
-       # print(np.shape(x))
 
         featureMap3 = self.featureForwarding(x) 
         x = self.layer4(x)
-        #print(np.shape(x))
 
-
-        #print("SIZE OF FEATUREMAP3 = ",featureMap3.size())
-        #print("SIZE OF FEATUREMAP2 = ",featureMap2.size())
-        #print("SIZE OF FEATUREMAP1 = ",featureMap1.size())
-
+        ## Deconvolutional Blocks ##
         x = self.dc_layer1(x)
-       # print("DECONV LAYERS")
-        #print(np.shape(x))
-
-       # print("SIZE of X1 = ",x.size())
-        x = x + featureMap3
+        x = x + featureMap3 #Feature forwarding from left convolutional -> deconvolutional wing
 
         x = self.dc_layer2(x)
-       # print("SIZE of X2 = ",x.size())
-        x = x + featureMap2[:,:,0:9,:,:]
-        #print(np.shape(x))
+        x = x + featureMap2[:,:,0:9,:,:] #Cropped Feature forwarding
 
         x = self.dc_layer3(x)
-       # print("SIZE of X3 = ",x.size())
-        x = x + featureMap1[:,:,1:18,0:9,0:9]
-       # print(np.shape(x))
+        x = x + featureMap1[:,:,1:18,0:9,0:9] #Cropped Feature forwarding
 
-        ##  Output  ##
+        ##  Output Inference ##
         x = self.avgpool0(x)
-       # print(np.shape(x))
 
         x = torch.flatten(x,1)
         if self.nFC>0:
@@ -200,26 +185,4 @@ class NeuralNetwork(nn.Module):
             x = self.relu0(x)
         output = self.fc1(x)
  
-        #print(np.shape(output))
-
         return output
-        
-        
-
-
-#to predict, use
-####logits = model(X)
-####pred_probab = nn.Softmax(dim=1)(logits)
-####y_pred=pred_probab.argmax(1)
-#where X is the image
-
-
-
-
-
-
-
-
-
-
-

@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 #from torchvision import datasets
 from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
-from CoNNGaFit_InferenceDatasets import CoNNGaFitImageInferenceDataset
+from CoNNGaFit_Datasets import CoNNGaFitImageInferenceDataset
 
 
 import numpy as np
@@ -13,6 +13,9 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 
 import h5py
+
+from CoNNGaFit_PlottingFunctions import LoadNames,CreateBasicPlots,MakeImage
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 #device = 'cpu'
@@ -30,94 +33,6 @@ Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np
 ####Updated 11/21/2023
 
 
-def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
-
-def LoadNames(inputDir):
-    ####Get a distinct name for each image to run inferences on
-    Nlines=0
-    fid = open(inputDir,'r')
-    names = np.zeros((0)).astype('str')
-    for line in fid:
-        x=line.split("\\")
-        Nsplit = np.size(x)
-        y=(x[Nsplit-1]).split('.') #get filename in directory
-        names=np.append(names,y[0]) #ignore filetype
-        
-    fid.close()
-    
-    return names
-
-    
-
-
-def MakeImage(data,output,vmin=None,vmax=None,targetShape=None):
-    image = np.zeros((np.shape(data)[1]))
-    image[:] = data[:]
-    
-    if targetShape is None:
-        npix = int(np.round(np.sqrt(np.size(image))))
-        targetShape=[npix,npix]
-        
-    image = np.reshape(image,targetShape) #make into 2d image
-
-    plt.figure()
-    
-    if vmax is None or vmin is None:
-        vmax = np.max( [-np.min(image) , np.max(image)]) # default to symmetric limits
-        vmin=-vmax
-    
-    #Plot in units of Solar Masses per year
-    plt.imshow(image*Sim2PhysicalUnits_MassFlux,cmap='seismic',vmin=vmin*Sim2PhysicalUnits_MassFlux,vmax=vmax*Sim2PhysicalUnits_MassFlux)
-    plt.colorbar(label = 'Radial Mass Flux [M$_{\odot}$ yr$^{-1}$]');
-    plt.savefig(output+"projectionMap.png")
-    plt.close()
-    
-    #Save hdf5 for generating figures
-    hf.File(output+"projectionMap.hdf5")
-    hf.create_dataset('image',data=image)
-    hf.close()
-
-def CreateBasicPlots(data,output,targetShape=None,nBins=20):
-    image = np.zeros((np.shape(data)[1]))
-    image[:] = data[:]
-    if targetShape is None:
-        npix = int(np.round(np.sqrt(np.size(image))))
-        targetShape=[npix,npix]
-    
-    npix=targetShape[0]
-    image = np.reshape(image,targetShape) #make into 2d image
-    
-    ## Calculate galactocentric radius of each pixel
-    centerIndex = [npix/2-1,npix/2-1]
-    indices = np.indices(np.shape(image))
-    rmag = 2*np.sqrt( np.power(indices[0,:,:]-centerIndex[0] , 2) + np.power(indices[1,:,:] -centerIndex[1], 2) )
-    
-    ##Calculate total mass flux as function of radius
-    binRange=[0,np.max(rmag)]
-    binned_data,binedge,binnum = stats.binned_statistic_dd(rmag.flatten(),image.flatten(),"sum",nBins,range=[binRange])
-    
-    #Default to symmetric y-limits
-    vmax = np.max( [-np.min(binned_data* Sim2PhysicalUnits_MassFlux) , np.max(binned_data* Sim2PhysicalUnits_MassFlux)])*1.05
-    vmin=-vmax
-    
-    #Plot in units of Solar Masses per year
-    plt.figure()
-    plt.plot(np.linspace(0,np.max(rmag),nBins) , binned_data* Sim2PhysicalUnits_MassFlux , 'k', lw = 2.5) #plot azimuthal average
-    plt.plot(np.linspace(0,np.max(rmag),nBins) , binned_data*0 , 'k--', lw = 1.5) #plot zero line
-    plt.xlabel('Radius [kpc]')
-    plt.ylabel('Radial Mass Flux [M$_{\odot}$ yr$^{-1}$]')
-    plt.ylim([vmin,vmax])
-    plt.savefig(output+"radialPlot.png")
-    plt.close()
-    
-    #Save hdf5 for generating figures
-    hf.File(output+"radialPlot.hdf5")
-    hf.create_dataset('binned_data',data=binned_data)
-    hf.create_dataset('rPlot',data=np.linspace(0,np.max(rmag),nBins))
-
-    hf.close()
-   
-    
     
 def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
  
@@ -136,8 +51,7 @@ def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
         targetShape=[40,40] #output dimensions
         from CoNNGaFit_NeuralNetwork_Unet3d_18_parameterized import NeuralNetwork  
         
-        paramSuffix = "lr"+str(learning_rate)+"_nFC"+str(nFC)+"_wd"+str(weight_decay)+"_nF"+str(nFilt0)+"_unetFullSpec"
-        modelOutputPath = 'TrainedNetworks\\MassFlux_Unet18_FullSpec'+paramSuffix+'_epoch'+str(epochs)+'.pt' #Address of desired model
+        modelOutputPath = 'TrainedNetworks\\MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt' #Address of desired model
         
         model =NeuralNetwork(params[0],(params[1],params[1],params[1]),(params[2],params[2],params[2]),params[3]).to(device)
 

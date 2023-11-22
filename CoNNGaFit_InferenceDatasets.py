@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 from torchvision.io import read_image
 
-Nlabels = 20*20*1
+#### Dataset class for inferences. Does not contain Annotations
 
 class CoNNGaFitImageInferenceDataset():
     def __init__(self, annotations_file, root_dir, transform=None, target_transform=None):
@@ -27,15 +27,14 @@ class CoNNGaFitImageInferenceDataset():
             hf = h5py.File(img_path,'r')
             image = np.array(hf['spectra']).astype('float')
         elif filetype=="fits":
-            i=0
-            #load fits file here
+            hdul = fits.open(imageDir)
+            image = np.array(hdul[0].data) 
         else:
             image = read_image(img_path)
 
-        #label = np.array(self.img_labels.iloc[idx,1:Nlabels+1]).astype('float')
         if self.transform:
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
-        return image#, label
+        return image
 

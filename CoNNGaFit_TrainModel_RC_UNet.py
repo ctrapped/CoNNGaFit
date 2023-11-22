@@ -6,7 +6,7 @@ from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
 from CoNNGaFit_Datasets import CoNNGaFitImageDataset
 
-from CoNNGaFit_NeuralNetwork_Unet3d_18_parameterized import NeuralNetwork
+from CoNNGaFit_NeuralNetwork_Unet3d import NeuralNetwork
 import numpy as np
 from sklearn.preprocessing import StandardScaler    
 import matplotlib 
