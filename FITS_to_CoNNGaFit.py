@@ -8,14 +8,27 @@ from astropy.io import fits
 #from torchvision.io import read_image
 deg2arcsec = 60*60
 
-def Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,targetNpix,targetNspec,saveImages=False):
+####Function to convert a FITS file of a given resolution to a compatible hdf5 file to run inferences on with CoNNGaFit
+####Currently, this will reduce the resolution of the input image
+####Input parameter are:
+####    imageDir: path to the fits file you wish to convert
+####    output: path to where you want to write the converted files and images
+####    targetNpix: Target spatial dimensionality for inferences (currently 40)
+####    targetNspec: Target spectral dimenionality
+####    distance: (Optional) Distance to observed galaxy for bookkeeping purposes
+####    saveImages: (Optional) Save images of column densities for original and reduced images
+####
+####Written By Cameron Trapp (ctrapped@gmail.com)
+####Updated 11/21/2023
+
+def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveImages=False):
     hdul = fits.open(imageDir)
     originalPixelRes = np.abs(hdul[0].header['CDELT1']*deg2arcsec)
     print('pixel res = ',hdul[0].header['CDELT1']*deg2arcsec)
     rawdata = hdul[0].data 
     
-    print("Shape of raw data?",np.shape(rawdata))
-    print("max of raw data",np.max(rawdata))
+    print("Shape of raw data",np.shape(rawdata))
+    
     if saveImages:
         plt.imshow(np.sum(rawdata,axis=1)[0,:,:])
         plt.colorbar()
@@ -27,11 +40,7 @@ def Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,
         
     
     newImage = np.zeros((targetNpix,targetNpix,targetNspec))
-    
-    imagePixelRes_kpc = pixelRes*distance
-    targetPixelRes = 2./5000.
-    #nBin = int(np.round(targetPixelRes / pixelRes))
-    #nBin = int(np.round(targetRes_kpc / imagePixelRes_kpc))
+
     nBin = int(np.round(np.shape(rawdata)[3] / 40))
 
     newdata = rawdata[0,:,:,:]
@@ -44,8 +53,7 @@ def Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,
     ds = int(np.round((targetNspec-nSpec)/2))
     print("ds=",ds)
     print("targetNspec=",targetNspec)
-   # if ds<0:
-    #    ds*=-1
+
     pixOffset0=0
     print("dx=",dx)
 
@@ -73,8 +81,6 @@ def Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,
             elif ds<0:
                 newImage[i+dx,j+dx,:] = newdata[-ds:nSpec+ds,i*nBin+pixOffset0:(i+1)*nBin+pixOffset,j*nBin+pixOffset0:(j+1)*nBin+pixOffset].sum(axis=all_but_first)
 
-
-    print("max of new data",np.max(newImage))
     if saveImages:
         plt.imshow(np.sum(newImage,axis=2))
         plt.colorbar()
@@ -94,44 +100,4 @@ def Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,
     print("newPixelRes=",originalPixelRes*nBin," arcsec")
     print("newPixelRes=",originalPixelRes*nBin /60/60 * np.pi/180 * distance," kpc")
 
-targetRes_kpc = 1 ###Performance was okay with this set to 1, aside from spatial scale being off while plotting
 
-print("Running NGC 2403")
-imageDir = 'CoNNGaFitData/observations/NGC_2403_NA_CUBE_THINGS.FITS'
-output = 'CoNNGaFitData/observations/NGC_2403'
-distance = 3200 #kpc
-pixelRes = 1 / 60 / 60 *np.pi/180 #arcSec
-targetNpix = 40
-targetNspec = int(np.round(400 / 5.2))
-saveImages = True
-Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,targetNpix,targetNspec,saveImages)
-
-print("Running NGC 3351")
-imageDir = 'CoNNGaFitData/observations/NGC_3351_NA_CUBE_THINGS.FITS'
-output = 'CoNNGaFitData/observations/NGC_3351'
-distance = 10500 #kpc
-pixelRes = 1 / 60 / 60 *np.pi/180 #arcSec
-targetNpix = 40
-targetNspec = int(np.round(400 / 5.2))
-saveImages = True
-Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,targetNpix,targetNspec,saveImages)
-
-print("Running NGC 5055")
-imageDir = 'CoNNGaFitData/observations/NGC_5055_NA_CUBE_THINGS.FITS'
-output = 'CoNNGaFitData/observations/NGC_5055'
-distance = 8900 #kpc
-pixelRes = 1 / 60 / 60 *np.pi/180 #arcSec
-targetNpix = 40
-targetNspec = int(np.round(400 / 5.2))
-saveImages = True
-Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,targetNpix,targetNspec,saveImages)
-
-print("Running NGC 7793")
-imageDir = 'CoNNGaFitData/observations/NGC_7793_NA_CUBE_THINGS.FITS'
-output = 'CoNNGaFitData/observations/NGC_7793'
-distance = 3600 #kpc
-pixelRes = 1 / 60 / 60 *np.pi/180 #arcSec
-targetNpix = 40
-targetNspec = int(np.round(400 / 5.2))
-saveImages = True
-Convert_THINGS_to_CoNNGaFit(imageDir,output,distance,pixelRes,targetRes_kpc,targetNpix,targetNspec,saveImages)

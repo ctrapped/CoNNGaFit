@@ -19,6 +19,15 @@ from CoNNGaFit_PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPl
 
 import sys
 
+
+####Trains the Unet read from CoNNGaFit_NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, Validation, and testing datasets must be provided in .csv format as outlined in CoNNGaFit_Datasets.py.
+####Hyperparameters were chosen based on paramter space optimization+trial and error.
+####Specifically tuned to train for radial mass fluxes and provide appropriate conversions on plots
+#
+####Written By Cameron Trapp (ctrapped@gmail.com)
+####Updated 11/21/2023
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 #device = 'cpu'
 print(f'Using {device} device')

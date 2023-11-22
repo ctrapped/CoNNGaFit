@@ -9,7 +9,7 @@ import h5py
 Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np.power(10.,7.)) * np.power(10,10) #1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 #### Plotting Functions ####
-def MakeCompImage(data_pred,data_input,data_image,output,Nsnap,Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,paramLabel='Radial Mass Flux',unitLabel='[M$_{\odot}$ yr$^{-1}$]'):
+def MakeCompImage(data_pred,data_input,data_image,output,Nsnap,Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,paramLabel='Radial Mass Flux',unitLabel='[M$_{\odot}$ yr$^{-1}$]',binOp="sum"):
     print("Making Comp Image...")
     image_pred = np.zeros((np.shape(data_pred)[1]))
     image_pred[:] = data_pred[Nsnap,:]
@@ -36,9 +36,10 @@ def MakeCompImage(data_pred,data_input,data_image,output,Nsnap,Sim2PhysicalUnits
     rmag = np.sqrt( np.power(indices[0,:,:]-centerIndex[0] , 2) + np.power(indices[1,:,:] -centerIndex[1], 2) )
     
     nBins = 20
+    
     binRange=[0,np.max(rmag)]
-    binned_data_pred,binedge,binnum = stats.binned_statistic_dd(rmag.flatten(),image_pred.flatten(),"sum",nBins,range=[binRange])
-    binned_data_input,binedge,binnum = stats.binned_statistic_dd(rmag.flatten(),image_input.flatten(),"sum",nBins,range=[binRange])
+    binned_data_pred,binedge,binnum = stats.binned_statistic_dd(rmag.flatten(),image_pred.flatten(),binOp,nBins,range=[binRange])
+    binned_data_input,binedge,binnum = stats.binned_statistic_dd(rmag.flatten(),image_input.flatten(),binOp,nBins,range=[binRange])
     maxPlot = np.max([-np.min(binned_data_pred),-np.min(binned_data_input),np.max(binned_data_pred),np.max(binned_data_input)])
     plt.plot(np.linspace(0,np.max(rmag),nBins) , binned_data_input* Sim2PhysicalUnits , 'k',lw = 2)
     plt.plot(np.linspace(0,np.max(rmag),nBins) , binned_data_pred * Sim2PhysicalUnits , 'r--' ,lw = 2)
