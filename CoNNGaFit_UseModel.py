@@ -34,7 +34,7 @@ Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np
 
 
     
-def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
+def RunInferences(networkType,imageOutput_prefix,imageList,params=None,saveLatentImages=False):
  
     #####Set variables based on desired network type
     
@@ -42,21 +42,21 @@ def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
         nFilt0 = 6 #Number of filters
         k0 = 9 #Initial kernel size
         k1 = 3 #Kernel Size
-        nFC = 3000 #Nodes in FC layer
+        nFC = 1500 #Nodes in FC layer
         learning_rate= 0.0001 #lr used in training
         weight_decay= 0.001 #wd used in training
-        epochs= 4000 #epochs used in training
+        epochs= 100 #epochs used in training
         params=[nFilt0,k0,k1,nFC]
         
         targetShape=[40,40] #output dimensions
-        from CoNNGaFit_NeuralNetwork_Unet3d_18_parameterized import NeuralNetwork  
+        from CoNNGaFit_NeuralNetwork_Unet3d_HiResTest import NeuralNetwork  
         
-        modelOutputPath = 'TrainedNetworks\\MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt' #Address of desired model
+        modelOutputPath = 'TrainedNetworks\\hiResTests\\MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt' #Address of desired model
         
         model =NeuralNetwork(params[0],(params[1],params[1],params[1]),(params[2],params[2],params[2]),params[3]).to(device)
 
 
-    model.load_state_dict(torch.load(modelOutputPath+".pt"))
+    model.load_state_dict(torch.load(modelOutputPath))
     model.eval()
 
     imageOutput_suffix = '_massFlux_FacePlot_'+networkType+"_TR_Comp_"
@@ -94,7 +94,7 @@ def RunInferences(networkType,imageOutput_prefix,imageList,params=None):
     #Make inference for each image loaded
     for inputs in dataloader:
         X=inputs.to(device)
-        pred = model(X.float())
+        pred = model(X.float(),saveLatentImages)
 
         imageOutput = imageOutput_prefix + inferenceNames[i] + imageOutput_suffix 
         plotOutput = imageOutput_prefix + inferenceNames[i] + plotOutput_suffix 

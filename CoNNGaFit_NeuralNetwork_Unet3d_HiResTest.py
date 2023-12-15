@@ -113,8 +113,8 @@ class NeuralNetwork(nn.Module):
         
         #Initial Convolutional Layer
         self.layer0 = nn.Sequential(
-            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=3),
-            nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
+            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=1),
+            #nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
             nn.LeakyReLU() 
         )
         
@@ -165,7 +165,7 @@ class NeuralNetwork(nn.Module):
         
         self.avgpool0 = nn.AvgPool3d(kernel_size=(2,2,2),stride=(2,2,2))
         if self.nFC>0:
-            self.fc0 = nn.Linear(in_features=128*nFilt0 , out_features=nFC)
+            self.fc0 = nn.Linear(in_features=128*8*nFilt0 , out_features=nFC)
             self.relu0 = nn.LeakyReLU()
             self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
         else:
@@ -185,32 +185,32 @@ class NeuralNetwork(nn.Module):
         ##  Residual Blocks  ##
         x = self.layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,1)
-            
+
         featureMap1 = self.featureForwarding(x)
         x = self.layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,2)
-            
+
         featureMap2 = self.featureForwarding(x)
         x = self.layer3(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,3)
-            
+
         featureMap3 = self.featureForwarding(x) 
         x = self.layer4(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,4)
             #SaveAllSpectralChannels(x,4)
-            
+
         ## Deconvolutional Blocks ##
         x = self.dc_layer1(x)
         x = x + featureMap3 #Feature forwarding from left convolutional -> deconvolutional wing
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
             
         x = self.dc_layer2(x)
-        x = x + featureMap2[:,:,0:9,:,:] #Cropped Feature forwarding
+        x = x + featureMap2[:,:,0:17,:,:] #Cropped Feature forwarding
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
             
         x = self.dc_layer3(x)
-        x = x + featureMap1[:,:,1:18,0:9,0:9] #Cropped Feature forwarding
+        x = x + featureMap1[:,:,2:35,:,:] #Cropped Feature forwarding
         if saveLatentImages:
             SaveSummedSpectralChannels(x,7)
             #SaveAllSpectralChannels(x,7)

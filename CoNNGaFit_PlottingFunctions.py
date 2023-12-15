@@ -10,7 +10,6 @@ Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np
 
 #### Plotting Functions ####
 def MakeCompImage(data_pred,data_input,data_image,output,Nsnap,Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,paramLabel='Radial Mass Flux',unitLabel='[M$_{\odot}$ yr$^{-1}$]',binOp="sum"):
-    print("Making Comp Image...")
     image_pred = np.zeros((np.shape(data_pred)[1]))
     image_pred[:] = data_pred[Nsnap,:]
     
@@ -90,7 +89,7 @@ def MakeImage(data,output,vmin=None,vmax=None,targetShape=None,Sim2PhysicalUnits
     plt.close()
     
     #Save hdf5 for generating figures
-    hf.File(output+"projectionMap.hdf5")
+    hf=h5py.File(output+"projectionMap.hdf5",'w')
     hf.create_dataset('image',data=image)
     hf.close()
 
@@ -128,7 +127,7 @@ def CreateBasicPlots(data,output,targetShape=None,nBins=20,Sim2PhysicalUnits=Sim
     plt.close()
     
     #Save hdf5 for generating figures
-    hf.File(output+"radialPlot.hdf5")
+    hf=h5py.File(output+"radialPlot.hdf5",'w')
     hf.create_dataset('binned_data',data=binned_data)
     hf.create_dataset('rPlot',data=np.linspace(0,np.max(rmag),nBins))
 
@@ -255,12 +254,12 @@ def LoadNames(inputDir):
     ####Get a distinct name for each image to run inferences on
     Nlines=0
     fid = open(inputDir,'r')
-    names = np.zeros((0)).astype('str')
+    names = []
     for line in fid:
         x=line.split("\\")
         Nsplit = np.size(x)
         y=(x[Nsplit-1]).split('.') #get filename in directory
-        names=np.append(names,y[0]) #ignore filetype
+        names.append(y[0]) #ignore filetype
         
     fid.close()
     

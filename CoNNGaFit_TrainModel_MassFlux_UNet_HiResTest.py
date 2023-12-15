@@ -6,7 +6,7 @@ from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
 from CoNNGaFit_Datasets import CoNNGaFitImageDataset
 
-from CoNNGaFit_NeuralNetwork_Unet3d import NeuralNetwork
+from CoNNGaFit_NeuralNetwork_Unet3d_HiResTest import NeuralNetwork
 import numpy as np
 import matplotlib 
 matplotlib.use('Agg')
@@ -43,9 +43,9 @@ index2kpc=1
 ####   HYPERPARAMETERS   ####
 #Optimized values given in comments
 learning_rate = 0.0001
-weight_decay = 0.001
-epochs = 4000
-nFC = 3000
+weight_decay = 0.002
+epochs = 2500
+nFC = 2000
 nFilt0 = 6
 k0=9
 k1=3
@@ -57,10 +57,10 @@ k1=3
 try:
     sampleSuffix = sys.argv[1]
 except:
-    sampleSuffix = 'All_Inclinations_finalSnapNoM12m'
-trainingSetFilename = 'training_annotations_MassFlux_'+sampleSuffix+'.csv'
-validationSetFilename = 'validation_annotations_MassFlux_'+sampleSuffix+'.csv'
-testingSetFilename = 'test_annotations_MassFlux_'+sampleSuffix+'.csv'
+    sampleSuffix = 'finalSnapNoM12m'
+trainingSetFilename = 'training_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
+validationSetFilename = 'validation_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
+testingSetFilename = 'test_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
 outputFilebase = 'massFlux_'+sampleSuffix
 
 trainingDir = 'CoNNGaFitData\\annotation_datasets\\'+trainingSetFilename
