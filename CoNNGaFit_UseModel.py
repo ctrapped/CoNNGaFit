@@ -1,3 +1,4 @@
+import os
 import torch
 #from torch import nn
 from torch.utils.data import DataLoader
@@ -7,7 +8,7 @@ from CoNNGaFit_Datasets import CoNNGaFitImageInferenceDataset
 
 
 import numpy as np
-#from sklearn.preprocessing import StandardScaler    
+#from sklearn.preprocessing import StandardScaler
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 import scipy.stats as stats
@@ -21,8 +22,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 #device = 'cpu'
 print(f'Using {device} device')
 
-CUDA_LAUNCH_BLOCKING=1
-
 Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np.power(10.,7.)) * np.power(10,10) #1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 ####Functions to calculate inferences on HI spectral datacubes from a previously trained CoNNGaFit network. Generates a projection map and a radial plot for the fitted parameter of interest. 
@@ -34,27 +33,47 @@ Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np
 
 
     
-def RunInferences(networkType,imageOutput_prefix,imageList,params=None,saveLatentImages=False):
- 
-    #####Set variables based on desired network type
-    
-    if params is None and networkType=='unet18': ####U-Net
-        nFilt0 = 6 #Number of filters
-        k0 = 9 #Initial kernel size
-        k1 = 3 #Kernel Size
-        nFC = 1500 #Nodes in FC layer
-        learning_rate= 0.0001 #lr used in training
-        weight_decay= 0.001 #wd used in training
-        epochs= 100 #epochs used in training
-        params=[nFilt0,k0,k1,nFC]
-        
-        targetShape=[40,40] #output dimensions
-        from CoNNGaFit_NeuralNetwork_Unet3d_HiResTest import NeuralNetwork  
-        
-        modelOutputPath = 'TrainedNetworks\\hiResTests\\MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt' #Address of desired model
-        
-        model =NeuralNetwork(params[0],(params[1],params[1],params[1]),(params[2],params[2],params[2]),params[3]).to(device)
+def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params=None,saveLatentImages=False):
+    """Load a previously trained CoNNGaFit network and run it on a list of input datacubes,
+    writing a projection-map PNG/hdf5 and a radial-profile PNG/hdf5 per input image.
 
+    networkType: which trained network configuration to use. Currently only 'unet18' is
+        implemented; any other value raises ValueError.
+    imageOutput_prefix: directory/filename prefix prepended to every output file written.
+    imageList: path to a CSV listing the input datacubes to run inference on (see
+        CoNNGaFitImageInferenceDataset in CoNNGaFit_Datasets.py for the expected format).
+    modelPath: path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint
+        to load, overriding the networkType's hardcoded default checkpoint below. Pass None to
+        use the default checkpoint for the chosen networkType.
+    params: [nFilt0,k0,k1,nFC] architecture params to build the network with, overriding the
+        networkType's hardcoded defaults below (e.g. to load a checkpoint that was trained
+        with different hyperparameters than the current default). Pass None to use the
+        default params for the chosen networkType.
+    saveLatentImages: if True, dump intermediate activation images during the forward pass
+        (see NeuralNetwork.forward's saveLatentImages argument) - useful for debugging only.
+    """
+
+    #####Set variables based on desired network type
+
+    if networkType=='unet18': ####U-Net
+        targetShape=[40,40] #output dimensions
+        from AlternativeNetworks.CoNNGaFit_NeuralNetwork_Unet3d_HiResTest import NeuralNetwork
+
+        modelOutputPath = modelPath or os.path.join('TrainedNetworks','hiResTests','MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt') #Address of desired model
+
+        if params is None:
+            nFilt0 = 6 #Number of filters
+            k0 = 9 #Initial kernel size
+            k1 = 3 #Kernel Size
+            nFC = 1500 #Nodes in FC layer
+            learning_rate= 0.0001 #lr used in training
+            weight_decay= 0.001 #wd used in training
+            epochs= 100 #epochs used in training
+            params=[nFilt0,k0,k1,nFC]
+
+        model = NeuralNetwork(params[0],(params[1],params[1],params[1]),(params[2],params[2],params[2]),params[3]).to(device)
+    else:
+        raise ValueError(f"Unrecognized networkType '{networkType}' - only 'unet18' is currently implemented.")
 
     model.load_state_dict(torch.load(modelOutputPath))
     model.eval()
@@ -64,9 +83,9 @@ def RunInferences(networkType,imageOutput_prefix,imageList,params=None,saveLaten
     compositeOutput_suffix = '_massFlux_CompositePlot_'+networkType+"_TR_Comp_"
 
 
-    try: #Get normalization
+    try: #Get normalization (saved under the 'imageStats' dataset by the training scripts)
         hf_model = h5py.File(modelOutputPath+".hdf5",'r')
-        imageStats = np.array(hf_model['normalizationStats'])
+        imageStats = np.array(hf_model['imageStats'])
         imageMean = imageStats[0]
         imageStdv = imageStats[1]
     except: #Default to per image normalization if training values not available for some reason
@@ -90,18 +109,16 @@ def RunInferences(networkType,imageOutput_prefix,imageList,params=None,saveLaten
     #Get names of images
     inferenceNames = LoadNames(imageList)
 
-    i=1
     #Make inference for each image loaded
-    for inputs in dataloader:
+    for i, inputs in enumerate(dataloader):
         X=inputs.to(device)
         pred = model(X.float(),saveLatentImages)
 
-        imageOutput = imageOutput_prefix + inferenceNames[i] + imageOutput_suffix 
-        plotOutput = imageOutput_prefix + inferenceNames[i] + plotOutput_suffix 
+        imageOutput = imageOutput_prefix + inferenceNames[i] + imageOutput_suffix
+        plotOutput = imageOutput_prefix + inferenceNames[i] + plotOutput_suffix
 
-        MakeImage(pred.cpu().detach().numpy(),imageOutput,targetShape) #Generate Projection Map
+        MakeImage(pred.cpu().detach().numpy(),imageOutput,targetShape=targetShape) #Generate Projection Map
         CreateBasicPlots(pred.cpu().detach().numpy(),plotOutput,targetShape) #Generate Radial Plots
-        i+=1
 
-    print("Done!")    
+    print("Done!")
 

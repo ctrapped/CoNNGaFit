@@ -1,24 +1,32 @@
+import os
+import argparse
 from CoNNGaFit_UseModel import RunInferences
-#### User Input ############################  
-sampleSuffix = 'finalSnapNoM12m'
+####Runs inference with a previously trained 'unet18' network on the validation set for a
+####given sample, so predictions can be spot-checked against the known validation labels.
+#
+####Run as: python InferenceTest_ValidationSet.py [options]
+####  Run with --help to see all options.
 
-trainingSetFilename = 'training_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
-validationSetFilename = 'validation_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
-testingSetFilename = 'test_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
-outputFilebase = 'massFlux_'+sampleSuffix
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run inference with a previously trained 'unet18' network on the validation set, to spot-check predictions against known labels.")
+    parser.add_argument('--sample-suffix', default='finalSnapNoM12m',
+                         help="Suffix used to build the default validation annotation CSV filename, ignored if --validation-csv is given explicitly. Default: %(default)s")
+    parser.add_argument('--data-dir', default='CoNNGaFitData',
+                         help="Root data directory the validation annotation CSV is read from (<data-dir>/annotation_datasets/). Default: %(default)s")
+    parser.add_argument('--validation-csv', default=None,
+                         help="Validation annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: validation_annotations_MassFlux_All_Inclinations_<sample-suffix>.csv")
+    parser.add_argument('--output-dir', default="CoNNGaFitData/observations/validation_tests/",
+                         help="Directory to place outputs in. Default: %(default)s")
+    parser.add_argument('--network-type', default='unet18',
+                         help="Which trained network configuration to use. Default: %(default)s")
+    parser.add_argument('--model-path', default=None,
+                         help="Path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint to load. Default: the network-type's built-in default checkpoint.")
+    return parser.parse_args()
 
-trainingDir = 'CoNNGaFitData\\annotation_datasets\\'+trainingSetFilename
-validationDir = 'CoNNGaFitData\\annotation_datasets\\'+validationSetFilename
-testingDir = 'CoNNGaFitData\\annotation_datasets\\'+testingSetFilename
+args = parse_args()
 
+sampleSuffix = args.sample_suffix
+validationSetFilename = args.validation_csv or 'validation_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
+validationDir = os.path.join(args.data_dir,'annotation_datasets',validationSetFilename)
 
-####Network to use
-networkType = 'unet18'
-####Address of csv file with list of images to to apply model to
-imageList = validationDir
-####Directory to place outputs in
-imageOutput = "CoNNGaFitData/observations/validation_tests/"
-############################################
-
-
-RunInferences(networkType , imageOutput, imageList,saveLatentImages=True)
+RunInferences(args.network_type, args.output_dir, validationDir, modelPath=args.model_path, saveLatentImages=True)

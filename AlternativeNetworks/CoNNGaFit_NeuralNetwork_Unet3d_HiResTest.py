@@ -54,20 +54,8 @@ def SaveSummedSpectralChannels(x,nStep):
 
 #### Class for convolutional on the left side of the unet
 class ResidualBlock(nn.Module):
-    """Single residual block on the U-Net's encoder (downsampling) side.
-
-    Two 3-d convolutions (conv1 -> BN -> ReLU -> conv2 -> BN) with a skip connection added
-    back before the final ReLU. When downsample=True, conv1 uses stride 2 to halve each
-    spatial/spectral dimension, and the skip connection is projected through a strided 1x1x1
-    conv + BatchNorm so its shape matches the downsampled main path.
-
-    dropout_rate (default 0.0, i.e. off): probability for a channel-wise nn.Dropout3d applied
-    to the block's output (after the residual add + final ReLU). Unlike the FC-layer dropout
-    in NeuralNetwork, this regularizes every stage of the encoder - and, since featureMap1/2/3
-    are captured right after these blocks run, it also regularizes what gets forwarded through
-    the skip connections. See CoNNGaFit_NeuralNetwork_Unet3d.NeuralNetwork's block_dropout_rate
-    docstring for recommended usage before enabling this.
-    """
+    """Encoder-side residual block - see CoNNGaFit_NeuralNetwork_Unet3d.py's ResidualBlock
+    for the full description; identical architecture, used here for the HiRes-test network."""
 
     def __init__(self, in_channels, out_channels, downsample, kernel1, dropout_rate=0.0):
         super().__init__()
@@ -97,14 +85,8 @@ class ResidualBlock(nn.Module):
 
 #### Class for spatially upsampling the decoder path before a skip-connection concatenation ####
 class Upsample(nn.Module):
-    """Spatially upsamples x via a single strided ConvTranspose3d (roughly doubling each
-    spatial/spectral dimension), with no BatchNorm/shortcut/second conv.
-
-    Kept as its own module, separate from DeconvBlock, because the encoder's skip-connection
-    feature map must be concatenated onto x *after* it's been brought up to the matching
-    spatial resolution but *before* DeconvBlock's own convolutions run - concatenation (unlike
-    addition) requires the two tensors to already share the same spatial shape.
-    """
+    """See CoNNGaFit_NeuralNetwork_Unet3d.py's Upsample for the full description; identical,
+    used here for the HiRes-test network."""
 
     def __init__(self, in_channels, out_channels, kernel1):
         super().__init__()
@@ -115,18 +97,8 @@ class Upsample(nn.Module):
 
 #### Class for deconvolutional blocks on the right side of the unet
 class DeconvBlock(nn.Module):
-    """Single block on the U-Net's decoder (upsampling) side - the transpose-convolution
-    mirror of ResidualBlock. Spatial upsampling itself happens beforehand (see Upsample
-    above); when upsample=True here, conv1 instead runs at stride 1 to reduce the channel
-    count of the just-concatenated (upsampled decoder features + encoder skip features)
-    tensor back down, with the skip connection projected through a matching stride-1 1x1x1
-    transpose conv + BatchNorm.
-
-    dropout_rate (default 0.0, i.e. off): probability for a channel-wise nn.Dropout3d applied
-    to the block's output (after the residual add + final ReLU) - see ResidualBlock's
-    dropout_rate docstring above for the general rationale, and
-    NeuralNetwork.block_dropout_rate for recommended usage.
-    """
+    """Decoder-side deconvolution block - see CoNNGaFit_NeuralNetwork_Unet3d.py's DeconvBlock
+    for the full description; identical architecture, used here for the HiRes-test network."""
 
     def __init__(self, in_channels, out_channels, upsample,kernel1, dropout_rate=0.0):
         super().__init__()
@@ -156,62 +128,30 @@ class DeconvBlock(nn.Module):
 
 #### Actual Network ####
 class NeuralNetwork(nn.Module):
-    """3-d residual U-Net that maps an HI 21cm spectral datacube (nSpec x nX x nY, hardcoded
-    for a 40x40x77 input elsewhere in the pipeline) to a flattened 40x40 output map (e.g.
-    radial mass flux, rotational velocity, or inclination), via model_size = 40*40*1.
+    """HiRes-test variant of CoNNGaFit_NeuralNetwork_Unet3d.NeuralNetwork: same 3-d residual
+    U-Net architecture (including the upsample-then-concatenate skip connections and the
+    dropout layer before the output), but with a lighter stem (no MaxPool3d after the initial
+    strided conv, and padding=1 instead of 3) and its own hardcoded skip-connection crop
+    windows / fc0 input feature count (128*8*nFilt0) tuned for this specific configuration.
+    See CoNNGaFit_NeuralNetwork_Unet3d.py's NeuralNetwork docstring for the full description
+    and for why these hardcoded values would need to be re-derived for any other input shape.
 
-    Architecture: a strided conv + maxpool "stem" (layer0) reduces the input, followed by
-    4 stages of residual blocks (layer1..layer4) that each roughly halve the spatial/
-    spectral dimensions while doubling the filter count. The decoder mirrors this: at each
-    stage, an Upsample module spatially upsamples the decoder features, the matching
-    pre-downsample encoder feature map is concatenated onto it channel-wise (skip connection),
-    and dc_layer1..dc_layer3 then reduce the concatenated channel count back down via
-    transpose-conv blocks. The skip-connection tensors are cropped with hardcoded slice
-    indices (e.g. featureMap2[:,:,0:9,:,:]) sized for the current 40x40x77 input - changing
-    the input shape or kernel sizes requires re-deriving these crop windows to match the
-    encoder's actual output shape at each stage. Finally an average pool + optional
-    fully-connected bottleneck (fc0) feeds a final linear layer (fc1) that outputs the
-    flattened model_size-length prediction.
-
-    Parameters:
-        nFilt0: number of filters in the first residual stage (doubles at each subsequent stage).
-        kernel0: kernel size (3-tuple) of the initial strided convolution (layer0).
-        kernel1: kernel size (3-tuple) used by all ResidualBlock/DeconvBlock convolutions.
-        nFC: size of the optional fully-connected bottleneck before the output layer; set to
-            0 (or any value <= 0) to skip it and go straight from the flattened features to fc1.
-        dropout_rate: dropout probability applied right before the final output layer (fc1) -
-            after the optional FC bottleneck's activation if nFC>0, or directly on the
-            flattened conv features otherwise. Defaults to 0.0 (no dropout, i.e. identical
-            behavior to before this parameter existed) so existing callers are unaffected
-            unless they opt in. Only active in training mode - model.eval() disables it.
-        block_dropout_rate: dropout probability for a channel-wise nn.Dropout3d (drops whole
-            feature-map channels, not individual voxels) applied inside every
-            ResidualBlock/DeconvBlock, after that block's residual add + final ReLU. Defaults
-            to 0.0 (off, identical behavior to before this parameter existed). This is a much
-            broader regularizer than dropout_rate above: it touches every stage of the
-            encoder/decoder, and - since featureMap1/2/3 are captured immediately after their
-            respective blocks run - it also regularizes what gets forwarded through the skip
-            connections. RECOMMENDED USAGE: only enable this if dropout_rate alone isn't
-            closing the train/validation gap; start low (~0.1-0.15) rather than reusing
-            dropout_rate's typical 0.3, since the deepest encoder stage here shrinks to a tiny
-            (~3,2,2) spatial size where dropping whole channels removes a large fraction of
-            that stage's total information - a rate tuned for the FC bottleneck is likely too
-            aggressive here and can destabilize training. As with dropout_rate, only active in
-            training mode.
+    Parameters: see CoNNGaFit_NeuralNetwork_Unet3d.NeuralNetwork (nFilt0, kernel0, kernel1,
+    nFC, dropout_rate, block_dropout_rate).
     """
 
     def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0):
         print("output size=",modelShape[0]*modelShape[1]*modelShape[2])
         super(NeuralNetwork, self).__init__()
         self.nFC=nFC
-        
+
         #Initial Convolutional Layer
         self.layer0 = nn.Sequential(
-            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=3),
-            nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
-            nn.LeakyReLU() 
+            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=1),
+            #nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
+            nn.LeakyReLU()
         )
-        
+
         ##  Residual Layers  ##
         self.layer1 = nn.Sequential(
             ResidualBlock(nFilt0,nFilt0,downsample=False,kernel1=kernel1,dropout_rate=block_dropout_rate), ##Downsample
@@ -256,16 +196,16 @@ class NeuralNetwork(nn.Module):
         )
 
         #######################
-        
-        self.featureForwarding = nn.Sequential() #Identity pass-through; kept as a named module so the encoder->decoder skip connections can be swapped for a learned transform later without changing forward()
 
-        
+        self.featureForwarding = nn.Sequential()
+
+
         #Output Layer
-        
+
         self.avgpool0 = nn.AvgPool3d(kernel_size=(2,2,2),stride=(2,2,2))
         self.dropout0 = nn.Dropout(p=dropout_rate)
         if self.nFC>0:
-            self.fc0 = nn.Linear(in_features=128*nFilt0 , out_features=nFC)
+            self.fc0 = nn.Linear(in_features=128*8*nFilt0 , out_features=nFC)
             self.relu0 = nn.LeakyReLU()
             self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
         else:
@@ -273,17 +213,7 @@ class NeuralNetwork(nn.Module):
 
    
     def forward(self, x, saveLatentImages=False):
-        """Run the network on a batch of datacubes.
-
-        x: tensor of shape (nBatch, nSpec, nX, nY) - a single-channel spectral datacube per
-            sample; a channel dim of size 1 is inserted before the 3-d convolutions.
-        saveLatentImages: if True, dump PNGs of the spectrally-summed activations at each
-            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
-            useful for visually debugging what the network is learning, not needed for normal
-            training/inference.
-        Returns: tensor of shape (nBatch, model_size) - the flattened predicted output map.
-        """
-        nBatch,nSpec,nX,nY = x.size()
+        nBatch,nSpec,nX,nY = x.size() 
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
 
 
@@ -295,21 +225,21 @@ class NeuralNetwork(nn.Module):
         ##  Residual Blocks  ##
         x = self.layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,1)
-            
+
         featureMap1 = self.featureForwarding(x)
         x = self.layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,2)
-            
+
         featureMap2 = self.featureForwarding(x)
         x = self.layer3(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,3)
-            
+
         featureMap3 = self.featureForwarding(x) 
         x = self.layer4(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,4)
             #SaveAllSpectralChannels(x,4)
-            
+
         ## Deconvolutional Blocks ##
         x = self.upsample1(x)
         x = torch.cat([x, featureMap3], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
@@ -317,12 +247,12 @@ class NeuralNetwork(nn.Module):
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample2(x)
-        x = torch.cat([x, featureMap2[:,:,0:9,:,:]], dim=1) #Cropped Feature forwarding
+        x = torch.cat([x, featureMap2[:,:,0:17,:,:]], dim=1) #Cropped Feature forwarding
         x = self.dc_layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample3(x)
-        x = torch.cat([x, featureMap1[:,:,1:18,0:9,0:9]], dim=1) #Cropped Feature forwarding
+        x = torch.cat([x, featureMap1[:,:,2:35,:,:]], dim=1) #Cropped Feature forwarding
         x = self.dc_layer3(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,7)

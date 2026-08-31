@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -8,7 +9,7 @@ from CoNNGaFit_Datasets import CoNNGaFitImageDataset
 
 from CoNNGaFit_NeuralNetwork_Unet3d import NeuralNetwork
 import numpy as np
-import matplotlib 
+import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
@@ -17,22 +18,49 @@ import h5py
 
 from CoNNGaFit_PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
 
-import sys
+import argparse
 
 ####Trains the Unet read from CoNNGaFit_NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, Validation, and testing datasets must be provided in .csv format as outlined in CoNNGaFit_Datasets.py.
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for rotational velocities and provide appropriate conversions on plots
 #
+####Run as: python CoNNGaFit_TrainModel_RC_UNet.py [options]
+####  Run with --help to see all options (data/network directories, dataset CSV filenames,
+####  output filenames). By default, expects
+####  CoNNGaFitData/annotation_datasets/{training,validation,test}_annotations_RC_AllInclinations_<sample-suffix>.csv
+####  to already exist (produced by a WriteDatasetsToCsv-style script).
+#
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 11/21/2023
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the CoNNGaFit 3-d U-Net to predict rotational velocity maps from HI datacubes.")
+    parser.add_argument('--sample-suffix', default='finalSnapNoM12m',
+                         help="Suffix used to build default training/validation/test annotation CSV filenames and default output/model names, for any of --training-csv/--validation-csv/--testing-csv/--output-name/--model-name not given explicitly. Default: %(default)s")
+    parser.add_argument('--data-dir', default='CoNNGaFitData',
+                         help="Root data directory: annotation CSVs are read from <data-dir>/annotation_datasets/, and diagnostic images/plots are written under <data-dir>/outputs/. Default: %(default)s")
+    parser.add_argument('--network-dir', default='TrainedNetworks',
+                         help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are saved to. Default: %(default)s")
+    parser.add_argument('--training-csv', default=None,
+                         help="Training annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: training_annotations_RC_AllInclinations_<sample-suffix>.csv")
+    parser.add_argument('--validation-csv', default=None,
+                         help="Validation annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: validation_annotations_RC_AllInclinations_<sample-suffix>.csv")
+    parser.add_argument('--testing-csv', default=None,
+                         help="Test annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: test_annotations_RC_AllInclinations_<sample-suffix>.csv")
+    parser.add_argument('--output-name', default=None,
+                         help="Base name for diagnostic images/plots written under <data-dir>/outputs/. Default: rotationalVelocity_<sample-suffix>")
+    parser.add_argument('--model-name', default=None,
+                         help="Base filename (no extension) for the saved model checkpoint under <network-dir>. Default: RC_Unet18_FullSpec_<sample-suffix>")
+    return parser.parse_args()
+
+args = parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 #device = 'cpu'
 print(f'Using {device} device')
 eps = 1e-10
 
-CUDA_LAUNCH_BLOCKING=1
 Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np.power(10.,7.)) * np.power(10,10) #1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 standardError=0
@@ -46,31 +74,39 @@ weight_decay = 0.001
 epochs = 300
 nFC = 3000
 nFilt0 = 6
+k0=9 #Initial kernel size
+k1=3 #Kernel size for residual/deconv blocks
+dropout_rate = 0.3 #Applied before the output layer, to regularize the large FC bottleneck
+block_dropout_rate = 0.0 #Disabled by default. Applies channel-wise dropout (nn.Dropout3d) inside
+    #every ResidualBlock/DeconvBlock - a much broader regularizer than dropout_rate above, since
+    #it touches every stage of the encoder/decoder and (via featureMap1/2/3) the skip
+    #connections too. Only enable this if dropout_rate alone isn't closing the train/validation
+    #gap; start low (~0.1-0.15) rather than reusing dropout_rate's 0.3 - the deepest encoder
+    #stage here shrinks to a tiny spatial size where dropping whole channels removes a large
+    #fraction of that stage's information, so an FC-tuned rate is likely too aggressive here.
 #############################
 
 
 
 ####  Set input/output directories ####
-try:
-    sampleSuffix = sys.argv[1]
-else:
-    sampleSuffix = 'finalSnapNoM12m'
-trainingSetFilename = 'training_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
-validationSetFilename = 'validation_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
-testingSetFilename = 'test_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
-outputFilebase = 'rotationalVelocity_'+sampleSuffix
+sampleSuffix = args.sample_suffix
+trainingSetFilename = args.training_csv or 'training_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
+validationSetFilename = args.validation_csv or 'validation_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
+testingSetFilename = args.testing_csv or 'test_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
+outputFilebase = args.output_name or 'rotationalVelocity_'+sampleSuffix
+modelFilebase = args.model_name or 'RC_Unet18_FullSpec_'+sampleSuffix
 
-trainingDir = 'CoNNGaFitData\\annotation_datasets\\'+trainingSetFilename
-validationDir = 'CoNNGaFitData\\annotation_datasets\\'+validationSetFilename
-testingDir = 'CoNNGaFitData\\annotation_datasets\\'+testingSetFilename
+trainingDir = os.path.join(args.data_dir,'annotation_datasets',trainingSetFilename)
+validationDir = os.path.join(args.data_dir,'annotation_datasets',validationSetFilename)
+testingDir = os.path.join(args.data_dir,'annotation_datasets',testingSetFilename)
 
 
-imageOutput_training = 'CoNNGaFitData\\outputs\\images\\'+outputFilebase+'_training'
-imageOutput_validation = 'CoNNGaFitData\\outputs\\images\\'+outputFilebase+'_validation'
-imageOutput_finalTest = 'CoNNGaFitData\\outputs\\images\\'+outputFilebase+'_test'
+imageOutput_training = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_training')
+imageOutput_validation = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_validation')
+imageOutput_finalTest = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_test')
 
-diagnosticOutput = 'CoNNGaFitData\\outputs\\diagnostics\\'+outputFilebase
-modelOutputPath = 'TrainedNetworks\\MassFlux_Unet18_FullSpec_'+sampleSuffix
+diagnosticOutput = os.path.join(args.data_dir,'outputs','diagnostics',outputFilebase)
+modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 
 
 
@@ -93,12 +129,6 @@ data0 = next(iter(loader0))
 trainingMean = data0[0].mean()
 trainingStdv = data0[0].std()
 del loader0;del data0
-
-if batchSizeDefault is None:
-    batchSize = len(validation_data)
-else:
-    batchSize = batchSizeDefault
-    
 
 training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
                                    root_dir = '.',
@@ -124,50 +154,55 @@ print("Data loaded...")
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
+    """Run one training epoch (see CoNNGaFit_TrainModel_MassFlux_UNet.py's train_loop for
+    the full description; identical structure, just targeting rotational velocity labels).
+    Returns the loss averaged over all batches in the epoch.
+    """
+    model.train()
     size = len(dataloader.dataset)
+    epoch_loss = 0.0
+    num_batches = len(dataloader)
     for batch, (X,y) in enumerate(dataloader):
         X=X.to(device)
         y=y.to(device)
-        
+
         pred = model(X.float())
         loss = loss_fn(pred , y.float())
-     
+        epoch_loss += loss.item()
+
         #Backpropagation
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+
         if batch%100==0:
-            loss, current = loss.item(), batch*len(X)
-            print(f"loss: {loss:>7f} [{current:>5d}/{size:>5d}]")
-            
-    
+            current = batch*len(X)
+            print(f"loss: {loss.item():>7f} [{current:>5d}/{size:>5d}]")
+
+
     if batchSizeDefault is not None:
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
             vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
             vmin = -vmax
-            nSnap=0;
-            
-           
-            
-            for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-                nSnap+=1
-                SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[nSnap]+"_Epoch"+str(epoch)+".hdf5",tt)
-                
 
-                
+            for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
+                SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
+
     elif epoch>=(epochs-1):# or epoch%(int(epochs/10))==0:
         vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
         vmin = -vmax
-        nSnap=0;
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-            nSnap+=1
-            SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[nSnap]+"_Epoch"+str(epoch)+".hdf5",tt)
-    
-    return loss
+            SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
+
+    return epoch_loss / num_batches
 
 #### Define Validation Loop ####
 def validation_loop(dataloader, model, loss_fn, epoch):
+    """Evaluate the model on the validation set (see CoNNGaFit_TrainModel_MassFlux_UNet.py's
+    validation_loop for the full description). Returns
+    (validation_loss, accuracy, specific_accuracy).
+    """
+    model.eval()
     size = len(dataloader.dataset)
     num_batches=len(dataloader)
     validation_loss, correct = 0, 0
@@ -193,10 +228,11 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 
             predictions = np.append(predictions,pred.cpu().detach().numpy())
             actuals = np.append(actuals,y.cpu().detach().numpy())
-            
+
+            Nsnaps,Npix = np.shape(npY)
             specific_accuracy = np.zeros((Nsnaps))
             for i in range(0,Nsnaps):
-                correctForSnap = np.size( np.where( ((npPred[i,:]>npY[i,:]-deviation) & (npPred[i,:]<npY[i,:]+deviation)) )[0] ) 
+                correctForSnap = np.size( np.where( ((npPred[i,:]>npY[i,:]-deviation) & (npPred[i,:]<npY[i,:]+deviation)) )[0] )
                 specific_accuracy[i] = correctForSnap / np.size(npY[i,:]) * 100
 
     accuracy = correct/total * 100
@@ -206,25 +242,27 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     
     if batchSizeDefault is not None:
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
-            nSnap=0;
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-                nSnap+=1
-                SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[nSnap]+"_Epoch"+str(epoch)+".hdf5",tt)
+                SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
     elif epoch>=(epochs-1):# or epoch%1000==0:
-        nSnap=0;
         MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_validation+"_CorrelationPlot_Epoch"+str(epoch))
 
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-            nSnap+=1
-            MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_validation+"_"+validationNames[nSnap]+"_Epoch"+str(epoch)+".png",tt,Sim2PhysicalUnits=1,paramLabel='Rot. Vel.',unitLabel='[km s$^{-1}$]',binOp='mean')
-            SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[nSnap]+"_Epoch"+str(epoch)+".hdf5",tt)
+            MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".png",tt,Sim2PhysicalUnits=1,paramLabel='Rot. Vel.',unitLabel='[km s$^{-1}$]',binOp='mean')
+            SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
 
 
+    model.train()
     return validation_loss,accuracy,specific_accuracy
     
     
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
+    """Evaluate the model on the held-out test set (see
+    CoNNGaFit_TrainModel_MassFlux_UNet.py's test_loop for the full description). Returns
+    (test_loss, accuracy, specific_accuracy).
+    """
+    model.eval()
     size = len(dataloader.dataset)
     num_batches=len(dataloader)
     test_loss, correct = 0, 0
@@ -250,11 +288,12 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
             predictions = np.append(predictions,pred.cpu().detach().numpy())
             actuals = np.append(actuals,y.cpu().detach().numpy())
-            
+
+            Nsnaps,Npix = np.shape(npY)
             specific_accuracy = np.zeros((Nsnaps))
             for i in range(0,Nsnaps):
-                correctForSnap = np.size( np.where( ((npPred[i,:]>npY[i,:]-deviation) & (npPred[i,:]<npY[i,:]+deviation)) )[0] ) 
-                specific_accuracy[i] = correctForSnap / np.size(npY[i,:]) * 100            
+                correctForSnap = np.size( np.where( ((npPred[i,:]>npY[i,:]-deviation) & (npPred[i,:]<npY[i,:]+deviation)) )[0] )
+                specific_accuracy[i] = correctForSnap / np.size(npY[i,:]) * 100
 
     accuracy = correct/total * 100
     test_loss /= num_batches
@@ -265,41 +304,35 @@ def test_loop(dataloader, model, loss_fn, epoch):
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
             vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
             vmin = -vmax
-            nSnap=0;
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-                nSnap+=1
-                NsnapsTest+=1;
                 try:
-                    snapName = testingNames[nSnap]
+                    snapName = testingNames[tt]
                 except:
-                    snapName = str(nSnap)+"NameNotFound"
-
+                    snapName = str(tt)+"NameNotFound"
 
                 SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_finalTest+"_"+snapName+"_Epoch"+str(epoch)+".hdf5",tt)
 
     elif epoch>=(epochs-1):# or epoch%1000==0:
-        nSnap=0;
-
-        MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_comparison_finalTest+"_CorrelationPlot_Epoch"+str(epoch))
+        MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_finalTest+"_CorrelationPlot_Epoch"+str(epoch))
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-            nSnap+=1
             try:
-                snapName=testingNames[nSnap]
+                snapName=testingNames[tt]
             except:
                 print("Warning, could not find name in testing set...")
-                snapName = str(nSnap)+"NameNotFound"
-            
+                snapName = str(tt)+"NameNotFound"
+
             MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_finalTest+"_"+snapName+"_Epoch"+str(epoch)+".png",tt,Sim2PhysicalUnits=1,paramLabel='Rot. Vel.',unitLabel='[km s$^{-1}$]',binOp='mean')
             SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_finalTest+"_"+snapName+"_Epoch"+str(epoch)+".hdf5",tt)
 
 
 
+    model.train()
     return test_loss,accuracy,specific_accuracy
 
 
     
 #### Define the Model ####
-model = NeuralNetwork(nFilt0,(k0,k0,k0),(k1,k1,k1),nFC).to(device)
+model = NeuralNetwork(nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate).to(device)
 print("Defining model...")
 print(model)
 print("Loading names...")
@@ -342,9 +375,9 @@ hf_norm.create_dataset("learningRate",data=learning_rate)
 hf_norm.create_dataset("nFC",data=nFC)
 hf_norm.create_dataset("weight_decay",data=weight_decay)
 hf_norm.create_dataset("nFilt0",data=nFilt0)
+hf_norm.create_dataset("dropout_rate",data=dropout_rate)
+hf_norm.create_dataset("block_dropout_rate",data=block_dropout_rate)
 hf_norm.create_dataset("sampleSuffix",data=sampleSuffix)
-hf_norm.create_dataset("validationSuffix",data=validationSuffix)
-hf_norm.create_dataset("testingSuffix",data=testingSuffix)
 hf_norm.close()
 
 

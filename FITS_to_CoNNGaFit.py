@@ -41,7 +41,7 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
     
     newImage = np.zeros((targetNpix,targetNpix,targetNspec))
 
-    nBin = int(np.round(np.shape(rawdata)[3] / 40))
+    nBin = int(np.round(np.shape(rawdata)[3] / targetNpix))
 
     newdata = rawdata[0,:,:,:]
     print("shape of newdata=",np.shape(newdata))

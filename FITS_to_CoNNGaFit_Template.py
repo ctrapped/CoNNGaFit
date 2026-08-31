@@ -1,3 +1,4 @@
+import numpy as np
 from FITS_to_CoNNGaFit import FITS_to_CoNNGaFit
 ####Template for how to convert from fits to CoNNGaFit compatible hdf5 files using FITS_to_CoNNGaFit.py
 ####imageDir should point to the FITS file
