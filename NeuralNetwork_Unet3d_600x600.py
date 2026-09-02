@@ -10,7 +10,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 #device='cpu'
 print(f'Using {device} device')
 
-modelShape = np.array([40,40,1])
+modelShape = np.array([600,600,1])
 model_size = modelShape[0]*modelShape[1]*modelShape[2]
 print("model_size=",model_size);
 
@@ -54,8 +54,8 @@ def SaveSummedSpectralChannels(x,nStep):
 
 #### Class for convolutional on the left side of the unet
 class ResidualBlock(nn.Module):
-    """Encoder-side residual block - see CoNNGaFit_NeuralNetwork_Unet3d.py's ResidualBlock
-    for the full description; identical architecture, used here for the HiRes-test network."""
+    """Encoder-side residual block - see NeuralNetwork_Unet3d.py's ResidualBlock
+    for the full description; identical architecture, used here for the 600x600 network."""
 
     def __init__(self, in_channels, out_channels, downsample, kernel1, dropout_rate=0.0):
         super().__init__()
@@ -85,8 +85,8 @@ class ResidualBlock(nn.Module):
 
 #### Class for spatially upsampling the decoder path before a skip-connection concatenation ####
 class Upsample(nn.Module):
-    """See CoNNGaFit_NeuralNetwork_Unet3d.py's Upsample for the full description; identical,
-    used here for the HiRes-test network."""
+    """See NeuralNetwork_Unet3d.py's Upsample for the full description; identical,
+    used here for the 600x600 network."""
 
     def __init__(self, in_channels, out_channels, kernel1):
         super().__init__()
@@ -97,8 +97,8 @@ class Upsample(nn.Module):
 
 #### Class for deconvolutional blocks on the right side of the unet
 class DeconvBlock(nn.Module):
-    """Decoder-side deconvolution block - see CoNNGaFit_NeuralNetwork_Unet3d.py's DeconvBlock
-    for the full description; identical architecture, used here for the HiRes-test network."""
+    """Decoder-side deconvolution block - see NeuralNetwork_Unet3d.py's DeconvBlock
+    for the full description; identical architecture, used here for the 600x600 network."""
 
     def __init__(self, in_channels, out_channels, upsample,kernel1, dropout_rate=0.0):
         super().__init__()
@@ -128,15 +128,16 @@ class DeconvBlock(nn.Module):
 
 #### Actual Network ####
 class NeuralNetwork(nn.Module):
-    """HiRes-test variant of CoNNGaFit_NeuralNetwork_Unet3d.NeuralNetwork: same 3-d residual
-    U-Net architecture (including the upsample-then-concatenate skip connections and the
-    dropout layer before the output), but with a lighter stem (no MaxPool3d after the initial
-    strided conv, and padding=1 instead of 3) and its own hardcoded skip-connection crop
-    windows / fc0 input feature count (128*8*nFilt0) tuned for this specific configuration.
-    See CoNNGaFit_NeuralNetwork_Unet3d.py's NeuralNetwork docstring for the full description
-    and for why these hardcoded values would need to be re-derived for any other input shape.
+    """High-resolution variant of NeuralNetwork_Unet3d.NeuralNetwork: same 3-d
+    residual U-Net architecture (including the upsample-then-concatenate skip connections),
+    but sized for a 600x600 output map (model_size = 600*600*1) instead of 40x40, for the
+    "HiRes" test pipeline. The encoder/decoder skip-connection crop windows (e.g.
+    featureMap3[:,:,:,0:37,0:37]) and the fc0 input feature count (248832) are hardcoded for
+    this specific input/output resolution and kernel configuration - see
+    NeuralNetwork_Unet3d.py's NeuralNetwork docstring for why these would need to be
+    re-derived for any other input shape.
 
-    Parameters: see CoNNGaFit_NeuralNetwork_Unet3d.NeuralNetwork (nFilt0, kernel0, kernel1,
+    Parameters: see NeuralNetwork_Unet3d.NeuralNetwork (nFilt0, kernel0, kernel1,
     nFC, dropout_rate, block_dropout_rate).
     """
 
@@ -147,8 +148,8 @@ class NeuralNetwork(nn.Module):
 
         #Initial Convolutional Layer
         self.layer0 = nn.Sequential(
-            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=1),
-            #nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
+            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=3),
+            nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
             nn.LeakyReLU()
         )
 
@@ -196,36 +197,37 @@ class NeuralNetwork(nn.Module):
         )
 
         #######################
-
+        
         self.featureForwarding = nn.Sequential()
 
-
+        
         #Output Layer
-
+        
         self.avgpool0 = nn.AvgPool3d(kernel_size=(2,2,2),stride=(2,2,2))
         self.dropout0 = nn.Dropout(p=dropout_rate)
         if self.nFC>0:
-            self.fc0 = nn.Linear(in_features=128*8*nFilt0 , out_features=nFC)
+            self.fc0 = nn.Linear(in_features=248832 , out_features=nFC)
+            #self.fc0 = nn.Linear(in_features=13824 , out_features=nFC)
+
             self.relu0 = nn.LeakyReLU()
             self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
         else:
-            self.fc1 = nn.Linear(in_features=128*nFilt0,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=248832,out_features=model_size)
 
    
     def forward(self, x, saveLatentImages=False):
-        nBatch,nSpec,nX,nY = x.size() 
+        """See NeuralNetwork_Unet3d.NeuralNetwork.forward for the parameter/return
+        description; behaves identically here, just at the 600x600 output resolution."""
+        nBatch,nSpec,nX,nY = x.size()
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
-
 
         ##  Initial convolutional layer and pooling  ##
         x = self.layer0(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,0)
-        
 
         ##  Residual Blocks  ##
         x = self.layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,1)
-
         featureMap1 = self.featureForwarding(x)
         x = self.layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,2)
@@ -242,17 +244,23 @@ class NeuralNetwork(nn.Module):
 
         ## Deconvolutional Blocks ##
         x = self.upsample1(x)
-        x = torch.cat([x, featureMap3], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
+        #print("Shape of x=",np.shape(x),"... Shape of featureMap3=",np.shape(featureMap3))
+        x = torch.cat([x, featureMap3[:,:,:,0:37,0:37]], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
         x = self.dc_layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample2(x)
-        x = torch.cat([x, featureMap2[:,:,0:17,:,:]], dim=1) #Cropped Feature forwarding
+       # print("Shape of x=",np.shape(x),"... Shape of featureMap2=",np.shape(featureMap2))
+
+        x = torch.cat([x, featureMap2[:,:,0:9,1:74,1:74]], dim=1) #Cropped Feature forwarding
         x = self.dc_layer2(x)
+
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample3(x)
-        x = torch.cat([x, featureMap1[:,:,2:35,:,:]], dim=1) #Cropped Feature forwarding
+       # print("Shape of x=",np.shape(x),"... Shape of featureMap1=",np.shape(featureMap1))
+
+        x = torch.cat([x, featureMap1[:,:,1:18,2:147,2:147]], dim=1) #Cropped Feature forwarding
         x = self.dc_layer3(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,7)

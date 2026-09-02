@@ -9,7 +9,7 @@ pip install torch torchvision numpy pandas h5py matplotlib scipy astropy
 
 ## Data format
 
-Each of `CoNNGaFit_Datasets.py`, `CoNNGaFit_Datasets_600x600.py`, `CoNNGaFit_Datasets_60x60.py`, `CoNNGaFit_Datasets_1d.py` defines a `CoNNGaFitImageDataset` that reads a CSV with no header:
+Each of `Datasets.py`, `Datasets_600x600.py`, `Datasets_60x60.py`, `Datasets_1d.py` defines a `CoNNGaFitImageDataset` that reads a CSV with no header:
 
 - Column 0: path (relative to the dataset's `root_dir`, normally `.`) to the input datacube - an `.hdf5` file containing a `spectra` dataset (or `moments`, if `use_moment_maps=True`), a `.fits` file, or a plain image.
 - Columns 1..N: the flattened target label map. N must match `Nlabels` at the top of the dataset file being used (`40*40` for the standard/HiRes-test networks, `600*600` for the 600x600 network, `60*60` for the 60x60 variant).
@@ -42,15 +42,15 @@ Four training scripts are available, each pairing a training loop with one netwo
 
 | Script | Network used | Target |
 |---|---|---|
-| `CoNNGaFit_TrainModel_MassFlux_UNet.py` | `CoNNGaFit_NeuralNetwork_Unet3d.py` | Radial mass flux (40x40) |
-| `CoNNGaFit_TrainModel_RC_UNet.py` | `CoNNGaFit_NeuralNetwork_Unet3d.py` | Rotational velocity (40x40) |
-| `CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest.py` | `AlternativeNetworks/CoNNGaFit_NeuralNetwork_Unet3d_HiResTest.py` | Radial mass flux (40x40, lighter stem) |
-| `CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest2.py` | `CoNNGaFit_NeuralNetwork_Unet3d_600x600.py` | Radial mass flux (600x600) |
+| `TrainModel_MassFlux_UNet.py` | `NeuralNetwork_Unet3d.py` | Radial mass flux (40x40) |
+| `TrainModel_RC_UNet.py` | `NeuralNetwork_Unet3d.py` | Rotational velocity (40x40) |
+| `TrainModel_MassFlux_UNet_HiResTest.py` | `AlternativeNetworks/Unet3d_HiResTest.py` | Radial mass flux (40x40, lighter stem) |
+| `TrainModel_MassFlux_UNet_HiResTest2.py` | `NeuralNetwork_Unet3d_600x600.py` | Radial mass flux (600x600) |
 
 All four are run directly with Python and take command-line options via `argparse` - run any of them with `--help` to see the full list. Example:
 
 ```
-python CoNNGaFit_TrainModel_MassFlux_UNet.py --data-dir CoNNGaFitData --sample-suffix All_Inclinations_finalSnapNoM12m
+python TrainModel_MassFlux_UNet.py --data-dir CoNNGaFitData --sample-suffix All_Inclinations_finalSnapNoM12m
 ```
 
 ### Common options (first three scripts)
@@ -64,7 +64,7 @@ python CoNNGaFit_TrainModel_MassFlux_UNet.py --data-dir CoNNGaFitData --sample-s
 | `--output-name` | built from `--sample-suffix` | Base name for diagnostic images/plots |
 | `--model-name` | built from `--sample-suffix` | Base filename for the saved checkpoint |
 
-`CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest2.py` uses a different (flatter) layout and default `--sample-suffix HiResTest`, since it doesn't use the `CoNNGaFitData` convention:
+`TrainModel_MassFlux_UNet_HiResTest2.py` uses a different (flatter) layout and default `--sample-suffix HiResTest`, since it doesn't use the `CoNNGaFitData` convention:
 
 | Flag | Default |
 |---|---|
@@ -102,7 +102,7 @@ To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, 
 
 ## Inference
 
-`CoNNGaFit_UseModel.RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `networkType='unet18'` is implemented. `modelPath` overrides the built-in default checkpoint path; `params=[nFilt0, k0, k1, nFC]` overrides the default architecture hyperparameters.
+`UseModel.RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `networkType='unet18'` is implemented. `modelPath` overrides the built-in default checkpoint path; `params=[nFilt0, k0, k1, nFC]` overrides the default architecture hyperparameters.
 
 Two ready-to-run scripts wrap this with `argparse`:
 

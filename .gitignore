@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+
+# Environments
+.venv/
+venv/
+env/
+*.conda
+.python-version
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# CoNNGaFit data & outputs
+CoNNGaFitData/
+TrainedNetworks/
+training_datasets/
+networks/
+outputs/
+*.pt
+*.hdf5
+*.h5
+
+# SLURM job logs
+*.out
+*.err
+slurm-*.out

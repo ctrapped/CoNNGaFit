@@ -51,10 +51,10 @@ file — `40*40` for the standard networks). CSVs are produced by a
 
 | Script | Target |
 |---|---|
-| `CoNNGaFit_TrainModel_MassFlux_UNet.py` | Radial mass flux (40×40) |
-| `CoNNGaFit_TrainModel_RC_UNet.py` | Rotational velocity (40×40) |
-| `CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest.py` | Radial mass flux, lighter stem |
-| `CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest2.py` | Radial mass flux (600×600), flat dir layout |
+| `TrainModel_MassFlux_UNet.py` | Radial mass flux (40×40) |
+| `TrainModel_RC_UNet.py` | Rotational velocity (40×40) |
+| `TrainModel_MassFlux_UNet_HiResTest.py` | Radial mass flux, lighter stem |
+| `TrainModel_MassFlux_UNet_HiResTest2.py` | Radial mass flux (600×600), flat dir layout |
 
 ## 4. Set hyperparameters
 
@@ -67,7 +67,7 @@ as one batch each epoch, used by the first three scripts).
 ## 5. Run
 
 ```bash
-python CoNNGaFit_TrainModel_MassFlux_UNet.py \
+python TrainModel_MassFlux_UNet.py \
     --data-dir CoNNGaFitData \
     --network-dir TrainedNetworks \
     --sample-suffix All_Inclinations_finalSnapNoM12m
