@@ -11,7 +11,7 @@ npix=40
 #### Dataset classes for training and inference (1-d radial profile output)
 
 ####Dataset class for training. Reads in annotation file. Get loads the image in the directory of the first value of each line, then loads the rest of the entries into 'label'.
-####Unlike CoNNGaFit_Datasets.py, the 2-d (npix x npix) label map is azimuthally binned down
+####Unlike Datasets.py, the 2-d (npix x npix) label map is azimuthally binned down
 ####to a 1-d radial profile here, so the network is trained against radial curves rather than
 ####full 2-d maps.
 class CoNNGaFitImageDataset():
@@ -49,7 +49,7 @@ class CoNNGaFitImageDataset():
 
         #Bin the flattened npix*npix label map by galactocentric radius (in pixels) to get a
         #1-d radial profile. Note: centerIndex uses (npix/2 - 1) here rather than the
-        #(npix-1)/2 convention used in CoNNGaFit_PlottingFunctions.py - for npix=40 that's
+        #(npix-1)/2 convention used in PlottingFunctions.py - for npix=40 that's
         #pixel (19,19) vs (19.5,19.5), a half-pixel difference in the assumed galaxy center
         #between how labels are binned here and how predictions are re-binned for plotting.
         label_image = np.reshape(label,[npix,npix])

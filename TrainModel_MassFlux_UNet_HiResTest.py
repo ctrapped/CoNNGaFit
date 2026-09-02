@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
-from CoNNGaFit_Datasets_600x600 import CoNNGaFitImageDataset
+from Datasets import CoNNGaFitImageDataset
 
-from CoNNGaFit_NeuralNetwork_Unet3d_600x600 import NeuralNetwork
+from AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -16,47 +16,44 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 import h5py
 
-from CoNNGaFit_PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
+from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
 
 import argparse
 
 
-####Trains the 600x600 Unet variant read from CoNNGaFit_NeuralNetwork_Unet3d_600x600.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, Validation, and testing datasets must be provided in .csv format as outlined in CoNNGaFit_Datasets_600x600.py.
+####Trains the Unet read from NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, Validation, and testing datasets must be provided in .csv format as outlined in Datasets.py.
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for radial mass fluxes and provide appropriate conversions on plots
 #
-####Run as: python CoNNGaFit_TrainModel_MassFlux_UNet_HiResTest2.py [options]
-####  Run with --help to see all options (data/output/network directories, dataset CSV
-####  filenames, output filenames). By default, expects
-####  training_datasets/training_annotations_HiRes_MassFlux.csv to already exist (produced by
-####  a WriteDatasetsToCsv-style script). Unlike the other TrainModel scripts, this one reuses
-####  the same annotations file for training/validation/testing unless --validation-csv/
-####  --testing-csv are given explicitly.
+####Run as: python TrainModel_MassFlux_UNet_HiResTest.py [options]
+####  Run with --help to see all options (data/network directories, dataset CSV filenames,
+####  output filenames). By default, expects
+####  CoNNGaFitData/annotation_datasets/{training,validation,test}_annotations_MassFlux_All_Inclinations_<sample-suffix>.csv
+####  to already exist (produced by a WriteDatasetsToCsv-style script). Uses
+####  AlternativeNetworks/Unet3d_HiResTest.py rather than the standard network.
 #
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 11/21/2023
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train the 600x600 CoNNGaFit 3-d U-Net variant to predict radial mass flux maps from HI datacubes.")
-    parser.add_argument('--sample-suffix', default='HiResTest',
-                         help="Suffix used to build default output/model names, for any of --output-name/--model-name not given explicitly. Default: %(default)s")
-    parser.add_argument('--data-dir', default='./training_datasets',
-                         help="Directory annotation CSVs are read from, and diagnostic images are also written under. Default: %(default)s")
-    parser.add_argument('--output-dir', default='./outputs',
-                         help="Directory diagnostic plots (loss curves, correlation plots) are written under. Default: %(default)s")
-    parser.add_argument('--network-dir', default='./networks',
+    parser = argparse.ArgumentParser(description="Train the HiRes-test CoNNGaFit 3-d U-Net variant to predict radial mass flux maps from HI datacubes.")
+    parser.add_argument('--sample-suffix', default='finalSnapNoM12m',
+                         help="Suffix used to build default training/validation/test annotation CSV filenames and default output/model names, for any of --training-csv/--validation-csv/--testing-csv/--output-name/--model-name not given explicitly. Default: %(default)s")
+    parser.add_argument('--data-dir', default='CoNNGaFitData',
+                         help="Root data directory: annotation CSVs are read from <data-dir>/annotation_datasets/, and diagnostic images/plots are written under <data-dir>/outputs/. Default: %(default)s")
+    parser.add_argument('--network-dir', default='TrainedNetworks',
                          help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are saved to. Default: %(default)s")
-    parser.add_argument('--training-csv', default='training_annotations_HiRes_MassFlux.csv',
-                         help="Training annotations CSV filename, read from <data-dir>/. Default: %(default)s")
+    parser.add_argument('--training-csv', default=None,
+                         help="Training annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: training_annotations_MassFlux_All_Inclinations_<sample-suffix>.csv")
     parser.add_argument('--validation-csv', default=None,
-                         help="Validation annotations CSV filename, read from <data-dir>/. Default: same file as --training-csv")
+                         help="Validation annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: validation_annotations_MassFlux_All_Inclinations_<sample-suffix>.csv")
     parser.add_argument('--testing-csv', default=None,
-                         help="Test annotations CSV filename, read from <data-dir>/. Default: same file as --training-csv")
+                         help="Test annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: test_annotations_MassFlux_All_Inclinations_<sample-suffix>.csv")
     parser.add_argument('--output-name', default=None,
-                         help="Base name for diagnostic images/plots. Default: massFlux_<sample-suffix>")
+                         help="Base name for diagnostic images/plots written under <data-dir>/outputs/. Default: massFlux_<sample-suffix>")
     parser.add_argument('--model-name', default=None,
-                         help="Base filename (no extension) for the saved model checkpoint under <network-dir>. Default: MassFlux_Unet18_FullSpec_hiRes<sample-suffix>")
+                         help="Base filename (no extension) for the saved model checkpoint under <network-dir>. Default: MassFlux_Unet18_FullSpec_<sample-suffix>")
     return parser.parse_args()
 
 args = parse_args()
@@ -75,9 +72,9 @@ index2kpc=1
 ####   HYPERPARAMETERS   ####
 #Optimized values given in comments
 learning_rate = 0.0001
-weight_decay = 0.001
-epochs = 4000
-nFC = 3000
+weight_decay = 0.002
+epochs = 2500
+nFC = 2000
 nFilt0 = 6
 k0=9
 k1=3
@@ -95,23 +92,23 @@ block_dropout_rate = 0.0 #Disabled by default. Applies channel-wise dropout (nn.
 
 ####  Set input/output directories ####
 sampleSuffix = args.sample_suffix
-trainingSetFilename = args.training_csv
-validationSetFilename = args.validation_csv or trainingSetFilename
-testingSetFilename = args.testing_csv or trainingSetFilename
+trainingSetFilename = args.training_csv or 'training_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
+validationSetFilename = args.validation_csv or 'validation_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
+testingSetFilename = args.testing_csv or 'test_annotations_MassFlux_All_Inclinations_'+sampleSuffix+'.csv'
 outputFilebase = args.output_name or 'massFlux_'+sampleSuffix
-modelFilebase = args.model_name or 'MassFlux_Unet18_FullSpec_hiRes'+sampleSuffix
+modelFilebase = args.model_name or 'MassFlux_Unet18_FullSpec_'+sampleSuffix
 
-trainingDir = os.path.join(args.data_dir,trainingSetFilename)
-validationDir = os.path.join(args.data_dir,validationSetFilename)
-testingDir = os.path.join(args.data_dir,testingSetFilename)
+trainingDir = os.path.join(args.data_dir,'annotation_datasets',trainingSetFilename)
+validationDir = os.path.join(args.data_dir,'annotation_datasets',validationSetFilename)
+testingDir = os.path.join(args.data_dir,'annotation_datasets',testingSetFilename)
 
 
-imageOutput_training = os.path.join(args.data_dir,outputFilebase+'_training')
-imageOutput_validation = os.path.join(args.data_dir,outputFilebase+'_validation')
-imageOutput_finalTest = os.path.join(args.data_dir,outputFilebase+'_test')
+imageOutput_training = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_training')
+imageOutput_validation = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_validation')
+imageOutput_finalTest = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_test')
 
-diagnosticOutput = os.path.join(args.output_dir,outputFilebase)
-modelOutputPath = os.path.join(args.network_dir,modelFilebase)
+diagnosticOutput = os.path.join(args.data_dir,'outputs','diagnostics',outputFilebase)
+modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 
 
 
@@ -120,8 +117,7 @@ training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
                                    root_dir = '.',
                                    transform = ToTensor())
                                    
-batchSizeDefault = 5
-testBatchSize = batchSizeDefault
+batchSizeDefault = None
 batchesPerTrainingSet = 1
 if batchSizeDefault is None:
     batchSize = len(training_data)
@@ -163,8 +159,9 @@ print("Data loaded...")
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
-    """Run one training epoch (see CoNNGaFit_TrainModel_MassFlux_UNet.py's train_loop for
-    the full description). Returns the loss averaged over all batches in the epoch.
+    """Run one training epoch: iterate the dataloader, backprop MSE loss each batch, and on
+    the final epoch(s) dump per-sample prediction/label hdf5 snapshots for later inspection.
+    Returns the loss averaged over all batches in the epoch.
     """
     model.train()
     size = len(dataloader.dataset)
@@ -189,28 +186,29 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
 
 
     if batchSizeDefault is not None:
-        if epoch >= (epochs - 1 - batchesPerTrainingSet) or epoch%2==0:
+        if epoch >= (epochs - 1 - batchesPerTrainingSet):
             vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
             vmin = -vmax
 
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
                 SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
-                MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".png",tt)
 
     elif epoch>=(epochs-1):# or epoch%(int(epochs/10))==0:
         vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
         vmin = -vmax
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
             SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
-            MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_training+"_"+trainingNames[tt]+"_Epoch"+str(epoch)+".png",tt)
 
     return epoch_loss / num_batches
 
 #### Define Validation Loop ####
 def validation_loop(dataloader, model, loss_fn, epoch):
-    """Evaluate the model on the validation set (see CoNNGaFit_TrainModel_MassFlux_UNet.py's
-    validation_loop for the full description). Returns
-    (validation_loss, accuracy, specific_accuracy).
+    """Evaluate the model on the validation set (no gradient updates) and compute a rough
+    "accuracy" (fraction of pixels whose prediction falls within one std-dev of the label -
+    a loose sanity metric, not a real accuracy). On the final epoch, also writes correlation
+    plots and per-sample comparison images/hdf5 snapshots. Returns
+    (validation_loss, accuracy, specific_accuracy) where specific_accuracy is the per-sample
+    accuracy for every sample in the validation batch.
     """
     model.eval()
     size = len(dataloader.dataset)
@@ -253,7 +251,6 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     if batchSizeDefault is not None:
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
-                MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".png",tt)
                 SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
     elif epoch>=(epochs-1):# or epoch%1000==0:
         MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,diagnosticOutput+"_ValidationCorrelationPlot_Epoch"+str(epoch))
@@ -269,9 +266,9 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
-    """Evaluate the model on the held-out test set (see
-    CoNNGaFit_TrainModel_MassFlux_UNet.py's test_loop for the full description). Returns
-    (test_loss, accuracy, specific_accuracy).
+    """Evaluate the model on the held-out test set. Same rough accuracy metric and final-epoch
+    diagnostic outputs as validation_loop above, written under imageOutput_finalTest instead.
+    Returns (test_loss, accuracy, specific_accuracy).
     """
     model.eval()
     size = len(dataloader.dataset)
@@ -351,9 +348,6 @@ validationNames = LoadNames(validationDir);
 trainingNames = LoadNames(trainingDir);
 testingNames = LoadNames(testingDir);
 
-print("Training Names are:")
-print(trainingNames)
-
 #### Define Loss Function and Optimizer ####
 loss_fn = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=weight_decay) #Steepest gradient descent, can use different optimizers      
@@ -364,11 +358,7 @@ validationLoss = np.zeros((epochs))
 validationAccuracy=np.zeros((epochs))
 
 if batchSizeDefault is not None:
-    #Note: specific_accuracy is only ever filled in per-sample when batchSizeDefault is None
-    #(see the main training loop below), so this array stays all zeros/unused in this mode -
-    #sized to 0 rows rather than the previous "testBatchSize-5" (which would raise a
-    #ValueError for any batchSizeDefault < 5).
-    specificAccuracy=np.zeros((0,epochs))
+    specificAccuracy=np.zeros((testBatchSize-5,epochs))
 else:
     specificAccuracy=np.zeros((len(validation_data),epochs))
 

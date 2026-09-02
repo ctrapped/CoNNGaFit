@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
-from CoNNGaFit_Datasets import CoNNGaFitImageDataset
+from Datasets import CoNNGaFitImageDataset
 
-from CoNNGaFit_NeuralNetwork_Unet3d import NeuralNetwork
+from NeuralNetwork_Unet3d import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -16,16 +16,16 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 import h5py
 
-from CoNNGaFit_PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
+from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
 
 import argparse
 
-####Trains the Unet read from CoNNGaFit_NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, Validation, and testing datasets must be provided in .csv format as outlined in CoNNGaFit_Datasets.py.
+####Trains the Unet read from NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, Validation, and testing datasets must be provided in .csv format as outlined in Datasets.py.
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for rotational velocities and provide appropriate conversions on plots
 #
-####Run as: python CoNNGaFit_TrainModel_RC_UNet.py [options]
+####Run as: python TrainModel_RC_UNet.py [options]
 ####  Run with --help to see all options (data/network directories, dataset CSV filenames,
 ####  output filenames). By default, expects
 ####  CoNNGaFitData/annotation_datasets/{training,validation,test}_annotations_RC_AllInclinations_<sample-suffix>.csv
@@ -154,7 +154,7 @@ print("Data loaded...")
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
-    """Run one training epoch (see CoNNGaFit_TrainModel_MassFlux_UNet.py's train_loop for
+    """Run one training epoch (see TrainModel_MassFlux_UNet.py's train_loop for
     the full description; identical structure, just targeting rotational velocity labels).
     Returns the loss averaged over all batches in the epoch.
     """
@@ -198,7 +198,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
 
 #### Define Validation Loop ####
 def validation_loop(dataloader, model, loss_fn, epoch):
-    """Evaluate the model on the validation set (see CoNNGaFit_TrainModel_MassFlux_UNet.py's
+    """Evaluate the model on the validation set (see TrainModel_MassFlux_UNet.py's
     validation_loop for the full description). Returns
     (validation_loss, accuracy, specific_accuracy).
     """
@@ -259,7 +259,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
     """Evaluate the model on the held-out test set (see
-    CoNNGaFit_TrainModel_MassFlux_UNet.py's test_loop for the full description). Returns
+    TrainModel_MassFlux_UNet.py's test_loop for the full description). Returns
     (test_loss, accuracy, specific_accuracy).
     """
     model.eval()

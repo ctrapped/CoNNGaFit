@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
-from CoNNGaFit_Datasets import CoNNGaFitImageDataset
+from Datasets import CoNNGaFitImageDataset
 
-from CoNNGaFit_NeuralNetwork_Unet3d import NeuralNetwork
+from NeuralNetwork_Unet3d import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -16,17 +16,17 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 import h5py
 
-from CoNNGaFit_PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
+from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
 
 import argparse
 
 
-####Trains the Unet read from CoNNGaFit_NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, Validation, and testing datasets must be provided in .csv format as outlined in CoNNGaFit_Datasets.py.
+####Trains the Unet read from NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, Validation, and testing datasets must be provided in .csv format as outlined in Datasets.py.
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for radial mass fluxes and provide appropriate conversions on plots
 #
-####Run as: python CoNNGaFit_TrainModel_MassFlux_UNet.py [options]
+####Run as: python TrainModel_MassFlux_UNet.py [options]
 ####  Run with --help to see all options (data/network directories, dataset CSV filenames,
 ####  output filenames). By default, expects
 ####  CoNNGaFitData/annotation_datasets/{training,validation,test}_annotations_MassFlux_<sample-suffix>.csv

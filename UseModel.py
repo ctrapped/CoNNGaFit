@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 #from torchvision import datasets
 from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
-from CoNNGaFit_Datasets import CoNNGaFitImageInferenceDataset
+from Datasets import CoNNGaFitImageInferenceDataset
 
 
 import numpy as np
@@ -15,7 +15,7 @@ import scipy.stats as stats
 
 import h5py
 
-from CoNNGaFit_PlottingFunctions import LoadNames,CreateBasicPlots,MakeImage
+from PlottingFunctions import LoadNames,CreateBasicPlots,MakeImage
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -41,7 +41,7 @@ def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params
         implemented; any other value raises ValueError.
     imageOutput_prefix: directory/filename prefix prepended to every output file written.
     imageList: path to a CSV listing the input datacubes to run inference on (see
-        CoNNGaFitImageInferenceDataset in CoNNGaFit_Datasets.py for the expected format).
+        CoNNGaFitImageInferenceDataset in Datasets.py for the expected format).
     modelPath: path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint
         to load, overriding the networkType's hardcoded default checkpoint below. Pass None to
         use the default checkpoint for the chosen networkType.
@@ -57,7 +57,7 @@ def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params
 
     if networkType=='unet18': ####U-Net
         targetShape=[40,40] #output dimensions
-        from AlternativeNetworks.CoNNGaFit_NeuralNetwork_Unet3d_HiResTest import NeuralNetwork
+        from AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
 
         modelOutputPath = modelPath or os.path.join('TrainedNetworks','hiResTests','MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt') #Address of desired model
 
