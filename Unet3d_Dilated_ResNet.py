@@ -373,6 +373,33 @@ class NeuralNetwork(nn.Module):
         rows.append(("adaptive avg pool", self.nFilt0, self.pool_output))
         return rows
 
+    def _enable_mc_dropout(self):
+        """Put every Dropout/Dropout3d submodule into train mode while leaving BatchNorm3d
+        (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
+        sample, but BatchNorm3d in train mode would normalize against a single-sample batch
+        at inference (RunInferences in UseModel.py runs batch_size=1)."""
+        for m in self.modules():
+            if isinstance(m, (nn.Dropout, nn.Dropout3d)):
+                m.train()
+
+    def predict_with_uncertainty(self, x, n_samples=30, saveLatentImages=False):
+        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed) and
+        return (mean, std) over dim 0, each of shape (nBatch, output_size). std is the
+        MC-Dropout estimate of epistemic uncertainty. Call model.eval() first as usual; this
+        only re-enables dropout for the duration of the call, then restores plain eval mode.
+
+        Only as informative as how much dropout is actually active in the forward path - with
+        block_dropout_rate=0.0 (the default), the only dropout is fc_dropout_rate before the
+        output layer, so the estimate reflects uncertainty in the regression head only, not the
+        Process stack. Enable block_dropout_rate too if uncertainty over the full network is
+        wanted.
+        """
+        self._enable_mc_dropout()
+        with torch.no_grad():
+            preds = torch.stack([self.forward(x, saveLatentImages) for _ in range(n_samples)], dim=0)
+        self.eval()
+        return preds.mean(dim=0), preds.std(dim=0)
+
     def summary(self, print_fn=print):
         """Print the network structure, the input dimensions, the data/feature-count
         progression through every layer, which activation runs at each stage, and the

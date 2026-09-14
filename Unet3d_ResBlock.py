@@ -254,15 +254,15 @@ class Upsample(nn.Module):
         upsample and the channel projection together, in one learned operation. padding/
         output_padding come from _doubling_deconv_pads so the output is exactly 2*N-1 per
         axis for any kernel size. Cheap, but transposed convs are prone to checkerboard
-        artifacts.
+        artifacts (https://distill.pub/2016/deconv-checkerboard/).
       - 'trilinear': nn.Upsample(scale_factor=2, mode='trilinear') doubles the spatial size
         (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1x1 Conv3d that
         projects in_channels -> out_channels. Avoids checkerboard artifacts, at the cost of
         a a resize plus an extra pointwise conv.
 
-    The small 2*N vs 2*N-1 difference between the two modes doesn't matter downstream: 
+    The small 2*N vs 2*N-1 difference between the two modes is accounted for downstream.
     NeuralNetwork.forward realigns the result to the matching encoder skip map's exact shape via
-    _match_spatial before concatenating. Kept separate from DeconvBlock because that skip
+    _match_spatial before concatenating. This is kept separate from DeconvBlock because that skip
     map is concatenated onto x *after* this upsample but *before* DeconvBlock's own
     convolutions run, and concatenation needs both tensors to already share a spatial shape.
 
@@ -547,6 +547,33 @@ class NeuralNetwork(nn.Module):
 
         self.saveItr += 1
         return output
+
+    def _enable_mc_dropout(self):
+        """Put every Dropout/Dropout3d submodule into train mode while leaving BatchNorm3d
+        (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
+        sample, but BatchNorm3d in train mode would normalize against a single-sample batch
+        at inference (RunInferences in UseModel.py runs batch_size=1)."""
+        for m in self.modules():
+            if isinstance(m, (nn.Dropout, nn.Dropout3d)):
+                m.train()
+
+    def predict_with_uncertainty(self, x, n_samples=30, saveLatentImages=False):
+        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed) and
+        return (mean, std) over dim 0, each of shape (nBatch, output_size). std is the
+        MC-Dropout estimate of epistemic uncertainty. Call model.eval() first as usual; this
+        only re-enables dropout for the duration of the call, then restores plain eval mode.
+
+        Only as informative as how much dropout is actually active in the forward path - with
+        block_dropout_rate=0.0 (the default), the only dropout is fc_dropout_rate before the
+        output layer, so the estimate reflects uncertainty in the regression head only, not the
+        encoder/decoder. Enable block_dropout_rate too if uncertainty over the full network is
+        wanted.
+        """
+        self._enable_mc_dropout()
+        with torch.no_grad():
+            preds = torch.stack([self.forward(x, saveLatentImages) for _ in range(n_samples)], dim=0)
+        self.eval()
+        return preds.mean(dim=0), preds.std(dim=0)
 
     def stage_shapes(self):
         """Analytically compute the tensor shape at every stage (no forward pass).
