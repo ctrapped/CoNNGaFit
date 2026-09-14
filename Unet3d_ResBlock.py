@@ -403,6 +403,13 @@ class NeuralNetwork(nn.Module):
             (default, a learned stride-2 ConvTranspose3d) or 'trilinear' (nn.Upsample's 3-d
             interpolation mode, followed by a 1x1x1 Conv3d channel projection). See Upsample
             for the tradeoffs.
+        predict_variance: if False (default), the head has a single output Linear and
+            forward() returns one tensor of shape (nBatch, output_size), as before. If True,
+            a second output Linear is added predicting a per-element log-variance, and
+            forward() returns (mean, logvar) - train against a heteroscedastic loss such as
+            nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
+            no output_activation applied (it must stay unconstrained for exp() to reach any
+            positive variance).
 
         Each *_activation is a zero-arg callable returning an nn.Module - the activation
         class itself (nn.ReLU, nn.GELU, nn.Tanh, ...) or a lambda for non-default arguments
@@ -415,8 +422,9 @@ class NeuralNetwork(nn.Module):
                  fc_dropout_rate=0.0, block_dropout_rate=0.0,
                  stem_activation=nn.LeakyReLU, block_activation=nn.ReLU,
                  fc_activation=nn.LeakyReLU, output_activation=nn.Identity,
-                 upsample_mode='conv_transpose'):
+                 upsample_mode='conv_transpose', predict_variance=False):
         super(NeuralNetwork, self).__init__()
+        self.predict_variance = predict_variance
         if n_stages < 2:
             raise ValueError("n_stages must be >= 2 (need at least one skip connection)")
         input_shape = tuple(int(v) for v in input_shape)
@@ -491,7 +499,9 @@ class NeuralNetwork(nn.Module):
         if not fc_widths:
             head.append(nn.Dropout(p=fc_dropout_rate))
         self.fc_hidden = nn.Sequential(*head)
-        self.fc_out = nn.Linear(in_f, self.output_size)
+        self.fc_out_mean = nn.Linear(in_f, self.output_size)
+        if predict_variance:
+            self.fc_out_logvar = nn.Linear(in_f, self.output_size)
         self.out_activation = output_activation()
 
 
@@ -505,7 +515,10 @@ class NeuralNetwork(nn.Module):
             encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
-        Returns: tensor of shape (nBatch, output_size) - the flattened predicted output map.
+        Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
+            - the flattened predicted output map. If predict_variance=True, a (mean, logvar)
+            tuple of two such tensors - logvar is an unconstrained per-element log-variance
+            (exp(logvar) to get the variance), with no output_activation applied.
         """
         nBatch,nSpec,nX,nY = x.size()
         if (nSpec, nX, nY) != self.input_shape:
@@ -543,10 +556,12 @@ class NeuralNetwork(nn.Module):
         x = self.avgpool0(x)
         x = torch.flatten(x,1)
         x = self.fc_hidden(x)
-        output = self.out_activation(self.fc_out(x))
+        mean = self.out_activation(self.fc_out_mean(x))
 
         self.saveItr += 1
-        return output
+        if self.predict_variance:
+            return mean, self.fc_out_logvar(x)
+        return mean
 
     def _enable_mc_dropout(self):
         """Put every Dropout/Dropout3d submodule into train mode while leaving BatchNorm3d
@@ -558,21 +573,35 @@ class NeuralNetwork(nn.Module):
                 m.train()
 
     def predict_with_uncertainty(self, x, n_samples=30, saveLatentImages=False):
-        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed) and
-        return (mean, std) over dim 0, each of shape (nBatch, output_size). std is the
-        MC-Dropout estimate of epistemic uncertainty. Call model.eval() first as usual; this
-        only re-enables dropout for the duration of the call, then restores plain eval mode.
+        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed).
+        Call model.eval() first as usual; this only re-enables dropout for the duration of the
+        call, then restores plain eval mode. Only informative if dropout is enabled when the
+        model was trained.
 
-        Only as informative as how much dropout is actually active in the forward path - with
-        block_dropout_rate=0.0 (the default), the only dropout is fc_dropout_rate before the
-        output layer, so the estimate reflects uncertainty in the regression head only, not the
-        encoder/decoder. Enable block_dropout_rate too if uncertainty over the full network is
-        wanted.
+        If predict_variance=False: returns (mean, epistemic_std), each of shape
+            (nBatch, output_size) - epistemic_std is the MC-Dropout spread across samples.
+        If predict_variance=True: returns (mean, aleatoric_std, epistemic_std, total_std).
+            aleatoric_std comes from averaging the network's own per-sample variance
+            predictions (exp(logvar)); epistemic_std is the spread of the sampled means, as
+            above; total_std combines the two via the law of total variance
+            (total_var = aleatoric_var + epistemic_var).
         """
         self._enable_mc_dropout()
         with torch.no_grad():
-            preds = torch.stack([self.forward(x, saveLatentImages) for _ in range(n_samples)], dim=0)
+            if self.predict_variance:
+                means, logvars = zip(*(self.forward(x, saveLatentImages) for _ in range(n_samples)))
+                means = torch.stack(means, dim=0)
+                logvars = torch.stack(logvars, dim=0)
+            else:
+                preds = torch.stack([self.forward(x, saveLatentImages) for _ in range(n_samples)], dim=0)
         self.eval()
+
+        if self.predict_variance:
+            mean_pred = means.mean(dim=0)
+            aleatoric_std = logvars.exp().mean(dim=0).sqrt()
+            epistemic_std = means.std(dim=0)
+            total_std = (aleatoric_std**2 + epistemic_std**2).sqrt()
+            return mean_pred, aleatoric_std, epistemic_std, total_std
         return preds.mean(dim=0), preds.std(dim=0)
 
     def stage_shapes(self):
@@ -638,7 +667,7 @@ class NeuralNetwork(nn.Module):
         print_fn(bar)
         print_fn(f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
                  f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
-                 f"upsample_mode={upsample_mode!r}")
+                 f"upsample_mode={upsample_mode!r}  |  predict_variance={self.predict_variance}")
         nS, nX, nY = self.input_shape
         print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  "
                  f"output: (nBatch, {self.output_size})")
@@ -669,7 +698,9 @@ class NeuralNetwork(nn.Module):
         for k, out_f in enumerate(self.fc_widths):
             print_fn(f"  {'fc hidden ' + str(k):<{w}}   {in_f} -> {out_f}  activation={fc_act}")
             in_f = out_f
-        print_fn(f"  {'fc out':<{w}}   {in_f} -> {self.output_size}  activation={out_act}")
+        print_fn(f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  activation={out_act}")
+        if self.predict_variance:
+            print_fn(f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  activation=None")
 
         print_fn("-" * (w + 40))
         n_all = sum(p.numel() for p in self.parameters())
