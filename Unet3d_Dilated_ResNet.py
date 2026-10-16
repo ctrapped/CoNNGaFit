@@ -3,66 +3,18 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-# 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes followin
-# Stachenfeld et al. 2021, "Learned Simulators for Turbulence" (https://arxiv.org/abs/2112.15275).
+from Unet_blocks import DilatedResidualBlock, _ceil_conv_pad
+from Unet_diagnostics import SaveSummedSpectralChannels
+
+# 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes following
+# architecture in Stachenfeld et al. 2021, (https://arxiv.org/abs/2112.15275).
 # Reads an (nSpec x nX x nY) cube of arbitrary size and predicts a flattened output map,
 # matching the input/output conventions of Unet3d_ResBlock.py. There is no spatial
 # downsampling/upsampling path or skip connections; the receptive field is grown entirely
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
 #
 # Written by Caleb Choban using Claude LLM, adapting Unet3d_ResBlock.py's conventions.
-
-latentImageOutput="latentImages/latent_"
-from matplotlib import pyplot as plt
-def SaveAllSpectralChannels(x,nStep):
-    """Save one PNG per (filter, spectral channel) of activation tensor x (nBatch,C,nSpec,nX,nY).
-
-    Writes latentImageOutput + "step<nStep>_filter<i>_nSpec<j>.png" for the first batch
-    element. Diagnostic only.
-    """
-    npX = x.cpu().float().detach().numpy();
-    print(np.shape(x))
-    for i in range(0,np.shape(npX)[1]):
-        for j in range(0,np.shape(npX)[2]):
-            plt.figure()
-            plt.imshow(npX[0,i,j,:,:],cmap='inferno')
-            plt.savefig(latentImageOutput+"step"+str(nStep)+"_filter"+str(i)+"_nSpec"+str(j)+".png")
-            plt.close()
-
-def SaveSummedSpectralChannels(x,nStep,saveItr):
-    """Save one PNG per filter of activation tensor x, summed over the spectral axis.
-
-    x has shape (nBatch, C, nSpec, nX, nY); writes latentImageOutput +
-    "sum_step<nStep>_filter<i>_gal<saveItr>.png" for the first batch element. saveItr is
-    passed in by the caller (NeuralNetwork.forward passes its self.saveItr) rather than read
-    off a module global. Diagnostic only.
-    """
-    print(np.shape(x))
-    npX = x.cpu().float().detach().numpy();
-    toPlot = np.sum(npX,axis=2)
-    for i in range(0,np.shape(npX)[1]):
-        plt.figure()
-        plt.imshow(toPlot[0,i,:,:],cmap='inferno')
-        plt.savefig(latentImageOutput+"sum_step"+str(nStep)+"_filter"+str(i)+"_gal"+str(saveItr)+".png")
-        plt.close()
-
-
-def _ceil_conv_pad(kernel_size, stride):
-    """(before, after) padding per dim so a strided conv gives out = ceil(N/stride).
-
-    A strided conv has out = floor((N + total_pad - k) / stride) + 1, which equals
-    ceil(N/stride) for every N iff total_pad == k - stride (clamped to >= 0). For stride=1
-    this reduces to the usual k-1 'same' padding. For odd total_pad the extra 1 goes on the
-    trailing side. Returned as an F.pad arg for a 5-d tensor: (W_b, W_a, H_b, H_a, D_b, D_a).
-    """
-    pad = []
-    for k, s in zip(kernel_size, stride):  # kernel_size/stride are (D, H, W); F.pad wants W, H, D order
-        total = max(k - s, 0)
-        before = total // 2
-        after = total - before
-        pad = [before, after] + pad
-    return tuple(pad)
-
+# DilatedResidualBlock lives in Unet_blocks.py; latent-image diagnostics in Unet_diagnostics.py.
 
 def _strided_out_shape(input_shape, stride):
     """(nSpec, nX, nY) shape after a single conv with the given stride and _ceil_conv_pad
@@ -103,59 +55,6 @@ class Encoder(nn.Module):
         if self.pad is not None:
             x = F.pad(x, self.pad)
         return self.act(self.conv(x))
-
-
-#### Process: a stack of dilated residual blocks, resolution-preserving throughout ####
-class DilatedResidualBlock(nn.Module):
-    """One dilated residual block: a chain of Conv3d layers whose dilation rates cycle through
-    `dilation_rates` (default (1, 2, 4, 8, 4, 2, 1)), each at stride 1 with 'same' padding so
-    every layer - and the block as a whole - preserves the spatial/spectral shape exactly,
-    regardless of dilation. Every conv is followed by BatchNorm3d and an activation, except the
-    last conv in the chain, whose BatchNorm3d output is added to the block's input (a plain
-    identity skip, since channels never change through the Process stack) before a final
-    activation and channel-wise dropout - the same conv-bn-act...conv-bn + skip -> act ->
-    dropout convention as ResidualBlock in Unet3d_ResBlock.py, with dilation added and no
-    downsampling.
-
-    Parameters:
-        channels: feature channel count (in == out, held constant through the block).
-        kernel_size: 3-tuple conv kernel size, used by every layer in the chain.
-        dilation_rates: sequence of per-layer dilation factors (applied isotropically, i.e.
-            the same rate along D/H/W).
-        dropout_rate: probability for the channel-wise nn.Dropout3d on the block output. 0.0
-            disables it.
-        activation: zero-arg callable returning an nn.Module (the class itself, e.g. nn.ReLU,
-            or a lambda such as `lambda: nn.LeakyReLU(0.2)`). Called once per site so every
-            activation is an independent module.
-    """
-
-    def __init__(self, channels, kernel_size, dilation_rates=(1, 2, 4, 8, 4, 2, 1),
-                 dropout_rate=0.0, activation=nn.ReLU):
-        super().__init__()
-        self.dilation_rates = tuple(dilation_rates)
-        self.convs = nn.ModuleList()
-        self.bns = nn.ModuleList()
-        self.acts = nn.ModuleList()
-        for d in self.dilation_rates:
-            self.convs.append(nn.Conv3d(channels, channels, kernel_size=kernel_size,
-                                         stride=(1, 1, 1), dilation=d, padding='same'))
-            self.bns.append(nn.BatchNorm3d(channels))
-            self.acts.append(activation())
-        self.final_act = activation()
-        self.dropout = nn.Dropout3d(p=dropout_rate)
-
-    def forward(self, x):
-        """x: (nBatch, channels, D, H, W) -> same shape."""
-        skip = x
-        out = x
-        n = len(self.convs)
-        for i, (conv, bn, act) in enumerate(zip(self.convs, self.bns, self.acts)):
-            out = bn(conv(out))
-            if i < n - 1:
-                out = act(out)
-        out = out + skip
-        out = self.final_act(out)
-        return self.dropout(out)
 
 
 #### Decode: project the Process stack's output back into the head's input features ####
@@ -242,7 +141,7 @@ class NeuralNetwork(nn.Module):
         fc_activation: activation between hidden fully-connected layers (default nn.LeakyReLU).
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         predict_variance: if False (default), the head has a single output Linear and
-            forward() returns one tensor of shape (nBatch, output_size), as before. If True,
+            forward() returns one tensor of shape (nBatch, output_size). If True,
             a second output Linear is added predicting a per-element log-variance, and
             forward() returns (mean, logvar) - train against a heteroscedastic loss such as
             nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
@@ -273,7 +172,7 @@ class NeuralNetwork(nn.Module):
         self.output_size = int(output_size) if output_size is not None else input_shape[1] * input_shape[2]
         print("output size=", self.output_size)
         self.nFC = nFC
-        self.saveItr = 0  # bumped once per forward() call; passed by value into the Save*SpectralChannels helpers
+        self.saveItr = 0  # forward() call counter; numbers the latent-image filenames
 
         self.nFilt0 = nFilt0
         self.kernel_stem = tuple(kernel_stem)
@@ -330,7 +229,7 @@ class NeuralNetwork(nn.Module):
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations after the
             encoder and after each Process block to latentImageOutput (see
-            SaveSummedSpectralChannels above) - useful for visually debugging what the network
+            SaveSummedSpectralChannels in Unet_diagnostics.py) - useful for visually debugging what the network
             is learning, not needed for normal training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
             - the flattened predicted output map. If predict_variance=True, a (mean, logvar)

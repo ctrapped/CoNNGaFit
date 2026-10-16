@@ -1,117 +1,19 @@
 import numpy as np
 import torch
 from torch import nn
-import torch.nn.functional as F
+
+from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, _match_spatial
+from Unet_diagnostics import SaveSummedSpectralChannels
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
 # arbitrary size and predicts a flattened output map. See NeuralNetwork for the full
 # parameter list.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
-
-latentImageOutput="latentImages/latent_"
-from matplotlib import pyplot as plt
-def SaveAllSpectralChannels(x,nStep):
-    """Save one PNG per (filter, spectral channel) of activation tensor x (nBatch,C,nSpec,nX,nY).
-
-    Writes latentImageOutput + "step<nStep>_filter<i>_nSpec<j>.png" for the first batch
-    element. Diagnostic only.
-    """
-    npX = x.cpu().float().detach().numpy();
-    print(np.shape(x))
-    for i in range(0,np.shape(npX)[1]):
-        for j in range(0,np.shape(npX)[2]):
-            plt.figure()
-            plt.imshow(npX[0,i,j,:,:],cmap='inferno')
-            plt.savefig(latentImageOutput+"step"+str(nStep)+"_filter"+str(i)+"_nSpec"+str(j)+".png")
-            plt.close()
-
-def SaveSummedSpectralChannels(x,nStep,saveItr):
-    """Save one PNG per filter of activation tensor x, summed over the spectral axis.
-
-    x has shape (nBatch, C, nSpec, nX, nY); writes latentImageOutput +
-    "sum_step<nStep>_filter<i>_gal<saveItr>.png" for the first batch element. saveItr is
-    passed in by the caller (NeuralNetwork.forward passes its self.saveItr) rather than read
-    off a module global. Diagnostic only.
-    """
-    print(np.shape(x))
-    npX = x.cpu().float().detach().numpy();
-    toPlot = np.sum(npX,axis=2)
-    for i in range(0,np.shape(npX)[1]):
-        plt.figure()
-        plt.imshow(toPlot[0,i,:,:],cmap='inferno')
-        plt.savefig(latentImageOutput+"sum_step"+str(nStep)+"_filter"+str(i)+"_gal"+str(saveItr)+".png")
-        plt.close()
+# Building blocks live in Unet_blocks.py; latent-image diagnostics in Unet_diagnostics.py.
 
 
-def _doubling_deconv_pads(kernel_size):
-    """(padding, output_padding) so a stride-2 ConvTranspose3d gives out = 2*N - 1.
-
-    ConvTranspose3d has out = (N-1)*2 - 2*padding + k + output_padding. Setting that
-    equal to 2*N - 1 requires 2*padding = k - 1 + output_padding. output_padding must
-    be 0 <= op < stride, so pick op = 0 for odd k (padding = (k-1)/2) and op = 1 for
-    even k (padding = k/2); both keep padding integral. Tuples are in (D, H, W) order.
-    """
-    padding, output_padding = [], []
-    for k in kernel_size:
-        op = 1 - (k % 2)  # 0 for odd kernels, 1 for even kernels
-        padding.append((k - 1 + op) // 2)
-        output_padding.append(op)
-    return tuple(padding), tuple(output_padding)
-
-
-def _near_same_deconv_pad(kernel_size):
-    """Per-axis padding (k-1)//2 for a stride-1 ConvTranspose3d.
-
-    A stride-1 ConvTranspose3d has out = N + k - 1 - 2*padding. With padding = (k-1)//2
-    the output is exactly N for odd k and N+1 for even k; DeconvBlock trims the even-k
-    overshoot with _match_spatial (output_padding can't help here - it must be < stride).
-    Returned in (D, H, W) order.
-    """
-    return tuple((k - 1) // 2 for k in kernel_size)
-
-
-def _ceil_conv_pad(kernel_size):
-    """(before, after) padding per dim so a strided conv gives out = ceil(N/stride).
-
-    A strided conv has out = floor((N + total_pad - k) / stride) + 1, which equals
-    ceil(N/stride) for every N and every stride iff total_pad == k - 1 along that dim -
-    so the same padding works whether the conv that follows uses stride 2 (ResidualBlock's
-    downsampling conv) or stride 4 (the stem). For odd k this splits symmetrically; for
-    even k the extra 1 goes on the trailing side. Returned as an F.pad arg for a 5-d
-    tensor: (W_b, W_a, H_b, H_a, D_b, D_a).
-    """
-    pad = []
-    for k in kernel_size:  # kernel_size is (D, H, W); F.pad wants W, H, D order
-        before = (k - 1) // 2
-        after = (k - 1) - before
-        pad = [before, after] + pad
-    return tuple(pad)
-
-
-def _match_spatial(x, ref):
-    """Center-crop and/or zero-pad the last three dims of x to match ref's.
-
-    The encoder's downsample (ceil(N/2)) and the decoder's Upsample (2*M-1) are not
-    exact inverses, so at each stage the upsampled decoder tensor and the encoder
-    skip tensor can differ by a voxel or two along any axis. This aligns them for
-    torch.cat regardless of input shape, kernel size, or network depth.
-    """
-    # pad any axis where x is shorter than ref (F.pad wants W, H, D order)
-    pad = []
-    for xs, rs in zip(reversed(x.shape[2:]), reversed(ref.shape[2:])):
-        deficit = max(rs - xs, 0)
-        pad += [deficit // 2, deficit - deficit // 2]
-    if any(pad):
-        x = F.pad(x, pad)
-    # crop any axis where x is now longer than ref
-    slices = [slice(None), slice(None)]
-    for xs, rs in zip(x.shape[2:], ref.shape[2:]):
-        start = (xs - rs) // 2
-        slices.append(slice(start, start + rs))
-    return x[tuple(slices)]
-
-
+#### Input-shape checks ####
 def _stem_out_shape(input_shape):
     """(nSpec, nX, nY) shape after layer_stem: a stride-2 conv then a stride-2 maxpool, each
     exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4) -
@@ -149,196 +51,6 @@ def _check_stage_compatibility(input_shape, n_stages):
             f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
             f"Use n_stages <= {cap + 1} or enlarge that axis.")
     return stem_shape
-
-#### Input stem ####
-class Stem(nn.Module):
-    """Reduces the raw input cube by a factor of 4 along every spatial/spectral axis, via a
-    stride-2 Conv3d followed by a stride-2 MaxPool3d and an activation.
-
-    Each stage's padding comes from _ceil_conv_pad (the same helper ResidualBlock uses for
-    its stride-2 downsampling conv), so the conv brings every axis to exactly ceil(N/2) and
-    the pool then brings that to exactly ceil(ceil(N/2)/2) = ceil(N/4) - an exact quarter for
-    any input size and any kernel size (odd or even), not an approximate ~4x. The pre-pool
-    padding is filled with -inf (rather than 1.pad's default 0) so it can never win the max,
-    regardless of the sign of the conv's output - MaxPool3d's own `padding` argument does the
-    same internally, but only accepts a single symmetric value, so it can't express the
-    asymmetric padding an even kernel/odd axis length needs.
-
-    Parameters:
-        out_channels: number of filters (== nFilt0, the encoder's stage-0 channel count).
-        kernel_size: 3-tuple kernel size for the conv (the pool's kernel is fixed at 2).
-        activation: zero-arg callable returning an nn.Module (see ResidualBlock's activation
-            parameter for the accepted forms).
-    """
-
-    def __init__(self, out_channels, kernel_size, activation=nn.LeakyReLU):
-        super().__init__()
-        self.conv_pad = _ceil_conv_pad(kernel_size)
-        self.conv = nn.Conv3d(1, out_channels, kernel_size=kernel_size, stride=(2,2,2), padding=0)
-        self.pool_pad = _ceil_conv_pad((2,2,2))
-        self.pool = nn.MaxPool3d(kernel_size=(2,2,2), stride=(2,2,2), padding=0)
-        self.act = activation()
-
-    def forward(self, x):
-        """x: (nBatch, 1, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4))."""
-        x = self.conv(F.pad(x, self.conv_pad))
-        x = self.pool(F.pad(x, self.pool_pad, mode='constant', value=float('-inf')))
-        return self.act(x)
-
-#### Encoder-side residual block ####
-class ResidualBlock(nn.Module):
-    """One residual block on the encoder (downsampling) side of the U-Net.
-
-    Main path: conv1 -> BN -> act -> conv2 -> BN -> act, added to a skip connection, then a
-    final act and channel-wise dropout. When downsample=True, conv1 runs at stride 2 to
-    bring every spatial/spectral axis to ceil(N/2) and the skip is projected through a
-    strided 1x1x1 conv + BatchNorm to match; otherwise the shape is unchanged and the skip
-    is the identity.
-
-    Parameters:
-        in_channels, out_channels: channel counts of the block's input and output.
-        downsample: if True, halve every axis (ceil(N/2)) and use a projected skip.
-        kernel1: 3-tuple conv kernel size (used by conv1 and conv2).
-        dropout_rate: probability for the channel-wise nn.Dropout3d on the block output.
-            0.0 disables it. Because the skip feature maps in NeuralNetwork are captured
-            straight after their stage, this also regularizes the skip connections; see
-            NeuralNetwork's block_dropout_rate for guidance.
-        activation: zero-arg callable returning an nn.Module (the class itself, e.g. nn.ReLU,
-            or a lambda such as `lambda: nn.LeakyReLU(0.2)`). Called once per site so the
-            three activations are independent modules.
-    """
-
-    def __init__(self, in_channels, out_channels, downsample, kernel1, dropout_rate=0.0, activation=nn.ReLU):
-        super().__init__()
-        self.downsample = downsample
-        if downsample:
-            # conv1 pads 0; forward() applies F.pad first so any kernel lands on ceil(N/2).
-            self.down_pad = _ceil_conv_pad(kernel1)
-            self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=0)
-            # a stride-2 1x1x1 conv already yields ceil(N/2), so the skip needs no padding.
-            self.shortcut = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(2,2,2)),
-                nn.BatchNorm3d(out_channels)
-            )
-        else:
-            self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding='same')
-            self.shortcut = nn.Sequential()
-
-        # conv2 keeps the shape fixed
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding='same')
-        self.bn1 = nn.BatchNorm3d(out_channels)
-        self.bn2 = nn.BatchNorm3d(out_channels)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
-        self.act1 = activation()
-        self.act2 = activation()
-        self.act3 = activation()
-
-    def forward(self,x):
-        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D', H', W'), where
-        D'/H'/W' are ceil(D/2) etc. if downsample else unchanged."""
-        shortcut = self.shortcut(x)
-        if self.downsample:
-            x = F.pad(x, self.down_pad)
-        x = self.act1(self.bn1(self.conv1(x)))
-        x = self.act2(self.bn2(self.conv2(x)))
-        x = x + shortcut
-        x = self.act3(x)
-        return self.dropout(x)
-
-#### Decoder-side spatial upsampler ####
-class Upsample(nn.Module):
-    """Spatially upsample x by ~2x per axis, then project to out_channels. Two
-    implementations, selected by `mode`:
-
-      - 'conv_transpose' (default): a single stride-2 ConvTranspose3d does the spatial
-        upsample and the channel projection together, in one learned operation. padding/
-        output_padding come from _doubling_deconv_pads so the output is exactly 2*N-1 per
-        axis for any kernel size. Cheap, but transposed convs are prone to checkerboard
-        artifacts (https://distill.pub/2016/deconv-checkerboard/).
-      - 'trilinear': nn.Upsample(scale_factor=2, mode='trilinear') doubles the spatial size
-        (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1x1 Conv3d that
-        projects in_channels -> out_channels. Avoids checkerboard artifacts, at the cost of
-        a a resize plus an extra pointwise conv.
-
-    The small 2*N vs 2*N-1 difference between the two modes is accounted for downstream.
-    NeuralNetwork.forward realigns the result to the matching encoder skip map's exact shape via
-    _match_spatial before concatenating. This is kept separate from DeconvBlock because that skip
-    map is concatenated onto x *after* this upsample but *before* DeconvBlock's own
-    convolutions run, and concatenation needs both tensors to already share a spatial shape.
-
-    Parameters:
-        in_channels, out_channels: channel counts in and out.
-        kernel1: 3-tuple kernel size; only used when mode='conv_transpose'.
-        mode: 'conv_transpose' (default) or 'trilinear'.
-    """
-
-    def __init__(self, in_channels, out_channels, kernel1, mode='conv_transpose'):
-        super().__init__()
-        if mode not in ('conv_transpose', 'trilinear'):
-            raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'trilinear'")
-        self.mode = mode
-        if mode == 'conv_transpose':
-            padding, output_padding = _doubling_deconv_pads(kernel1)
-            self.upconv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=padding,output_padding=output_padding)
-        else:
-            self.resize = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
-            self.project = nn.Conv3d(in_channels, out_channels, kernel_size=1)
-
-    def forward(self,x):
-        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, ~2D, ~2H, ~2W) -
-        exactly 2D-1 etc. for mode='conv_transpose', exactly 2D etc. for mode='trilinear'."""
-        if self.mode == 'conv_transpose':
-            return self.upconv1(x)
-        return self.project(self.resize(x))
-
-#### Decoder-side deconvolution block ####
-class DeconvBlock(nn.Module):
-    """One block on the decoder side - the transpose-convolution mirror of ResidualBlock.
-
-    Spatial upsampling is done beforehand by Upsample. Here every conv runs at stride 1, so
-    the spatial shape is fixed; the block only changes the channel count. With upsample=True
-    it reduces in_channels -> out_channels (the skip is projected through a 1x1x1 transpose
-    conv + BatchNorm to match); with upsample=False in_channels == out_channels and the skip
-    is the identity. Main path: convtran1 -> BN -> act -> convtran2 -> BN -> act, add skip,
-    final act, dropout.
-
-    Parameters:
-        in_channels, out_channels: channel counts of the block's input and output.
-        upsample: if True, project the skip to out_channels; if False, use an identity skip.
-        kernel1: 3-tuple conv kernel size.
-        dropout_rate: probability for the channel-wise nn.Dropout3d on the block output
-            (0.0 disables). See NeuralNetwork's block_dropout_rate for guidance.
-        activation: zero-arg callable returning an nn.Module; called once per site (3 total).
-    """
-
-    def __init__(self, in_channels, out_channels, upsample, kernel1, dropout_rate=0.0, activation=nn.ReLU):
-        super().__init__()
-        pad = _near_same_deconv_pad(kernel1)   # forward() trims any even-kernel overshoot
-        self.convtran1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding=pad)
-        if upsample:
-            self.shortcut = nn.Sequential(
-                nn.ConvTranspose3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(1,1,1)),
-                nn.BatchNorm3d(out_channels)
-            )
-        else:
-            self.shortcut = nn.Sequential()
-
-        self.convtran2 = nn.ConvTranspose3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding=pad)
-        self.bn1 = nn.BatchNorm3d(out_channels)
-        self.bn2 = nn.BatchNorm3d(out_channels)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
-        self.act1 = activation()
-        self.act2 = activation()
-        self.act3 = activation()
-
-    def forward(self,x):
-        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D, H, W)."""
-        shortcut = self.shortcut(x)   # carries the target spatial shape
-        x = self.act1(self.bn1(_match_spatial(self.convtran1(x), shortcut)))
-        x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
-        x = x + shortcut
-        x = self.act3(x)
-        return self.dropout(x)
 
 #### Full network ####
 class NeuralNetwork(nn.Module):
@@ -404,7 +116,7 @@ class NeuralNetwork(nn.Module):
             interpolation mode, followed by a 1x1x1 Conv3d channel projection). See Upsample
             for the tradeoffs.
         predict_variance: if False (default), the head has a single output Linear and
-            forward() returns one tensor of shape (nBatch, output_size), as before. If True,
+            forward() returns one tensor of shape (nBatch, output_size). If True,
             a second output Linear is added predicting a per-element log-variance, and
             forward() returns (mean, logvar) - train against a heteroscedastic loss such as
             nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
@@ -437,7 +149,7 @@ class NeuralNetwork(nn.Module):
         self.stem_out_shape = _check_stage_compatibility(input_shape, n_stages)
         print("output size=", self.output_size)
         self.nFC=nFC
-        self.saveItr = 0  # bumped once per forward() call; passed by value into the Save*SpectralChannels helpers
+        self.saveItr = 0  # forward() call counter; numbers the latent-image filenames
 
         # Stem: stride-2 conv + stride-2 maxpool + activation, reducing every axis by exactly ceil(N/4)
         self.layer_stem = Stem(nFilt0, kernel_stem, activation=stem_activation)
@@ -512,7 +224,7 @@ class NeuralNetwork(nn.Module):
             sample; (nSpec, nX, nY) must equal the model's input_shape. A channel dim of
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations at each
-            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
+            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels in Unet_diagnostics.py) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
