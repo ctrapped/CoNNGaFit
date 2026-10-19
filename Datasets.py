@@ -30,6 +30,76 @@ TARGETS = {
 # Targets converted from Msun km/s to a mass flux in Msun/yr (see __getitem__)
 MASS_FLUX_TARGETS = {"radial_mass_flux", "cylindrical_radial_mass_flux"}
 
+# Augmentations, as (number of 90-degree rotations, left-right flip). VOF puts the galaxy's major
+# axis along x; "major_axis" keeps it there, while "all" (every rotation/flip of a square image)
+# also includes 90/270-degree rotations that put it along y.
+AUGMENTATIONS = {
+    None: [(0, False)],
+    "major_axis": [(0, False), (2, False), (0, True), (2, True)],
+    "all": [(k, flip) for k in range(4) for flip in (False, True)],
+}
+
+
+def augment_array(a, rotations, flip):
+    """Rotate a's first two (y, x) axes by rotations*90 degrees, then optionally flip left-right."""
+    a = np.rot90(a, rotations, axes=(0, 1))
+    if flip:
+        a = np.flip(a, axis=1)
+    return np.ascontiguousarray(a)  # torch can't wrap the negative strides rot90/flip leave
+
+
+def augmentation_suffix(rotations, flip):
+    """Name suffix for an augmentation, e.g. "_r180_lr" (empty for the original)."""
+    return (f"_r{90*rotations}" if rotations else "") + ("_lr" if flip else "")
+
+
+def radial_profile(hf, target, n_bins):
+    """Reduce an open VOF file's annotation maps to a radial curve of target, in n_bins equal-width rings.
+
+    Radius is measured in the image plane from the image center, out to the image edge. Mass is
+    the total in each ring [Msun], mass flux the flux through each ring [Msun/yr], and velocities
+    the mass-weighted mean [km/s], zero in rings with no mass.
+    """
+    mass = hf["mass_annotation"][()]
+    fov_kpc = hf.attrs["fov_kpc"]
+    y, x = np.indices(mass.shape)
+    radius = np.hypot(y - (mass.shape[0] - 1) / 2, x - (mass.shape[1] - 1) / 2) * fov_kpc / mass.shape[1]
+    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
+    ring = np.digitize(radius, edges) - 1
+    inside = ring < n_bins  # pixels in the corners, beyond the image edge, are left out
+
+    def ring_sum(values):
+        return np.bincount(ring[inside], weights=values[inside], minlength=n_bins)
+
+    ring_mass = ring_sum(mass)
+    if target == "mass":
+        return ring_mass
+    momentum = ring_sum(mass * hf[TARGETS[target][-1]][()])  # Msun km/s
+    if target in MASS_FLUX_TARGETS:
+        # Flux through a shell one ring wide: mass * velocity / ring width [Msun/yr]
+        ring_kpc = edges[1] - edges[0]
+        return momentum / (ring_kpc * KM_PER_KPC) * S_PER_YR
+    return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
+
+
+def face_on_path(path):
+    """Return the path of the face-on (inclination 0) VOF image for the same galaxy and snapshot as path.
+
+    Uses the same position angle if that file exists; otherwise any face-on position angle (the
+    position angle only spins a face-on disk, so its radial curves are the same).
+    """
+    name = os.path.basename(path)
+    match = re.search(VOF_IMAGE_NAME.pattern + "$", name)
+    galaxy = name[:match.start()]
+    face_on_dir = os.path.join(os.path.dirname(os.path.dirname(path)), "i0")
+    same_pa = os.path.join(face_on_dir, f"{galaxy}_i0_pa{match['position_angle']}_{match['snapshot']}_image_fullSpectra.hdf5")
+    if os.path.isfile(same_pa):
+        return same_pa
+    others = sorted(glob.glob(os.path.join(glob.escape(face_on_dir), f"{glob.escape(galaxy)}_i0_pa*_{match['snapshot']}_image_fullSpectra.hdf5")))
+    if not others:
+        raise FileNotFoundError(f"No face-on (i0) image for {name}; run VOF with inclination 0, or use radial_plane='sky'")
+    return others[0]
+
 
 def find_vof_images(data_dir, galaxies):
     """Return the paths of every VOF datacube for each galaxy's snapshot range, sorted.
@@ -53,7 +123,7 @@ def find_vof_images(data_dir, galaxies):
     return paths
 
 
-####Dataset class for training. Finds each galaxy's VOF datacubes; get loads one datacube and its target annotation map ('label')
+####Dataset class for training. Finds each galaxy's VOF datacubes; get loads one (optionally rotated/flipped) datacube and its target annotation map or radial curve ('label')
 class CoNNGaFitImageDataset():
     """PyTorch-style dataset of (datacube, label-map) pairs from VOF's optically thin outputs, for training CoNNGaFit networks.
 
@@ -63,6 +133,15 @@ class CoNNGaFitImageDataset():
     target: which annotation to learn, a key of TARGETS (e.g. "radial_mass_flux",
         "rotational_velocity"). Labels are returned flattened, one value per image pixel, in
         Msun (mass), km/s (velocities), or Msun/yr (mass fluxes).
+    augment: None (default), "major_axis", or "all" (see AUGMENTATIONS): include each image's
+        rotations/flips as extra samples, with the label map transformed to match. "major_axis"
+        adds 3 (180-degree rotation, left-right flip, and both), keeping VOF's major axis along x;
+        "all" adds 7 (every 90-degree rotation, with and without the flip).
+    radial_bins: if given, each label is a radial curve with this many rings (see radial_profile)
+        instead of a map; rotations and flips then leave it unchanged.
+    radial_plane: where radial curves are measured. "face_on" (default) uses the same galaxy and
+        snapshot's face-on (inclination 0) VOF image, so radii are in the disk plane; "sky" uses
+        each image's own annotations, with radii in the sky plane.
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize).
     map_labels_to_tanh: label-normalization mode, one of:
@@ -77,15 +156,28 @@ class CoNNGaFitImageDataset():
         values seen across the dataset, so a "*_load" mode can later reproduce the exact
         same normalization on new data.
 
-    The names attribute holds a short name for each datacube (its filename without extension), in dataset order.
+    The names attribute holds a short name for each sample (its filename without extension, plus
+    an augmentation suffix such as "_r180_lr"), in dataset order.
     """
 
-    def __init__(self, data_dir, galaxies, target, transform=None, target_transform=None, map_labels_to_tanh="False", output_transform_filedir=None):
+    def __init__(self, data_dir, galaxies, target, transform=None, target_transform=None, map_labels_to_tanh="False", output_transform_filedir=None, augment=None, radial_bins=None, radial_plane="face_on"):
         if target not in TARGETS:
             raise ValueError(f"Unknown target {target!r}; choose from {sorted(TARGETS)}")
+        if augment not in AUGMENTATIONS:
+            raise ValueError(f"Unknown augment {augment!r}; choose from {list(AUGMENTATIONS)}")
+        if radial_plane not in ("face_on", "sky"):
+            raise ValueError(f"radial_plane must be 'face_on' or 'sky', not {radial_plane!r}")
         self.img_paths = find_vof_images(data_dir, galaxies)
-        self.names = [os.path.basename(path).split(".")[0] for path in self.img_paths]
-        print(f"Found {len(self.img_paths)} images for {galaxies}")
+        # Sample idx is augmentation (idx % n) of file (idx // n)
+        self.augmentations = AUGMENTATIONS[augment]
+        self.names = [os.path.basename(path).split(".")[0] + augmentation_suffix(*aug)
+                      for path in self.img_paths for aug in self.augmentations]
+        print(f"Found {len(self.img_paths)} images for {galaxies}, {len(self.names)} samples with augmentation {augment}")
+        self.radial_bins = radial_bins
+        if radial_bins is not None:
+            # Where each image's radial curve comes from; check every face-on file exists up front
+            self.curve_paths = [face_on_path(p) for p in self.img_paths] if radial_plane == "face_on" else self.img_paths
+            self.curves = {}  # curve per file, computed on first use (rotations/flips don't change it)
         self.target = target
         self.transform = transform
         self.target_transform = target_transform
@@ -93,22 +185,35 @@ class CoNNGaFitImageDataset():
         self.output_transform_filedir=output_transform_filedir
 
     def __len__(self):
-        return len(self.img_paths)
+        return len(self.names)
 
     def __getitem__(self, idx):
-        with h5py.File(self.img_paths[idx],'r') as hf:
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        rotations, flip = self.augmentations[aug_idx]
+        path = self.img_paths[file_idx]
+        with h5py.File(path,'r') as hf:
             image = np.array(hf['spectra']).astype('float')
-            # e.g. radial mass flux = mass * radial velocity, per pixel
-            label_map = np.prod([hf[name][()] for name in TARGETS[self.target]], axis=0)
-            if self.target in MASS_FLUX_TARGETS:
-                # Mass flux through a shell one pixel wide: mass * velocity / pixel width [Msun/yr]
-                pixel_kpc = hf.attrs["fov_kpc"] / label_map.shape[1]
-                label_map = label_map / (pixel_kpc * KM_PER_KPC) * S_PER_YR
+            if self.radial_bins is None:
+                # e.g. radial mass flux = mass * radial velocity, per pixel
+                label_map = np.prod([hf[name][()] for name in TARGETS[self.target]], axis=0)
+                if self.target in MASS_FLUX_TARGETS:
+                    # Mass flux through a shell one pixel wide: mass * velocity / pixel width [Msun/yr]
+                    pixel_kpc = hf.attrs["fov_kpc"] / label_map.shape[1]
+                    label_map = label_map / (pixel_kpc * KM_PER_KPC) * S_PER_YR
+        if rotations % 2 and image.shape[0] != image.shape[1]:
+            raise ValueError(f"{path}: 90-degree rotations need a square image, not {image.shape[:2]}; use augment='major_axis'")
+        image = augment_array(image, rotations, flip)
 
-        # The annotations are projected onto the same pixels as the datacube's two sky axes
-        if label_map.shape != image.shape[:2]:
-            raise ValueError(f"{self.img_paths[idx]}: {self.target} map is {label_map.shape}, but the image is {image.shape}")
-        label = label_map.flatten().astype('float')
+        if self.radial_bins is None:
+            # The annotations are projected onto the same pixels as the datacube's two sky axes
+            if label_map.shape != image.shape[:2]:
+                raise ValueError(f"{path}: {self.target} map is {label_map.shape}, but the image is {image.shape}")
+            label = augment_array(label_map, rotations, flip).flatten().astype('float')
+        else:
+            if file_idx not in self.curves:
+                with h5py.File(self.curve_paths[file_idx],'r') as hf:
+                    self.curves[file_idx] = radial_profile(hf, self.target, self.radial_bins)
+            label = self.curves[file_idx].astype('float')
         if self.map_labels_to_tanh=="symmetric": # For mass flux, -1 to 1
             max_label = np.max(np.abs(label))
             label = np.divide(label,max_label)

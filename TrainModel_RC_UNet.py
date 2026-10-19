@@ -16,7 +16,7 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 import h5py
 
-from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5
+from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,MakeCompImage_1d,SaveHDF5_1d
 
 import argparse
 
@@ -119,6 +119,10 @@ trainingGalaxies = {"m12i": 600, "m12f": 600, "m12b": 600}
 validationGalaxies = {"m12c": 600}
 testingGalaxies = {"m12m": 600}
 target = "rotational_velocity" #Which annotation to learn; see TARGETS in Datasets.py
+augmentTraining = "major_axis" #Rotations/flips added to the training set: "major_axis" (4 per image,
+    #keeping the major axis along x), "all" (8 per image), or None
+radialBins = None #e.g. 20 to train on radial curves of target instead of maps (needs outputHead = "fc")
+radialPlane = "face_on" #Where radial curves are measured: "face_on" (each snapshot's i0 image) or "sky"
 #############################
 
 
@@ -142,7 +146,7 @@ modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 
 
 #### Load and Normalize Data ####
-training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target,
+training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target, augment=augmentTraining, radial_bins=radialBins, radial_plane=radialPlane,
                                    transform = ToTensor())
                                    
 if args.batch_size is not None:
@@ -165,10 +169,10 @@ trainingMean = data0[0].mean()
 trainingStdv = data0[0].std()
 del loader0;del data0
 
-training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target,
+training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target, augment=augmentTraining, radial_bins=radialBins, radial_plane=radialPlane,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
-validation_data = CoNNGaFitImageDataset(args.data_dir, validationGalaxies, target,
+validation_data = CoNNGaFitImageDataset(args.data_dir, validationGalaxies, target, radial_bins=radialBins, radial_plane=radialPlane,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
 
@@ -191,6 +195,10 @@ validation_dataloader = DataLoader(validation_data, batch_size=batchSize)
 
 print("Data loaded...")
 
+
+if radialBins is not None: #Labels are radial curves, so plot and save them as curves rather than maps
+    MakeCompImage = MakeCompImage_1d
+    SaveHDF5 = SaveHDF5_1d
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
@@ -285,7 +293,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
                 SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".hdf5",tt)
     elif epoch>=(epochs-1):# or epoch%1000==0:
-        MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_validation+"_CorrelationPlot_Epoch"+str(epoch))
+        if radialBins is None: MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_validation+"_CorrelationPlot_Epoch"+str(epoch))
 
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
             MakeCompImage(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),X.cpu().float().detach().numpy(),imageOutput_validation+"_"+validationNames[tt]+"_Epoch"+str(epoch)+".png",tt,Sim2PhysicalUnits=1,paramLabel='Rot. Vel.',unitLabel='[km s$^{-1}$]',binOp='mean')
@@ -353,7 +361,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
                 SaveHDF5(y.cpu().float().detach().numpy(),pred.cpu().detach().numpy(),imageOutput_finalTest+"_"+snapName+"_Epoch"+str(epoch)+".hdf5",tt)
 
     elif epoch>=(epochs-1):# or epoch%1000==0:
-        MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_finalTest+"_CorrelationPlot_Epoch"+str(epoch))
+        if radialBins is None: MakeCorrelationPlot(pred.cpu().detach().numpy(),y.cpu().float().detach().numpy(),Nsnaps,imageOutput_finalTest+"_CorrelationPlot_Epoch"+str(epoch))
         for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
             try:
                 snapName=testingNames[tt]
@@ -373,7 +381,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     
 #### Define the Model ####
 inputShape = tuple(training_data[0][0].shape) #(nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-model = NeuralNetwork(inputShape,nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,fc_dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,output_head=outputHead).to(device)
+model = NeuralNetwork(inputShape,nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,fc_dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,output_head=outputHead,output_size=radialBins).to(device)
 print("Defining model...")
 print(model)
 print("Loading names...")
@@ -424,12 +432,15 @@ hf_norm.create_dataset("sampleSuffix",data=sampleSuffix)
 hf_norm.create_dataset("inputShape",data=inputShape) #Needed to rebuild the network for inference
 hf_norm.create_dataset("target",data=target)
 hf_norm.create_dataset("outputHead",data=outputHead)
+if radialBins is not None:
+    hf_norm.create_dataset("radialBins",data=radialBins)
+    hf_norm.create_dataset("radialPlane",data=radialPlane)
 hf_norm.close()
 
 
 #Testing Data
 
-test_data = CoNNGaFitImageDataset(args.data_dir, testingGalaxies, target,
+test_data = CoNNGaFitImageDataset(args.data_dir, testingGalaxies, target, radial_bins=radialBins, radial_plane=radialPlane,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
 test_dataloader = DataLoader(test_data, batch_size=batchSize)
