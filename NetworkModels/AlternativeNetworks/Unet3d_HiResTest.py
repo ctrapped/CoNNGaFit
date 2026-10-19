@@ -154,8 +154,11 @@ class NeuralNetwork(nn.Module):
     """
 
     def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0, inputShape=None):
-        print("output size=",modelShape[0]*modelShape[1]*modelShape[2])
         super(NeuralNetwork, self).__init__()
+        #VOF projects the labels onto the image's own pixels, so there is one output per (nX, nY)
+        #pixel. Without inputShape, fall back to the 40x40 default (and existing checkpoints).
+        self.output_size = model_size if inputShape is None else inputShape[1]*inputShape[2]
+        print("output size=",self.output_size)
         self.nFC=nFC
 
         #Initial Convolutional Layer
@@ -234,9 +237,9 @@ class NeuralNetwork(nn.Module):
         if self.nFC>0:
             self.fc0 = nn.Linear(in_features=flat_size , out_features=nFC)
             self.relu0 = nn.LeakyReLU()
-            self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=nFC,out_features=self.output_size)
         else:
-            self.fc1 = nn.Linear(in_features=flat_size,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=flat_size,out_features=self.output_size)
 
     def _features(self, x, saveLatentImages=False):
         """See NeuralNetwork_Unet3d.NeuralNetwork._features for the full description;

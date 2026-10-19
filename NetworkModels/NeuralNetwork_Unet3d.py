@@ -177,9 +177,9 @@ class DeconvBlock(nn.Module):
 
 #### Actual Network ####
 class NeuralNetwork(nn.Module):
-    """3-d residual U-Net that maps an HI 21cm spectral datacube (nSpec x nX x nY, hardcoded
-    for a 40x40x77 input elsewhere in the pipeline) to a flattened 40x40 output map (e.g.
-    radial mass flux, rotational velocity, or inclination), via model_size = 40*40*1.
+    """3-d residual U-Net that maps an HI 21cm spectral datacube (nSpec x nX x nY) to a
+    flattened nX*nY output map (e.g. radial mass flux, rotational velocity, or inclination).
+    Without inputShape, it is sized for a 40x40x77 input and a 40x40 output (model_size).
 
     Architecture: a strided conv + maxpool "stem" (layer0) reduces the input, followed by
     4 stages of residual blocks (layer1..layer4) that each roughly halve the spatial/
@@ -229,11 +229,15 @@ class NeuralNetwork(nn.Module):
             running a dummy all-zeros batch of this shape through _features() once at
             construction time and reading off its flattened size - so nX/nY/nSpec, kernel0,
             kernel1, and nFilt0 can all be changed freely without hand-deriving a new literal.
+            The output layer then has nX*nY outputs, one per image pixel.
     """
 
     def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0, inputShape=None):
-        print("output size=",modelShape[0]*modelShape[1]*modelShape[2])
         super(NeuralNetwork, self).__init__()
+        #VOF projects the labels onto the image's own pixels, so there is one output per (nX, nY)
+        #pixel. Without inputShape, fall back to the 40x40 default (and existing checkpoints).
+        self.output_size = model_size if inputShape is None else inputShape[1]*inputShape[2]
+        print("output size=",self.output_size)
         self.nFC=nFC
         
         #Initial Convolutional Layer
@@ -314,9 +318,9 @@ class NeuralNetwork(nn.Module):
         if self.nFC>0:
             self.fc0 = nn.Linear(in_features=flat_size , out_features=nFC)
             self.relu0 = nn.LeakyReLU()
-            self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=nFC,out_features=self.output_size)
         else:
-            self.fc1 = nn.Linear(in_features=flat_size,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=flat_size,out_features=self.output_size)
 
     def _features(self, x, saveLatentImages=False):
         """Run everything up to (and including) the final flatten: the encoder, the
@@ -392,7 +396,7 @@ class NeuralNetwork(nn.Module):
             encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
-        Returns: tensor of shape (nBatch, model_size) - the flattened predicted output map.
+        Returns: tensor of shape (nBatch, self.output_size) - the flattened predicted output map.
         """
         x = self._features(x, saveLatentImages=saveLatentImages)
         if self.nFC>0:

@@ -16,21 +16,20 @@ from matplotlib.colors import LogNorm
 import scipy.stats as stats
 import h5py
 
-from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,LoadNames
+from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5
 
 import argparse
 
 ####Trains the Unet read from NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, Validation, and testing datasets must be provided in .csv format as outlined in Datasets.py.
+####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range below (see Datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for rotational velocities and provide appropriate conversions on plots
 #
 ####Run as: python TrainModel_RC_UNet.py [options]
-####  Run with --help to see all options (data/network/output directories, dataset CSV filenames,
+####  Run with --help to see all options (data/network/output directories,
 ####  output filenames). With the default directory layout in place, --sample-suffix is normally
 ####  the only option you need:
-####    TrainingData/annotation_datasets/{training,validation,test}_annotations_RC_AllInclinations_<sample-suffix>.csv
-####      must already exist (produced by a WriteDatasetsToCsv-style script)
+####    TrainingData/<galaxy>/vof_outputs/ must hold VOF's outputs for every galaxy in the datasets below
 ####    NetworkWeights/    receives the trained model checkpoint (.pt/.hdf5)
 ####    DiagnosticOutputs/ receives per-epoch images/snapshots and loss/accuracy/correlation plots
 ####  NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing; every directory
@@ -52,7 +51,7 @@ def parse_args():
         "TrainingData/, NetworkWeights/, and DiagnosticOutputs/ directories exist relative to the "
         "working directory - NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing.")
     io.add_argument('--data-dir', default='TrainingData',
-                     help="Root data directory annotation CSVs are read from (<data-dir>/annotation_datasets/). Default: %(default)s")
+                     help="Root directory holding each galaxy's VOF outputs (<data-dir>/<galaxy>/vof_outputs/). Default: %(default)s")
     io.add_argument('--network-dir', default='NetworkWeights',
                      help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are written to. Default: %(default)s")
     io.add_argument('--output-dir', default='DiagnosticOutputs',
@@ -62,12 +61,6 @@ def parse_args():
 
     filenames = parser.add_argument_group('explicit filenames',
         "Override individual filenames normally derived from --sample-suffix. Not needed for normal runs.")
-    filenames.add_argument('--training-csv', default=None,
-                         help="Training annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: training_annotations_RC_AllInclinations_<sample-suffix>.csv")
-    filenames.add_argument('--validation-csv', default=None,
-                         help="Validation annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: validation_annotations_RC_AllInclinations_<sample-suffix>.csv")
-    filenames.add_argument('--testing-csv', default=None,
-                         help="Test annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: test_annotations_RC_AllInclinations_<sample-suffix>.csv")
     filenames.add_argument('--output-name', default=None,
                          help="Base name for diagnostic images/plots under <output-dir>/. Default: rotationalVelocity_<sample-suffix>")
     filenames.add_argument('--model-name', default=None,
@@ -91,7 +84,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f'Using {device} device')
 eps = 1e-10
 
-Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np.power(10.,7.)) * np.power(10,10) #1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 standardError=0
 standardError_v2=0
@@ -118,17 +110,21 @@ block_dropout_rate = 0.0 #Disabled by default. Applies channel-wise dropout (nn.
 
 
 
+####   DATASETS   ####
+#Each maps galaxy name -> snapshot, or an inclusive (minSnap, maxSnap) range. Every inclination and
+#position angle VOF wrote for those snapshots is included.
+trainingGalaxies = {"m12i": 600, "m12f": 600, "m12b": 600}
+validationGalaxies = {"m12c": 600}
+testingGalaxies = {"m12m": 600}
+target = "rotational_velocity" #Which annotation to learn; see TARGETS in Datasets.py
+#############################
+
+
+
 ####  Set input/output directories ####
 sampleSuffix = args.sample_suffix
-trainingSetFilename = args.training_csv or 'training_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
-validationSetFilename = args.validation_csv or 'validation_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
-testingSetFilename = args.testing_csv or 'test_annotations_RC_AllInclinations_'+sampleSuffix+'.csv'
 outputFilebase = args.output_name or 'rotationalVelocity_'+sampleSuffix
 modelFilebase = args.model_name or 'RC_Unet18_FullSpec_'+sampleSuffix
-
-trainingDir = os.path.join(args.data_dir,'annotation_datasets',trainingSetFilename)
-validationDir = os.path.join(args.data_dir,'annotation_datasets',validationSetFilename)
-testingDir = os.path.join(args.data_dir,'annotation_datasets',testingSetFilename)
 
 os.makedirs(args.network_dir, exist_ok=True)
 os.makedirs(os.path.join(args.output_dir,'images'), exist_ok=True)
@@ -144,8 +140,7 @@ modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 
 
 #### Load and Normalize Data ####
-training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
-                                   root_dir = '.',
+training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target,
                                    transform = ToTensor())
                                    
 if args.batch_size is not None:
@@ -168,12 +163,10 @@ trainingMean = data0[0].mean()
 trainingStdv = data0[0].std()
 del loader0;del data0
 
-training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
-                                   root_dir = '.',
+training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
-validation_data = CoNNGaFitImageDataset(annotations_file=validationDir,
-                                   root_dir = '.',
+validation_data = CoNNGaFitImageDataset(args.data_dir, validationGalaxies, target,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
 
@@ -377,13 +370,13 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
     
 #### Define the Model ####
-model = NeuralNetwork(nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate).to(device)
+inputShape = tuple(training_data[0][0].shape) #(nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
+model = NeuralNetwork(nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,inputShape=inputShape).to(device)
 print("Defining model...")
 print(model)
 print("Loading names...")
-validationNames = LoadNames(validationDir);
-trainingNames = LoadNames(trainingDir);
-testingNames = LoadNames(testingDir);
+validationNames = validation_data.names
+trainingNames = training_data.names
 
 #### Define Loss Function and Optimizer ####
 loss_fn = nn.MSELoss()
@@ -426,16 +419,18 @@ hf_norm.create_dataset("nFilt0",data=nFilt0)
 hf_norm.create_dataset("dropout_rate",data=dropout_rate)
 hf_norm.create_dataset("block_dropout_rate",data=block_dropout_rate)
 hf_norm.create_dataset("sampleSuffix",data=sampleSuffix)
+hf_norm.create_dataset("inputShape",data=inputShape) #Needed to rebuild the network for inference
+hf_norm.create_dataset("target",data=target)
 hf_norm.close()
 
 
 #Testing Data
 
-test_data = CoNNGaFitImageDataset(annotations_file=testingDir,
-                                   root_dir = '.',
+test_data = CoNNGaFitImageDataset(args.data_dir, testingGalaxies, target,
                                    transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
 
 test_dataloader = DataLoader(test_data, batch_size=batchSize)
+testingNames = test_data.names
 
 final_test_loss , final_test_accuracy, final_test_specific_accuracy = test_loop(test_dataloader, model, loss_fn, t)
 print("Testing Set Loss=",final_test_loss)
