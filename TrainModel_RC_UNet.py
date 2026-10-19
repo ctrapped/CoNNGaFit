@@ -7,7 +7,7 @@ from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
 from Datasets import CoNNGaFitImageDataset
 
-from NetworkModels.NeuralNetwork_Unet3d import NeuralNetwork
+from Unet3d_ResBlock import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -20,7 +20,7 @@ from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF
 
 import argparse
 
-####Trains the Unet read from NeuralNetwork_Unet3d.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Trains the Unet read from Unet3d_ResBlock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range below (see Datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Specifically tuned to train for rotational velocities and provide appropriate conversions on plots
@@ -106,6 +106,8 @@ block_dropout_rate = 0.0 #Disabled by default. Applies channel-wise dropout (nn.
     #gap; start low (~0.1-0.15) rather than reusing dropout_rate's 0.3 - the deepest encoder
     #stage here shrinks to a tiny spatial size where dropping whole channels removes a large
     #fraction of that stage's information, so an FC-tuned rate is likely too aggressive here.
+outputHead = "conv" #"conv" predicts each pixel from its neighborhood (needed for 128x128/512x512 images);
+    #"fc" is the original fully connected output layer (nFC is then the bottleneck size), for 40x40 images
 #############################
 
 
@@ -371,7 +373,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     
 #### Define the Model ####
 inputShape = tuple(training_data[0][0].shape) #(nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-model = NeuralNetwork(nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,inputShape=inputShape).to(device)
+model = NeuralNetwork(inputShape,nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,fc_dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,output_head=outputHead).to(device)
 print("Defining model...")
 print(model)
 print("Loading names...")
@@ -421,6 +423,7 @@ hf_norm.create_dataset("block_dropout_rate",data=block_dropout_rate)
 hf_norm.create_dataset("sampleSuffix",data=sampleSuffix)
 hf_norm.create_dataset("inputShape",data=inputShape) #Needed to rebuild the network for inference
 hf_norm.create_dataset("target",data=target)
+hf_norm.create_dataset("outputHead",data=outputHead)
 hf_norm.close()
 
 

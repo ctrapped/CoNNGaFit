@@ -73,6 +73,15 @@ def center_crop_to_match(source, target):
     return source[tuple(slices)]
 
 
+def center_crop_to_shape(source, shape):
+    """Center-crop source's spatial/spectral dims (2,3,4) to shape, trimming any odd pixel from the end."""
+    slices = [slice(None), slice(None)]
+    for dim, tgt in zip((2, 3, 4), shape):
+        start = (source.shape[dim] - tgt) // 2
+        slices.append(slice(start, start + tgt))
+    return source[tuple(slices)]
+
+
 #### Class for convolutional on the left side of the unet
 class ResidualBlock(nn.Module):
     """Single residual block on the U-Net's encoder (downsampling) side.
@@ -127,9 +136,10 @@ class Upsample(nn.Module):
     addition) requires the two tensors to already share the same spatial shape.
     """
 
-    def __init__(self, in_channels, out_channels, kernel1):
+    def __init__(self, in_channels, out_channels, kernel1, output_padding=0):
         super().__init__()
-        self.upconv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=1)
+        #output_padding=1 makes the output exactly twice the input size (used by the conv head)
+        self.upconv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=1,output_padding=output_padding)
 
     def forward(self,x):
         return self.upconv1(x)
@@ -174,6 +184,37 @@ class DeconvBlock(nn.Module):
         x = x + shortcut
         x = nn.ReLU()(x)
         return self.dropout(x)
+
+#### Per-pixel output head ####
+class ConvOutputHead(nn.Module):
+    """Predicts one value per image pixel from the decoder's half-resolution features.
+
+    The spectral axis is folded into channels, so each pixel's line-profile features are combined
+    by learned weights rather than averaged away. A global summary of the galaxy (the bottleneck,
+    averaged over the whole cube) is appended to every pixel. Two 3x3 convolutions then give each
+    prediction a 5x5 field of view at half resolution (~10x10 image pixels, about 3 beams across),
+    and a 1x1 convolution gives the output, upsampled to the full image.
+    """
+
+    def __init__(self, in_channels, global_channels, head_channels, dropout_rate=0.0):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels + global_channels, head_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.conv3 = nn.Conv2d(head_channels, 1, kernel_size=1)
+
+    def forward(self, x, bottleneck, outputShape):
+        nBatch, nFilt, nSpec, nX, nY = x.shape
+        x = torch.reshape(x, (nBatch, nFilt*nSpec, nX, nY)) #Fold the spectral axis into channels
+        #Global context: average the bottleneck over the whole cube and give every pixel a copy
+        context = torch.mean(bottleneck, dim=(2, 3, 4))[:, :, None, None].expand(-1, -1, nX, nY)
+        x = torch.cat([x, context], dim=1)
+        x = nn.ReLU()(self.conv1(x))
+        x = nn.ReLU()(self.conv2(x))
+        x = self.conv3(self.dropout(x))
+        x = F.interpolate(x, size=outputShape, mode="bilinear", align_corners=False)
+        return torch.flatten(x, 1)
+
 
 #### Actual Network ####
 class NeuralNetwork(nn.Module):
@@ -230,10 +271,23 @@ class NeuralNetwork(nn.Module):
             construction time and reading off its flattened size - so nX/nY/nSpec, kernel0,
             kernel1, and nFilt0 can all be changed freely without hand-deriving a new literal.
             The output layer then has nX*nY outputs, one per image pixel.
+        output_head: "fc" (default) for the fully connected output layers above, or "conv" for
+            ConvOutputHead, which needs far fewer parameters at large image sizes (e.g. 128x128,
+            512x512). "conv" requires inputShape, with nX and nY divisible by 32; it also adds a
+            decoder stage at half resolution and pads the stem so every stage exactly halves or
+            doubles the image, keeping the decoded features aligned with the image pixels. nFC is
+            unused, and dropout_rate applies (channel-wise) before the head's final layer.
+        head_channels: number of channels in ConvOutputHead's 3x3 convolutions.
     """
 
-    def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0, inputShape=None):
+    def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0, inputShape=None, output_head="fc", head_channels=64):
         super(NeuralNetwork, self).__init__()
+        if output_head not in ("fc", "conv"):
+            raise ValueError(f"output_head must be 'fc' or 'conv', not {output_head!r}")
+        if output_head == "conv" and (inputShape is None or inputShape[1] % 32 or inputShape[2] % 32):
+            raise ValueError(f"output_head='conv' needs inputShape with nX and nY divisible by 32, got {inputShape}")
+        self.output_head = output_head
+        conv = output_head == "conv"
         #VOF projects the labels onto the image's own pixels, so there is one output per (nX, nY)
         #pixel. Without inputShape, fall back to the 40x40 default (and existing checkpoints).
         self.output_size = model_size if inputShape is None else inputShape[1]*inputShape[2]
@@ -242,8 +296,9 @@ class NeuralNetwork(nn.Module):
         
         #Initial Convolutional Layer
         self.layer0 = nn.Sequential(
-            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=3),
-            nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=1),
+            #With the conv head, padding is chosen so the conv and pool exactly halve the image
+            nn.Conv3d(1,nFilt0,kernel_size=kernel0,stride=(2,2,2),padding=kernel0[0]//2 if conv else 3),
+            nn.MaxPool3d(kernel_size=(2,2,2),stride=(2,2,2),padding=0 if conv else 1),
             nn.LeakyReLU() 
         )
         
@@ -270,9 +325,9 @@ class NeuralNetwork(nn.Module):
         #######################
         
         ## Upsampling (spatial only, run before each skip-connection concatenation) ##
-        self.upsample1 = Upsample(8*nFilt0,4*nFilt0,kernel1=kernel1)
-        self.upsample2 = Upsample(4*nFilt0,2*nFilt0,kernel1=kernel1)
-        self.upsample3 = Upsample(2*nFilt0,nFilt0,kernel1=kernel1)
+        self.upsample1 = Upsample(8*nFilt0,4*nFilt0,kernel1=kernel1,output_padding=int(conv))
+        self.upsample2 = Upsample(4*nFilt0,2*nFilt0,kernel1=kernel1,output_padding=int(conv))
+        self.upsample3 = Upsample(2*nFilt0,nFilt0,kernel1=kernel1,output_padding=int(conv))
 
         ## Deconvolutional Layers (channel reduction on the concatenated tensors) ##
         self.dc_layer1 = nn.Sequential(
@@ -290,13 +345,32 @@ class NeuralNetwork(nn.Module):
             DeconvBlock(nFilt0,nFilt0,upsample=False,kernel1=kernel1,dropout_rate=block_dropout_rate)
         )
 
+        if conv:
+            #One more stage, up to half resolution, with a skip connection from the stem
+            self.upsample4 = Upsample(nFilt0,nFilt0,kernel1=kernel1,output_padding=1)
+            self.dc_layer4 = nn.Sequential(
+                DeconvBlock(2*nFilt0,nFilt0,upsample=True,kernel1=kernel1,dropout_rate=block_dropout_rate), ##Reduce channels post-concat
+                DeconvBlock(nFilt0,nFilt0,upsample=False,kernel1=kernel1,dropout_rate=block_dropout_rate)
+            )
+
         #######################
         
         self.featureForwarding = nn.Sequential() #Identity pass-through; kept as a named module so the encoder->decoder skip connections can be swapped for a learned transform later without changing forward()
 
         
         #Output Layer
-        
+
+        if conv:
+            #Size the head from the decoder's actual output shape, by running a dummy batch through it
+            was_training = self.training
+            self.eval()
+            with torch.no_grad():
+                decoded, _ = self._decode(torch.zeros(1,*inputShape))
+            self.train(was_training)
+            self.head = ConvOutputHead(decoded.shape[1]*decoded.shape[2], 8*nFilt0, head_channels, dropout_rate=dropout_rate)
+            print("output size=",self.output_size)
+            return
+
         self.avgpool0 = nn.AvgPool3d(kernel_size=(2,2,2),stride=(2,2,2))
 
         if inputShape is not None:
@@ -322,12 +396,19 @@ class NeuralNetwork(nn.Module):
         else:
             self.fc1 = nn.Linear(in_features=flat_size,out_features=self.output_size)
 
+    def _concat_skip(self, x, skip):
+        """Concatenate an encoder skip connection onto the upsampled decoder tensor x."""
+        if self.output_head == "fc":
+            return torch.cat([x, center_crop_to_match(skip, x)], dim=1)
+        #Conv head: sizes match exactly except possibly the spectral axis (if nSpec isn't
+        #divisible by 32), so crop whichever tensor is larger there
+        shape = [min(a, b) for a, b in zip(x.shape[2:], skip.shape[2:])]
+        return torch.cat([center_crop_to_shape(x, shape), center_crop_to_shape(skip, shape)], dim=1)
+
     def _features(self, x, saveLatentImages=False):
-        """Run everything up to (and including) the final flatten: the encoder, the
-        upsample -> center_crop_to_match -> concatenate -> decoder skip-connection stages,
-        and the output average pool. Split out from forward() so __init__ can call it once on
-        a dummy batch (see above) to size fc0/fc1 dynamically, and so forward() itself has a
-        single place this logic lives.
+        """Run the encoder and decoder (see _decode), then the output average pool and flatten,
+        for the fully connected output layers. __init__ calls it once on a dummy batch to size
+        fc0/fc1.
 
         x: tensor of shape (nBatch, nSpec, nX, nY) - a single-channel spectral datacube per
             sample; a channel dim of size 1 is inserted before the 3-d convolutions.
@@ -337,12 +418,33 @@ class NeuralNetwork(nn.Module):
             training/inference.
         Returns: tensor of shape (nBatch, flat_size) - the flattened pre-fc0 features.
         """
+        x, _ = self._decode(x, saveLatentImages=saveLatentImages)
+
+        ##  Output Inference ##
+        x = self.avgpool0(x)
+
+        return torch.flatten(x,1)
+
+    def _decode(self, x, saveLatentImages=False):
+        """Run the encoder and the upsample -> crop -> concatenate -> decoder stages.
+
+        Returns (decoded, bottleneck): the decoder's output (at 1/4 resolution with the FC
+        head, 1/2 with the conv head) and the deepest encoder features.
+        """
         nBatch,nSpec,nX,nY = x.size()
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
 
 
         ##  Initial convolutional layer and pooling  ##
-        x = self.layer0(x)
+        if self.output_head == "conv":
+            #Run layer0's conv, pool, and activation one at a time to keep the half-resolution
+            #features for the last skip connection. LeakyReLU commutes with max pooling, so
+            #this is the same as layer0(x).
+            stem = self.layer0[0](x)
+            stemFeatures = self.layer0[2](stem)
+            x = self.layer0[2](self.layer0[1](stem))
+        else:
+            x = self.layer0(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,0)
         
 
@@ -363,29 +465,33 @@ class NeuralNetwork(nn.Module):
         if saveLatentImages:
             SaveSummedSpectralChannels(x,4)
             #SaveAllSpectralChannels(x,4)
+        bottleneck = x
             
         ## Deconvolutional Blocks ##
         x = self.upsample1(x)
-        x = torch.cat([x, center_crop_to_match(featureMap3, x)], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
+        x = self._concat_skip(x, featureMap3) #Feature forwarding from left convolutional -> deconvolutional wing
         x = self.dc_layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample2(x)
-        x = torch.cat([x, center_crop_to_match(featureMap2, x)], dim=1) #Cropped Feature forwarding
+        x = self._concat_skip(x, featureMap2) #Cropped Feature forwarding
         x = self.dc_layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,6)
 
         x = self.upsample3(x)
-        x = torch.cat([x, center_crop_to_match(featureMap1, x)], dim=1) #Cropped Feature forwarding
+        x = self._concat_skip(x, featureMap1) #Cropped Feature forwarding
         x = self.dc_layer3(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,7)
             #SaveAllSpectralChannels(x,7)
-            
-        ##  Output Inference ##
-        x = self.avgpool0(x)
 
-        return torch.flatten(x,1)
+        if self.output_head == "conv":
+            x = self.upsample4(x)
+            x = self._concat_skip(x, stemFeatures) #Feature forwarding from the stem, at half resolution
+            x = self.dc_layer4(x)
+            if saveLatentImages: SaveSummedSpectralChannels(x,8)
+
+        return x, bottleneck
 
     def forward(self, x, saveLatentImages=False):
         """Run the network on a batch of datacubes.
@@ -398,6 +504,12 @@ class NeuralNetwork(nn.Module):
             training/inference.
         Returns: tensor of shape (nBatch, self.output_size) - the flattened predicted output map.
         """
+        global saveItr
+        if self.output_head == "conv":
+            decoded, bottleneck = self._decode(x, saveLatentImages=saveLatentImages)
+            saveItr+=1
+            return self.head(decoded, bottleneck, outputShape=x.shape[2:])
+
         x = self._features(x, saveLatentImages=saveLatentImages)
         if self.nFC>0:
             x = self.fc0(x)
@@ -405,6 +517,5 @@ class NeuralNetwork(nn.Module):
         x = self.dropout0(x)
         output = self.fc1(x)
 
-        global saveItr
         saveItr+=1
         return output
