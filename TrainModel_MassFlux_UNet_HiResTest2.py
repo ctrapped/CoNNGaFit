@@ -7,7 +7,7 @@ from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
 from Datasets_600x600 import CoNNGaFitImageDataset
 
-from NeuralNetwork_Unet3d_600x600 import NeuralNetwork
+from NetworkModels.NeuralNetwork_Unet3d_600x600 import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -27,12 +27,18 @@ import argparse
 ####Specifically tuned to train for radial mass fluxes and provide appropriate conversions on plots
 #
 ####Run as: python TrainModel_MassFlux_UNet_HiResTest2.py [options]
-####  Run with --help to see all options (data/output/network directories, dataset CSV
-####  filenames, output filenames). By default, expects
-####  training_datasets/training_annotations_HiRes_MassFlux.csv to already exist (produced by
-####  a WriteDatasetsToCsv-style script). Unlike the other TrainModel scripts, this one reuses
-####  the same annotations file for training/validation/testing unless --validation-csv/
-####  --testing-csv are given explicitly.
+####  Run with --help to see all options (data/network/output directories, dataset CSV
+####  filenames, output filenames). With the default directory layout in place, --sample-suffix
+####  is normally the only option you need:
+####    TrainingData/training_annotations_HiRes_MassFlux.csv must already exist (produced by a
+####      WriteDatasetsToCsv-style script); unlike the other TrainModel scripts, this one reuses
+####      the same annotations file for training/validation/testing unless --validation-csv/
+####      --testing-csv are given explicitly, and CSVs sit directly in <data-dir> (no
+####      annotation_datasets/ subfolder).
+####    NetworkWeights/    receives the trained model checkpoint (.pt/.hdf5)
+####    DiagnosticOutputs/ receives per-epoch images/snapshots and loss/accuracy/correlation plots
+####  NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing; every directory
+####  and filename above can be overridden individually - see --help.
 #
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 11/21/2023
@@ -40,23 +46,48 @@ import argparse
 def parse_args():
     parser = argparse.ArgumentParser(description="Train the 600x600 CoNNGaFit 3-d U-Net variant to predict radial mass flux maps from HI datacubes.")
     parser.add_argument('--sample-suffix', default='HiResTest',
-                         help="Suffix used to build default output/model names, for any of --output-name/--model-name not given explicitly. Default: %(default)s")
-    parser.add_argument('--data-dir', default='./training_datasets',
-                         help="Directory annotation CSVs are read from, and diagnostic images are also written under. Default: %(default)s")
-    parser.add_argument('--output-dir', default='./outputs',
-                         help="Directory diagnostic plots (loss curves, correlation plots) are written under. Default: %(default)s")
-    parser.add_argument('--network-dir', default='./networks',
-                         help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are saved to. Default: %(default)s")
-    parser.add_argument('--training-csv', default='training_annotations_HiRes_MassFlux.csv',
+                         help="Suffix identifying this run; used to build default output/model names, for any "
+                              "of --output-name/--model-name not given explicitly. With the default directory "
+                              "layout already in place (TrainingData/, NetworkWeights/, DiagnosticOutputs/) and "
+                              "--training-csv left at its default, --sample-suffix is normally the only argument "
+                              "you need to pass. Default: %(default)s")
+
+    io = parser.add_argument_group('input/output directories',
+        "Override where data is read from and results are written to. Not needed if the default "
+        "TrainingData/, NetworkWeights/, and DiagnosticOutputs/ directories exist relative to the "
+        "working directory - NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing.")
+    io.add_argument('--data-dir', default='TrainingData',
+                     help="Directory annotation CSVs are read from directly (no annotation_datasets/ subfolder). Default: %(default)s")
+    io.add_argument('--network-dir', default='NetworkWeights',
+                     help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are written to. Default: %(default)s")
+    io.add_argument('--output-dir', default='DiagnosticOutputs',
+                     help="Root directory diagnostic outputs are written to: per-epoch comparison images/snapshots "
+                          "under <output-dir>/images/, and loss/accuracy curves and correlation plots under "
+                          "<output-dir>/diagnostics/. Default: %(default)s")
+
+    filenames = parser.add_argument_group('explicit filenames',
+        "Override individual filenames. --training-csv defaults to a fixed name rather than one derived "
+        "from --sample-suffix; --validation-csv/--testing-csv default to reusing it.")
+    filenames.add_argument('--training-csv', default='training_annotations_HiRes_MassFlux.csv',
                          help="Training annotations CSV filename, read from <data-dir>/. Default: %(default)s")
-    parser.add_argument('--validation-csv', default=None,
+    filenames.add_argument('--validation-csv', default=None,
                          help="Validation annotations CSV filename, read from <data-dir>/. Default: same file as --training-csv")
-    parser.add_argument('--testing-csv', default=None,
+    filenames.add_argument('--testing-csv', default=None,
                          help="Test annotations CSV filename, read from <data-dir>/. Default: same file as --training-csv")
-    parser.add_argument('--output-name', default=None,
-                         help="Base name for diagnostic images/plots. Default: massFlux_<sample-suffix>")
-    parser.add_argument('--model-name', default=None,
+    filenames.add_argument('--output-name', default=None,
+                         help="Base name for diagnostic images/plots under <output-dir>/. Default: massFlux_<sample-suffix>")
+    filenames.add_argument('--model-name', default=None,
                          help="Base filename (no extension) for the saved model checkpoint under <network-dir>. Default: MassFlux_Unet18_FullSpec_hiRes<sample-suffix>")
+
+    training = parser.add_argument_group('training options',
+        "Override values normally computed automatically from the dataset. Not needed for normal runs.")
+    training.add_argument('--batch-size', type=int, default=None,
+        help="Mini-batch size for training. Default: a reasonable division of the training set into "
+             "~10 batches per epoch (floored at 2 - BatchNorm3d needs more than 1 sample per batch "
+             "while training). Pass 0 to instead train on the full dataset as a single batch per epoch.")
+    training.add_argument('--test-batch-size', type=int, default=None,
+        help="Mini-batch size for validation/testing. Default: a reasonable division of the "
+             "validation set into ~10 batches (floored at 1).")
     return parser.parse_args()
 
 args = parse_args()
@@ -105,12 +136,15 @@ trainingDir = os.path.join(args.data_dir,trainingSetFilename)
 validationDir = os.path.join(args.data_dir,validationSetFilename)
 testingDir = os.path.join(args.data_dir,testingSetFilename)
 
+os.makedirs(args.network_dir, exist_ok=True)
+os.makedirs(os.path.join(args.output_dir,'images'), exist_ok=True)
+os.makedirs(os.path.join(args.output_dir,'diagnostics'), exist_ok=True)
 
-imageOutput_training = os.path.join(args.data_dir,outputFilebase+'_training')
-imageOutput_validation = os.path.join(args.data_dir,outputFilebase+'_validation')
-imageOutput_finalTest = os.path.join(args.data_dir,outputFilebase+'_test')
+imageOutput_training = os.path.join(args.output_dir,'images',outputFilebase+'_training')
+imageOutput_validation = os.path.join(args.output_dir,'images',outputFilebase+'_validation')
+imageOutput_finalTest = os.path.join(args.output_dir,'images',outputFilebase+'_test')
 
-diagnosticOutput = os.path.join(args.output_dir,outputFilebase)
+diagnosticOutput = os.path.join(args.output_dir,'diagnostics',outputFilebase)
 modelOutputPath = os.path.join(args.network_dir,modelFilebase)
 
 
@@ -120,15 +154,16 @@ training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
                                    root_dir = '.',
                                    transform = ToTensor())
                                    
-batchSizeDefault = 5
-testBatchSize = batchSizeDefault
-batchesPerTrainingSet = 1
-if batchSizeDefault is None:
-    batchSize = len(training_data)
+if args.batch_size is not None:
+    batchSizeDefault = None if args.batch_size == 0 else args.batch_size #--batch-size 0 means full-batch
 else:
-    batchSize = batchSizeDefault
-    batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
-    print("Batches per training set = ",batchesPerTrainingSet)
+    batchSizeDefault = max(2,len(training_data)//10) #Reasonable division of the training set into ~10
+        #batches per epoch; floored at 2 (BatchNorm3d needs more than 1 sample per batch while
+        #training). Override with --batch-size (0 for full-batch training).
+
+batchSize = batchSizeDefault
+batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
+print("Batches per training set = ",batchesPerTrainingSet)
     
 loader0 = DataLoader(training_data, batch_size = batchSize)
 data0 = next(iter(loader0))
@@ -152,10 +187,17 @@ validation_data = CoNNGaFitImageDataset(annotations_file=validationDir,
 
 train_dataloader = DataLoader(training_data, batch_size=batchSize)
 
+if args.test_batch_size is not None:
+    testBatchSize = args.test_batch_size
+else:
+    testBatchSize = max(1,len(validation_data)//10) #Reasonable division of the validation/test
+        #sets into ~10 batches; floored at 1 (unlike batchSizeDefault, batch size 1 is safe here
+        #since validation/testing run with model.eval(), which uses BatchNorm's running stats
+        #rather than computing per-batch statistics). Override with --test-batch-size.
 if batchSizeDefault is None:
     batchSize = len(validation_data)
 else:
-    batchSize = batchSizeDefault
+    batchSize = testBatchSize
 validation_dataloader = DataLoader(validation_data, batch_size=batchSize)
 
 print("Data loaded...")
@@ -364,10 +406,9 @@ validationLoss = np.zeros((epochs))
 validationAccuracy=np.zeros((epochs))
 
 if batchSizeDefault is not None:
-    #Note: specific_accuracy is only ever filled in per-sample when batchSizeDefault is None
-    #(see the main training loop below), so this array stays all zeros/unused in this mode -
-    #sized to 0 rows rather than the previous "testBatchSize-5" (which would raise a
-    #ValueError for any batchSizeDefault < 5).
+    #specificAccuracy is only ever filled in per-sample when batchSizeDefault is None (see the
+    #main training loop below), so it stays unused in batch mode - sized to 0 rows rather than
+    #referencing testBatchSize here.
     specificAccuracy=np.zeros((0,epochs))
 else:
     specificAccuracy=np.zeros((len(validation_data),epochs))

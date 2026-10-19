@@ -7,7 +7,7 @@ from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
 
 from Datasets import CoNNGaFitImageDataset
 
-from NeuralNetwork_Unet3d import NeuralNetwork
+from NetworkModels.NeuralNetwork_Unet3d import NeuralNetwork
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -26,10 +26,15 @@ import argparse
 ####Specifically tuned to train for rotational velocities and provide appropriate conversions on plots
 #
 ####Run as: python TrainModel_RC_UNet.py [options]
-####  Run with --help to see all options (data/network directories, dataset CSV filenames,
-####  output filenames). By default, expects
-####  CoNNGaFitData/annotation_datasets/{training,validation,test}_annotations_RC_AllInclinations_<sample-suffix>.csv
-####  to already exist (produced by a WriteDatasetsToCsv-style script).
+####  Run with --help to see all options (data/network/output directories, dataset CSV filenames,
+####  output filenames). With the default directory layout in place, --sample-suffix is normally
+####  the only option you need:
+####    TrainingData/annotation_datasets/{training,validation,test}_annotations_RC_AllInclinations_<sample-suffix>.csv
+####      must already exist (produced by a WriteDatasetsToCsv-style script)
+####    NetworkWeights/    receives the trained model checkpoint (.pt/.hdf5)
+####    DiagnosticOutputs/ receives per-epoch images/snapshots and loss/accuracy/correlation plots
+####  NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing; every directory
+####  and filename above can be overridden individually - see --help.
 #
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 11/21/2023
@@ -37,21 +42,46 @@ import argparse
 def parse_args():
     parser = argparse.ArgumentParser(description="Train the CoNNGaFit 3-d U-Net to predict rotational velocity maps from HI datacubes.")
     parser.add_argument('--sample-suffix', default='finalSnapNoM12m',
-                         help="Suffix used to build default training/validation/test annotation CSV filenames and default output/model names, for any of --training-csv/--validation-csv/--testing-csv/--output-name/--model-name not given explicitly. Default: %(default)s")
-    parser.add_argument('--data-dir', default='CoNNGaFitData',
-                         help="Root data directory: annotation CSVs are read from <data-dir>/annotation_datasets/, and diagnostic images/plots are written under <data-dir>/outputs/. Default: %(default)s")
-    parser.add_argument('--network-dir', default='TrainedNetworks',
-                         help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are saved to. Default: %(default)s")
-    parser.add_argument('--training-csv', default=None,
+                         help="Suffix identifying this run; every default filename below is built from it. "
+                              "With the default directory layout already in place (TrainingData/, NetworkWeights/, "
+                              "DiagnosticOutputs/), --sample-suffix is normally the only argument you need to pass. "
+                              "Default: %(default)s")
+
+    io = parser.add_argument_group('input/output directories',
+        "Override where data is read from and results are written to. Not needed if the default "
+        "TrainingData/, NetworkWeights/, and DiagnosticOutputs/ directories exist relative to the "
+        "working directory - NetworkWeights/ and DiagnosticOutputs/ are created automatically if missing.")
+    io.add_argument('--data-dir', default='TrainingData',
+                     help="Root data directory annotation CSVs are read from (<data-dir>/annotation_datasets/). Default: %(default)s")
+    io.add_argument('--network-dir', default='NetworkWeights',
+                     help="Directory the trained model checkpoint (.pt) and its normalization stats (.hdf5) are written to. Default: %(default)s")
+    io.add_argument('--output-dir', default='DiagnosticOutputs',
+                     help="Root directory diagnostic outputs are written to: per-epoch comparison images/snapshots "
+                          "under <output-dir>/images/, and loss/accuracy curves and correlation plots under "
+                          "<output-dir>/diagnostics/. Default: %(default)s")
+
+    filenames = parser.add_argument_group('explicit filenames',
+        "Override individual filenames normally derived from --sample-suffix. Not needed for normal runs.")
+    filenames.add_argument('--training-csv', default=None,
                          help="Training annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: training_annotations_RC_AllInclinations_<sample-suffix>.csv")
-    parser.add_argument('--validation-csv', default=None,
+    filenames.add_argument('--validation-csv', default=None,
                          help="Validation annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: validation_annotations_RC_AllInclinations_<sample-suffix>.csv")
-    parser.add_argument('--testing-csv', default=None,
+    filenames.add_argument('--testing-csv', default=None,
                          help="Test annotations CSV filename, read from <data-dir>/annotation_datasets/. Default: test_annotations_RC_AllInclinations_<sample-suffix>.csv")
-    parser.add_argument('--output-name', default=None,
-                         help="Base name for diagnostic images/plots written under <data-dir>/outputs/. Default: rotationalVelocity_<sample-suffix>")
-    parser.add_argument('--model-name', default=None,
+    filenames.add_argument('--output-name', default=None,
+                         help="Base name for diagnostic images/plots under <output-dir>/. Default: rotationalVelocity_<sample-suffix>")
+    filenames.add_argument('--model-name', default=None,
                          help="Base filename (no extension) for the saved model checkpoint under <network-dir>. Default: RC_Unet18_FullSpec_<sample-suffix>")
+
+    training = parser.add_argument_group('training options',
+        "Override values normally computed automatically from the dataset. Not needed for normal runs.")
+    training.add_argument('--batch-size', type=int, default=None,
+        help="Mini-batch size for training. Default: a reasonable division of the training set into "
+             "~10 batches per epoch (floored at 2 - BatchNorm3d needs more than 1 sample per batch "
+             "while training). Pass 0 to instead train on the full dataset as a single batch per epoch.")
+    training.add_argument('--test-batch-size', type=int, default=None,
+        help="Mini-batch size for validation/testing. Default: a reasonable division of the "
+             "validation set into ~10 batches (floored at 1).")
     return parser.parse_args()
 
 args = parse_args()
@@ -100,12 +130,15 @@ trainingDir = os.path.join(args.data_dir,'annotation_datasets',trainingSetFilena
 validationDir = os.path.join(args.data_dir,'annotation_datasets',validationSetFilename)
 testingDir = os.path.join(args.data_dir,'annotation_datasets',testingSetFilename)
 
+os.makedirs(args.network_dir, exist_ok=True)
+os.makedirs(os.path.join(args.output_dir,'images'), exist_ok=True)
+os.makedirs(os.path.join(args.output_dir,'diagnostics'), exist_ok=True)
 
-imageOutput_training = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_training')
-imageOutput_validation = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_validation')
-imageOutput_finalTest = os.path.join(args.data_dir,'outputs','images',outputFilebase+'_test')
+imageOutput_training = os.path.join(args.output_dir,'images',outputFilebase+'_training')
+imageOutput_validation = os.path.join(args.output_dir,'images',outputFilebase+'_validation')
+imageOutput_finalTest = os.path.join(args.output_dir,'images',outputFilebase+'_test')
 
-diagnosticOutput = os.path.join(args.data_dir,'outputs','diagnostics',outputFilebase)
+diagnosticOutput = os.path.join(args.output_dir,'diagnostics',outputFilebase)
 modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 
 
@@ -115,7 +148,12 @@ training_data = CoNNGaFitImageDataset(annotations_file=trainingDir,
                                    root_dir = '.',
                                    transform = ToTensor())
                                    
-batchSizeDefault = None
+if args.batch_size is not None:
+    batchSizeDefault = None if args.batch_size == 0 else args.batch_size #--batch-size 0 means full-batch
+else:
+    batchSizeDefault = max(2,len(training_data)//10) #Reasonable division of the training set into ~10
+        #batches per epoch; floored at 2 (BatchNorm3d needs more than 1 sample per batch while
+        #training). Override with --batch-size (0 for full-batch training).
 batchesPerTrainingSet = 1
 if batchSizeDefault is None:
     batchSize = len(training_data)
@@ -143,10 +181,17 @@ validation_data = CoNNGaFitImageDataset(annotations_file=validationDir,
 
 train_dataloader = DataLoader(training_data, batch_size=batchSize)
 
+if args.test_batch_size is not None:
+    testBatchSize = args.test_batch_size
+else:
+    testBatchSize = max(1,len(validation_data)//10) #Reasonable division of the validation/test
+        #sets into ~10 batches; floored at 1 (unlike batchSizeDefault, batch size 1 is safe here
+        #since validation/testing run with model.eval(), which uses BatchNorm's running stats
+        #rather than computing per-batch statistics). Override with --test-batch-size.
 if batchSizeDefault is None:
     batchSize = len(validation_data)
 else:
-    batchSize = batchSizeDefault
+    batchSize = testBatchSize
 validation_dataloader = DataLoader(validation_data, batch_size=batchSize)
 
 print("Data loaded...")
@@ -350,7 +395,10 @@ validationLoss = np.zeros((epochs))
 validationAccuracy=np.zeros((epochs))
 
 if batchSizeDefault is not None:
-    specificAccuracy=np.zeros((testBatchSize-5,epochs))
+    #specificAccuracy is only ever filled in per-sample when batchSizeDefault is None (see the
+    #main training loop below), so it stays unused in batch mode - sized to 0 rows rather than
+    #referencing testBatchSize here.
+    specificAccuracy=np.zeros((0,epochs))
 else:
     specificAccuracy=np.zeros((len(validation_data),epochs))
 
