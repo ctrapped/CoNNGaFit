@@ -18,23 +18,26 @@ Training/validation/test CSVs are normally produced by a `WriteDatasetsToCsv`-st
 
 ## Directory layout
 
-The standard training scripts (all but the HiRes-test-2 script) expect, and can be pointed elsewhere with `--data-dir`/`--network-dir`:
+All four training scripts share the same three-directory convention and the same defaults, so with data already
+in place, **the only argument you normally need to pass is `--sample-suffix`**:
 
 ```
-<data-dir>/                      (default: CoNNGaFitData)
+TrainingData/                    (input - override with --data-dir)
   annotation_datasets/
     training_annotations_*.csv
     validation_annotations_*.csv
     test_annotations_*.csv
-  outputs/
-    images/                      (per-epoch comparison plots/hdf5 snapshots)
-    diagnostics/                 (loss curves, correlation plots)
-<network-dir>/                   (default: TrainedNetworks)
+NetworkWeights/                  (output - override with --network-dir; created automatically)
   <model-name>.pt                (trained weights)
   <model-name>.hdf5              (normalization stats + hyperparameters)
+DiagnosticOutputs/                (output - override with --output-dir; created automatically)
+  images/                        (per-epoch comparison plots/hdf5 snapshots)
+  diagnostics/                   (loss curves, correlation plots)
 ```
 
-`<data-dir>/outputs/images` and `<data-dir>/outputs/diagnostics` are not created automatically - create them before running a training script or `plt.savefig` will fail.
+`TrainModel_MassFlux_UNet_HiResTest2.py` is the one exception: its CSVs sit directly in `<data-dir>` with no
+`annotation_datasets/` subfolder (see below). `<network-dir>` and `<output-dir>/{images,diagnostics}` are created
+automatically on every run if they don't already exist; `<data-dir>` (input) is not.
 
 ## Training
 
@@ -42,51 +45,68 @@ Four training scripts are available, each pairing a training loop with one netwo
 
 | Script | Network used | Target |
 |---|---|---|
-| `TrainModel_MassFlux_UNet.py` | `NeuralNetwork_Unet3d.py` | Radial mass flux (40x40) |
-| `TrainModel_RC_UNet.py` | `NeuralNetwork_Unet3d.py` | Rotational velocity (40x40) |
-| `TrainModel_MassFlux_UNet_HiResTest.py` | `AlternativeNetworks/Unet3d_HiResTest.py` | Radial mass flux (40x40, lighter stem) |
-| `TrainModel_MassFlux_UNet_HiResTest2.py` | `NeuralNetwork_Unet3d_600x600.py` | Radial mass flux (600x600) |
+| `TrainModel_MassFlux_UNet.py` | `NetworkModels/NeuralNetwork_Unet3d.py` | Radial mass flux (40x40) |
+| `TrainModel_RC_UNet.py` | `NetworkModels/NeuralNetwork_Unet3d.py` | Rotational velocity (40x40) |
+| `TrainModel_MassFlux_UNet_HiResTest.py` | `NetworkModels/AlternativeNetworks/Unet3d_HiResTest.py` | Radial mass flux (40x40, lighter stem) |
+| `TrainModel_MassFlux_UNet_HiResTest2.py` | `NetworkModels/NeuralNetwork_Unet3d_600x600.py` | Radial mass flux (600x600) |
 
-All four are run directly with Python and take command-line options via `argparse` - run any of them with `--help` to see the full list. Example:
+All four are run directly with Python and take command-line options via `argparse` - run any of them with `--help`
+to see the full list, grouped as below. Typical usage:
 
 ```
-python TrainModel_MassFlux_UNet.py --data-dir CoNNGaFitData --sample-suffix All_Inclinations_finalSnapNoM12m
+python TrainModel_MassFlux_UNet.py --sample-suffix All_Inclinations_finalSnapNoM12m
 ```
 
-### Common options (first three scripts)
+### `--sample-suffix`
+
+The one option you're expected to pass routinely. It's used to build every default CSV/output/model filename
+below, so as long as `TrainingData/annotation_datasets/` holds annotation CSVs named for it, nothing else needs
+to be given.
+
+### Input/output directories (override the default layout)
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--sample-suffix` | script-specific | Suffix used to build default CSV/output/model filenames, unless overridden below |
-| `--data-dir` | `CoNNGaFitData` | Root for `annotation_datasets/` (input) and `outputs/` (diagnostics/images) |
-| `--network-dir` | `TrainedNetworks` | Where the trained `.pt`/`.hdf5` checkpoint is written |
-| `--training-csv` / `--validation-csv` / `--testing-csv` | built from `--sample-suffix` | Explicit annotation CSV filenames, read from `<data-dir>/annotation_datasets/` |
+| `--data-dir` | `TrainingData` | Root annotation CSVs are read from (`<data-dir>/annotation_datasets/`) |
+| `--network-dir` | `NetworkWeights` | Where the trained `.pt`/`.hdf5` checkpoint is written; created automatically |
+| `--output-dir` | `DiagnosticOutputs` | Root for diagnostic images (`<output-dir>/images/`) and plots (`<output-dir>/diagnostics/`); created automatically |
+
+`TrainModel_MassFlux_UNet_HiResTest2.py` reads CSVs directly from `<data-dir>` instead of
+`<data-dir>/annotation_datasets/`, and defaults `--sample-suffix` to `HiResTest`; its directory flags otherwise
+default the same as above.
+
+### Explicit filenames (override individual files derived from `--sample-suffix`)
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--training-csv` / `--validation-csv` / `--testing-csv` | built from `--sample-suffix` | Annotation CSV filenames, read from `<data-dir>` (see above) |
 | `--output-name` | built from `--sample-suffix` | Base name for diagnostic images/plots |
 | `--model-name` | built from `--sample-suffix` | Base filename for the saved checkpoint |
 
-`TrainModel_MassFlux_UNet_HiResTest2.py` uses a different (flatter) layout and default `--sample-suffix HiResTest`, since it doesn't use the `CoNNGaFitData` convention:
+### Training options (override values computed from the dataset)
 
-| Flag | Default |
-|---|---|
-| `--data-dir` | `./training_datasets` (also where `--training-csv`/etc. are read from) |
-| `--output-dir` | `./outputs` |
-| `--network-dir` | `./networks` |
-| `--training-csv` | `training_annotations_HiRes_MassFlux.csv` |
-| `--validation-csv` / `--testing-csv` | same file as `--training-csv`, unless given explicitly |
+| Flag | Default | Purpose |
+|---|---|---|
+| `--batch-size` | ~1/10 of the training set (floored at 2) | Mini-batch size for training; `0` trains on the full dataset as a single batch per epoch |
+| `--test-batch-size` | ~1/10 of the validation set (floored at 1) | Mini-batch size for validation/testing |
+
+`TrainModel_MassFlux_UNet_HiResTest2.py` defaults `--training-csv` to the fixed filename
+`training_annotations_HiRes_MassFlux.csv` rather than one built from `--sample-suffix`, and defaults
+`--validation-csv`/`--testing-csv` to reusing whatever `--training-csv` resolves to.
 
 ### Hyperparameters
 
-Not exposed on the command line - edit the `HYPERPARAMETERS` block near the top of the script you're running:
+Not exposed on the command line (batch sizes are the exception - see the table above) - edit the
+`HYPERPARAMETERS` block near the top of the script you're running:
 
 - `learning_rate`, `weight_decay`, `epochs` - standard training controls (Adam optimizer).
 - `nFilt0`, `k0`, `k1`, `nFC` - network size: initial filter count, initial/block kernel sizes, and the size of the optional FC bottleneck (set `nFC = 0` to remove it).
 - `dropout_rate` (default `0.3`) - dropout applied just before the output layer.
 - `block_dropout_rate` (default `0.0`, off) - channel-wise dropout inside every residual/deconv block; see the in-file comment before enabling.
-- `batchSizeDefault` - `None` trains on the full dataset as a single batch each epoch (used by three of the four scripts); set to an integer for mini-batch training (used by the HiRes-test-2 script, `batchSizeDefault = 5`).
 
 ### Output
 
-Each run writes `<model-name>.pt` (weights) and `<model-name>.hdf5` (image normalization stats + the hyperparameters above, needed to reconstruct the model later) to `--network-dir`, plus loss/accuracy curves to `<data-dir>/outputs/diagnostics/` (or `--output-dir` for the HiRes-test-2 script) and per-epoch comparison images/hdf5 snapshots to `<data-dir>/outputs/images/` on the final training epoch.
+Each run writes `<model-name>.pt` (weights) and `<model-name>.hdf5` (image normalization stats + the hyperparameters above, needed to reconstruct the model later) to `--network-dir`, plus loss/accuracy curves and correlation plots to `<output-dir>/diagnostics/` and per-epoch comparison images/hdf5 snapshots to `<output-dir>/images/` on the final training epoch.
 
 ## Building training datasets
 
