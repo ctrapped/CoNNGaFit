@@ -73,7 +73,7 @@ def WriteDatasetsToCsv(annotationFileDir,trainingDir,outputDir,galNames,Nsnaps,i
                     iStr=str(inclination)
                     paStr = str(position_angle)
                     Nsnapstr =str(Nsnap)
-                    actualImageName = gal+suiteStr+"_cr700_i"+iStr+"_pa"+paStr+"_"+Nsnapstr+"_image_04172023_fullSpectra"+rotation+dnStr+flip+".hdf5"
+                    actualImageName = gal+suiteStr+"_i"+iStr+"_pa"+paStr+"_"+Nsnapstr+"_image_fullSpectra"+rotation+dnStr+flip+".hdf5"
                     
                     if DoFaceOnProjections:
                         annotationDir = trainingDir+"i90/training/training_annotations_"+paramString+"_i90_"+gal+suiteStr+"_"+paramString2+"_"+Nsnapstr+rotation+taStr+flip+".hdf5"
