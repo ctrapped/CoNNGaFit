@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, _match_spatial
-from Unet_diagnostics import SaveSummedSpectralChannels
+from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
 # arbitrary size and predicts a flattened output map. See NeuralNetwork for the full
@@ -95,7 +95,7 @@ class NeuralNetwork(nn.Module):
             when nFC is a sequence of widths).
         output_size: length of the flattened prediction. Defaults to nX*nY from input_shape.
         pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
-            nFilt0 * prod(pool_output); the default (4, 4, 8) gives 128 * nFilt0.
+            nFilt0 * prod(pool_output); the default (8, 8, 8) gives 512 * nFilt0.
         fc_dropout_rate: dropout probability after every hidden FC layer's activation (and,
             when there are no hidden layers, once before the output Linear). 0.0 disables.
             Active in training mode only.
@@ -130,7 +130,7 @@ class NeuralNetwork(nn.Module):
     """
 
     def __init__(self, input_shape, nFilt0, kernel_stem, kernel_coder, nFC, n_stages=4,
-                 n_fc_layers=1, output_size=None, pool_output=(4, 4, 8),
+                 n_fc_layers=1, output_size=None, pool_output=(8, 8, 8),
                  fc_dropout_rate=0.0, block_dropout_rate=0.0,
                  stem_activation=nn.LeakyReLU, block_activation=nn.ReLU,
                  fc_activation=nn.LeakyReLU, output_activation=nn.Identity,
@@ -159,6 +159,7 @@ class NeuralNetwork(nn.Module):
         enc_channels = [nFilt0 * (2 ** i) for i in range(n_stages)]
         self.nFilt0 = nFilt0
         self.kernel_stem = tuple(kernel_stem)
+        self.kernel_coder = tuple(kernel_coder)
         self.enc_channels = list(enc_channels)
         self.encoder = nn.ModuleList()
         prev = nFilt0
@@ -355,15 +356,38 @@ class NeuralNetwork(nn.Module):
         rows.append(("adaptive avg pool", self.nFilt0, self.pool_output))
         return rows
 
-    def summary(self, print_fn=print):
+    def _param_groups(self):
+        """(label, [modules]) for every summary() row, in order: the stage_shapes() rows, then the
+        fully-connected head. Rows with no parameters (input, skip concat, pooling) get []."""
+        mods = [[], [self.layer_stem]] + [[stage] for stage in self.encoder]
+        for up, dc in zip(self.upsamples, self.dc_layers):
+            mods += [[up], [], [dc]]   # upsample, + skip (concat), deconv block
+        mods.append([])                # adaptive avg pool
+        groups = [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
+        # fc_hidden is [Linear, activation, Dropout] per hidden layer (see __init__)
+        groups += [(f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]])
+                   for k in range(len(self.fc_widths))]
+        groups.append(("fc out (mean)", [self.fc_out_mean, self.out_activation]))
+        if self.predict_variance:
+            groups.append(("fc out (logvar)", [self.fc_out_logvar]))
+        return groups
+
+    def param_breakdown(self):
+        """(label, n_parameters) for every summary() row that holds parameters, in order. The counts
+        add up to the model's total parameter count."""
+        return [(label, count_params(mods)) for label, mods in self._param_groups() if mods]
+
+    def summary(self, print_fn=print, layers=True):
         """Print the network structure, the input dimensions, the data/feature-count
-        progression through every layer, which activation runs at each stage, and which
-        upsample_mode the decoder uses. `print_fn` lets output be redirected (e.g. to a
-        logger); defaults to the builtin print.
+        progression through every layer, the number of parameters in every block and layer,
+        which activation runs at each stage, and which upsample_mode the decoder uses.
+        `print_fn` lets output be redirected (e.g. to a logger); defaults to the builtin print.
+        layers: if True (default), list each block's layers and their parameter counts under
+        the block's row.
         """
         rows = self.stage_shapes()
         w = max(len(label) for label, _, _ in rows)
-        bar = "=" * (w + 40)
+        bar = "=" * (w + 58)
 
         # Pull the actual instantiated activation module for each of the four independently
         # configurable roles (stem_activation, block_activation, fc_activation,
@@ -379,13 +403,13 @@ class NeuralNetwork(nn.Module):
         print_fn(bar)
         print_fn(f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
                  f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
-                 f"upsample_mode={upsample_mode!r}  |  predict_variance={self.predict_variance}")
+                 f"kernel_coder={self.kernel_coder}  |  upsample_mode={upsample_mode!r}  |  predict_variance={self.predict_variance}")
         nS, nX, nY = self.input_shape
         print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  "
                  f"output: (nBatch, {self.output_size})")
         print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  "
                  f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}  output={out_act}")
-        print_fn("-" * (w + 40))
+        print_fn("-" * (w + 58))
 
         def row_note(label):
             # Only rows that actually apply an activation/resize get a note; concatenation/
@@ -398,23 +422,38 @@ class NeuralNetwork(nn.Module):
                 return f"mode={upsample_mode!r}"
             return None
 
+        groups = dict(self._param_groups())
+
+        def params_col(label):
+            mods = groups.get(label, [])
+            return f"{count_params(mods):,}" if mods else "-"
+
+        def print_layers(label):
+            if layers:
+                for line in layer_param_lines(groups.get(label, [])):
+                    print_fn(line)
+
         for label, feats, shape in rows:
             dims = " x ".join(str(s) for s in shape)
             note = row_note(label)
             suffix = f" {note}" if note else ""
-            print_fn(f"  {label:<{w}}   features={feats:<6} dims={dims}{suffix}")
+            print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
+            print_layers(label)
 
         flat = self.nFilt0 * int(np.prod(self.pool_output))
         print_fn(f"  {'flatten':<{w}}   features={flat}")
         in_f = flat
         for k, out_f in enumerate(self.fc_widths):
-            print_fn(f"  {'fc hidden ' + str(k):<{w}}   {in_f} -> {out_f}  activation={fc_act}")
+            label = f"fc hidden {k}"
+            print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
             in_f = out_f
-        print_fn(f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  activation={out_act}")
+        print_fn(f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
+                 f"params={params_col('fc out (mean)')}  activation={out_act}")
         if self.predict_variance:
-            print_fn(f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  activation=None")
+            print_fn(f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
+                     f"params={params_col('fc out (logvar)')}  activation=None")
 
-        print_fn("-" * (w + 40))
+        print_fn("-" * (w + 58))
         n_all = sum(p.numel() for p in self.parameters())
         n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
         print_fn(f"parameters: {n_all:,} total ({n_train:,} trainable)")
