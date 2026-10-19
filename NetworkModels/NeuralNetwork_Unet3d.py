@@ -51,6 +51,27 @@ def SaveSummedSpectralChannels(x,nStep):
         plt.savefig(latentImageOutput+"sum_step"+str(nStep)+"_filter"+str(i)+"_gal"+str(saveItr)+".png")
         plt.close()
 
+def center_crop_to_match(source, target):
+    """Center-crop source's spatial/spectral dims (2,3,4) down to target's shape in those
+    dims, trimming any odd leftover pixel from the end rather than the start. No-ops on any
+    dim already matching target; raises if source is smaller than target in any dim (that
+    would mean the decoder's upsampled features spatially exceed the encoder's skip
+    connection - a sign the architecture itself is mismatched, not something to silently
+    paper over).
+
+    Used to align a skip-connection feature map with the upsampled decoder tensor it's
+    concatenated onto, without hardcoding crop windows for a specific input shape/kernel
+    configuration - see forward() below.
+    """
+    slices = [slice(None), slice(None)]
+    for dim in (2, 3, 4):
+        src, tgt = source.shape[dim], target.shape[dim]
+        if src < tgt:
+            raise ValueError(f"skip connection dim {dim} ({src}) smaller than upsampled feature dim ({tgt})")
+        start = (src - tgt) // 2
+        slices.append(slice(start, start + tgt))
+    return source[tuple(slices)]
+
 
 #### Class for convolutional on the left side of the unet
 class ResidualBlock(nn.Module):
@@ -166,12 +187,14 @@ class NeuralNetwork(nn.Module):
     stage, an Upsample module spatially upsamples the decoder features, the matching
     pre-downsample encoder feature map is concatenated onto it channel-wise (skip connection),
     and dc_layer1..dc_layer3 then reduce the concatenated channel count back down via
-    transpose-conv blocks. The skip-connection tensors are cropped with hardcoded slice
-    indices (e.g. featureMap2[:,:,0:9,:,:]) sized for the current 40x40x77 input - changing
-    the input shape or kernel sizes requires re-deriving these crop windows to match the
-    encoder's actual output shape at each stage. Finally an average pool + optional
+    transpose-conv blocks. The skip-connection tensors are aligned to the upsampled decoder
+    tensor via center_crop_to_match (see above), which derives the crop window from the
+    tensors' actual runtime shapes rather than hardcoding it for one input/kernel
+    configuration - it also always crops symmetrically, rather than trimming any excess
+    from one side only. Finally an average pool + optional
     fully-connected bottleneck (fc0) feeds a final linear layer (fc1) that outputs the
-    flattened model_size-length prediction.
+    flattened model_size-length prediction. fc0/fc1's in_features is likewise no longer a
+    hardcoded literal when inputShape is given (see below).
 
     Parameters:
         nFilt0: number of filters in the first residual stage (doubles at each subsequent stage).
@@ -198,9 +221,17 @@ class NeuralNetwork(nn.Module):
             that stage's total information - a rate tuned for the FC bottleneck is likely too
             aggressive here and can destabilize training. As with dropout_rate, only active in
             training mode.
+        inputShape: (nSpec, nX, nY) of the datacubes this instance will actually be run on.
+            Defaults to None, which keeps fc0/fc1's in_features hardcoded at 128*nFilt0 (the
+            value derived for this file's default 40x40x77 input) - identical behavior to
+            before this parameter existed, so existing callers and saved checkpoints are
+            unaffected. When given, fc0/fc1's in_features is instead computed by actually
+            running a dummy all-zeros batch of this shape through _features() once at
+            construction time and reading off its flattened size - so nX/nY/nSpec, kernel0,
+            kernel1, and nFilt0 can all be changed freely without hand-deriving a new literal.
     """
 
-    def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0):
+    def __init__(self, nFilt0, kernel0, kernel1, nFC, dropout_rate=0.0, block_dropout_rate=0.0, inputShape=None):
         print("output size=",modelShape[0]*modelShape[1]*modelShape[2])
         super(NeuralNetwork, self).__init__()
         self.nFC=nFC
@@ -263,17 +294,36 @@ class NeuralNetwork(nn.Module):
         #Output Layer
         
         self.avgpool0 = nn.AvgPool3d(kernel_size=(2,2,2),stride=(2,2,2))
+
+        if inputShape is not None:
+            #Compute fc0/fc1's true in_features by actually running a dummy batch through
+            #_features below, rather than hardcoding it for one (nX,nY,nSpec,kernel0,kernel1)
+            #configuration - see _features' docstring for the eval()/no_grad rationale.
+            was_training = self.training
+            self.eval()
+            with torch.no_grad():
+                flat_size = self._features(torch.zeros(1,*inputShape)).shape[1]
+            self.train(was_training)
+        else:
+            #No inputShape given: fall back to the value hardcoded for this network's default
+            #40x40x77 input, leaving existing callers' fc0/fc1 sizes (and so their saved
+            #checkpoints) completely unaffected.
+            flat_size = 128*nFilt0
+
         self.dropout0 = nn.Dropout(p=dropout_rate)
         if self.nFC>0:
-            self.fc0 = nn.Linear(in_features=128*nFilt0 , out_features=nFC)
+            self.fc0 = nn.Linear(in_features=flat_size , out_features=nFC)
             self.relu0 = nn.LeakyReLU()
             self.fc1 = nn.Linear(in_features=nFC,out_features=model_size)
         else:
-            self.fc1 = nn.Linear(in_features=128*nFilt0,out_features=model_size)
+            self.fc1 = nn.Linear(in_features=flat_size,out_features=model_size)
 
-   
-    def forward(self, x, saveLatentImages=False):
-        """Run the network on a batch of datacubes.
+    def _features(self, x, saveLatentImages=False):
+        """Run everything up to (and including) the final flatten: the encoder, the
+        upsample -> center_crop_to_match -> concatenate -> decoder skip-connection stages,
+        and the output average pool. Split out from forward() so __init__ can call it once on
+        a dummy batch (see above) to size fc0/fc1 dynamically, and so forward() itself has a
+        single place this logic lives.
 
         x: tensor of shape (nBatch, nSpec, nX, nY) - a single-channel spectral datacube per
             sample; a channel dim of size 1 is inserted before the 3-d convolutions.
@@ -281,7 +331,7 @@ class NeuralNetwork(nn.Module):
             encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
-        Returns: tensor of shape (nBatch, model_size) - the flattened predicted output map.
+        Returns: tensor of shape (nBatch, flat_size) - the flattened pre-fc0 features.
         """
         nBatch,nSpec,nX,nY = x.size()
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
@@ -312,17 +362,17 @@ class NeuralNetwork(nn.Module):
             
         ## Deconvolutional Blocks ##
         x = self.upsample1(x)
-        x = torch.cat([x, featureMap3], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
+        x = torch.cat([x, center_crop_to_match(featureMap3, x)], dim=1) #Feature forwarding from left convolutional -> deconvolutional wing
         x = self.dc_layer1(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,5)
 
         x = self.upsample2(x)
-        x = torch.cat([x, featureMap2[:,:,0:9,:,:]], dim=1) #Cropped Feature forwarding
+        x = torch.cat([x, center_crop_to_match(featureMap2, x)], dim=1) #Cropped Feature forwarding
         x = self.dc_layer2(x)
         if saveLatentImages: SaveSummedSpectralChannels(x,6)
 
         x = self.upsample3(x)
-        x = torch.cat([x, featureMap1[:,:,1:18,0:9,0:9]], dim=1) #Cropped Feature forwarding
+        x = torch.cat([x, center_crop_to_match(featureMap1, x)], dim=1) #Cropped Feature forwarding
         x = self.dc_layer3(x)
         if saveLatentImages:
             SaveSummedSpectralChannels(x,7)
@@ -331,7 +381,20 @@ class NeuralNetwork(nn.Module):
         ##  Output Inference ##
         x = self.avgpool0(x)
 
-        x = torch.flatten(x,1)
+        return torch.flatten(x,1)
+
+    def forward(self, x, saveLatentImages=False):
+        """Run the network on a batch of datacubes.
+
+        x: tensor of shape (nBatch, nSpec, nX, nY) - a single-channel spectral datacube per
+            sample; a channel dim of size 1 is inserted before the 3-d convolutions.
+        saveLatentImages: if True, dump PNGs of the spectrally-summed activations at each
+            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels above) -
+            useful for visually debugging what the network is learning, not needed for normal
+            training/inference.
+        Returns: tensor of shape (nBatch, model_size) - the flattened predicted output map.
+        """
+        x = self._features(x, saveLatentImages=saveLatentImages)
         if self.nFC>0:
             x = self.fc0(x)
             x = self.relu0(x)
