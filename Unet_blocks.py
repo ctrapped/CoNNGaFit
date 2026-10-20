@@ -1,9 +1,13 @@
+import math
+import torch
 from torch import nn
 import torch.nn.functional as F
 
 # Shared building blocks for the CoNNGaFit 3-d networks:
 #   Stem, ResidualBlock, Upsample, DeconvBlock - Unet3d_ResBlock.NeuralNetwork and Unet3d_DDPM.DenoisingUNet3d
 #   DilatedResidualBlock                       - Unet3d_Dilated_ResNet.NeuralNetwork
+#   SpectralAttentionPool                      - the conv heads below and Unet3d_DDPM's MapHead
+#   ResBlock2d, ConvMapHead                    - head='conv' option of both regression networks
 # plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
@@ -328,3 +332,107 @@ class DilatedResidualBlock(nn.Module):
         out = out + skip
         out = self.final_act(out)
         return self.dropout(out)
+
+
+#### 3-d -> 2-d convolutional head ####
+class SpectralAttentionPool(nn.Module):
+    """Collapse the spectral axis with learned, per-pixel softmax weights.
+    Lets each pixel pick the velocity channels that matter (e.g. line wings for outflows),
+    and works for any nSpec."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.score = nn.Conv3d(channels, 1, kernel_size=1) # (B, C, S, X, Y) -> (B, 1, S, X, Y)
+
+    def forward(self, x):
+        # Compute per-pixel attention weights over the spectral axis
+        # Score compresses the channels into a single attention map used to sum the spectral dimensions
+        w = torch.softmax(self.score(x), dim=2)  # (B, 1, S, X, Y), sums to 1 over S
+        return (x * w).sum(dim=2)                # (B, C, X, Y)
+
+
+class ResBlock2d(nn.Module):
+    """2-d residual block for the conv head: conv -> GroupNorm -> act -> conv -> GroupNorm -> act,
+    plus a skip (1x1 conv when the channel count changes). GroupNorm normalizes each sample on its
+    own, so the head behaves the same at batch size 1 (inference, MC dropout) as in training."""
+
+    def __init__(self, in_channels, out_channels, activation=nn.ReLU, max_groups=8, kernel_size=3):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding='same')
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding='same')
+        self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
+        self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
+        self.act1, self.act2 = activation(), activation()
+        self.shortcut = (nn.Conv2d(in_channels, out_channels, 1)
+                         if in_channels != out_channels else nn.Identity())
+
+    def forward(self, x):
+        """x: (nBatch, in_channels, H, W) -> (nBatch, out_channels, H, W)."""
+        h = self.act1(self.norm1(self.conv1(x)))
+        h = self.act2(self.norm2(self.conv2(h)))
+        return h + self.shortcut(x)
+
+
+class ConvMapHead(nn.Module):
+    """Fully convolutional head: 3-d features (nBatch, C, S, X, Y) -> 2-d maps (nBatch, out_channels, H, W).
+
+    Collapses the spectral axis with SpectralAttentionPool, resizes bilinearly to the target map grid
+    (H, W), refines with `n_blocks` ResBlock2d and projects with a 3x3 conv. This ensures each output 
+    pixel is predicted from the features at and around that pixel.
+
+    Parameters:
+        channels: feature channels coming out of the network body.
+        out_channels: output maps, e.g. 1 (mean) or 2 (mean + log-variance).
+        n_blocks: number of ResBlock2d (>= 0).
+        activation: zero-arg callable returning an nn.Module, used in every ResBlock2d.
+        dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
+        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+    """
+
+    def __init__(self, channels, out_channels=1, n_blocks=2, activation=nn.ReLU, dropout_rate=0.0,
+                 max_groups=8):
+        super().__init__()
+        if n_blocks < 0:
+            raise ValueError("n_blocks must be >= 0")
+        self.channels, self.out_channels = channels, out_channels
+        self.pool = SpectralAttentionPool(channels)
+        self.blocks = nn.ModuleList([ResBlock2d(channels, channels, activation, max_groups)
+                                     for _ in range(n_blocks)])
+        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.out = nn.Conv2d(channels, out_channels, 3, padding=1)
+
+    def forward(self, x, map_shape):
+        """x: (nBatch, C, S, X, Y) -> (nBatch, out_channels, *map_shape)."""
+        h = self.pool(x)                                                           # (B, C, X, Y)
+        h = F.interpolate(h, size=tuple(map_shape), mode='bilinear', align_corners=False)
+        for blk in self.blocks:
+            h = blk(h)
+        return self.out(self.dropout(h))
+
+    def stage_shapes(self, in_xy, map_shape):
+        """(label, n_features, dims) rows for the head, given the (X, Y) of its input features."""
+        c, map_shape = self.channels, tuple(map_shape)
+        rows = [("head: spectral attention pool", c, tuple(in_xy)),
+                ("head: resize to map", c, map_shape)]
+        rows += [(f"head: 2-d res block {k}", c, map_shape) for k in range(len(self.blocks))]
+        rows.append(("head: output conv", self.out_channels, map_shape))
+        return rows
+
+    def param_groups(self):
+        """(label, [modules]) aligned with stage_shapes() rows."""
+        groups = [("head: spectral attention pool", [self.pool]), ("head: resize to map", [])]
+        groups += [(f"head: 2-d res block {k}", [b]) for k, b in enumerate(self.blocks)]
+        groups.append(("head: output conv", [self.dropout, self.out]))
+        return groups
+
+    def row_note(self, label):
+        """summary() note for one of this head's rows (None for other labels)."""
+        if label == "head: spectral attention pool":
+            return "softmax weights over nSpec"
+        if label == "head: resize to map":
+            return "bilinear"
+        if label.startswith("head: 2-d res block"):
+            return f"activation={type(self.blocks[0].act1).__name__}"
+        if label == "head: output conv":
+            return "channels: mean" + (" + logvar" if self.out_channels == 2 else "")
+        return None

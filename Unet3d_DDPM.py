@@ -3,7 +3,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, _match_spatial
+from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, SpectralAttentionPool, _match_spatial
 from Unet3d_ResBlock import _check_stage_compatibility
 from Unet_diagnostics import count_params, layer_param_lines
 
@@ -121,22 +121,6 @@ class TimeDeconvBlock(DeconvBlock):
 
 
 #### 3-d -> 2-d head ####
-class SpectralAttentionPool(nn.Module):
-    """Collapse the spectral axis with learned, per-pixel softmax weights.
-    Lets each pixel pick the velocity channels that matter (e.g. line wings for outflows),
-    and works for any nSpec."""
-
-    def __init__(self, channels):
-        super().__init__()
-        self.score = nn.Conv3d(channels, 1, kernel_size=1) # (B, C, S, X, Y) -> (B, 1, S, X, Y)
-
-    def forward(self, x):
-        # Compute per-pixel attention weights over the spectral axis
-        # Score compresses the channels into a single attention map used to sum the spectral dimensions
-        w = torch.softmax(self.score(x), dim=2)  # (B, 1, S, X, Y), sums to 1 over S
-        return (x * w).sum(dim=2)                # (B, C, X, Y)
-
-
 class TimeResBlock2d(nn.Module):
     """2-d residual block with GroupNorm + FiLM time conditioning, used at full map resolution."""
 
