@@ -140,3 +140,5 @@ Run either with `--help` for the full flag list. `InferenceTest_ValidationSet.py
 `main` is protected: changes are merged through pull requests, and the tests
 (`.github/workflows/tests.yml`) must pass on Python 3.11 and 3.12 first. Work on a
 branch, add tests in `tests/` for new code, and run `pytest` locally before opening a PR.
+Code is linted and formatted with [ruff](https://docs.astral.sh/ruff/); run `pre-commit install` once after
+cloning so it runs automatically on every commit.
