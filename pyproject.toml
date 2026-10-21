@@ -28,8 +28,11 @@ py-modules = [
     "Datasets",
     "FITS_to_CoNNGaFit",
     "PlottingFunctions",
+    "Unet3d_DDPM",
     "Unet3d_Dilated_ResNet",
     "Unet3d_ResBlock",
+    "Unet_blocks",
+    "Unet_diagnostics",
     "UseModel",
 ]
 
