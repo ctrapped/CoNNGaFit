@@ -1,0 +1,29 @@
+# Training hyperparameters for TrainModel_UNet.py (tuned for radial_mass_flux)
+# Pass a different file with --hyperparams. Every key below is required.
+
+learning_rate = 1e-4
+weight_decay = 1e-3
+epochs = 4000
+nFC = 3000    # Width of the fully connected head's hidden layers (output_head = "fc" only)
+nFilt0 = 6    # Filters in the first encoder stage; doubles at each later stage
+k0 = 9        # Initial kernel size
+k1 = 3        # Kernel size for residual/deconv blocks
+
+dropout_rate = 0.3  # Applied before the output layer, to regularize the head
+# Disabled by default. Applies channel-wise dropout (nn.Dropout3d) inside every
+# ResidualBlock/DeconvBlock - a much broader regularizer than dropout_rate, since it touches
+# every stage of the encoder/decoder and the skip connections too. Only enable this if
+# dropout_rate alone isn't closing the train/validation gap; start low (~0.1-0.15) rather than
+# reusing dropout_rate's 0.3 - the deepest encoder stage shrinks to a tiny spatial size where
+# dropping whole channels removes a large fraction of that stage's information.
+block_dropout_rate = 0.0
+
+# Output head, see NeuralNetwork in Unet3d_ResBlock.py. Both conv heads predict each pixel from
+# its neighborhood (needed for 128x128/512x512 images):
+#   "conv_halfres" - adds a decoder stage to half resolution, folds the spectra into channels
+#                    and adds global context
+#   "conv"         - pools the spectra with learned attention weights, then refines with 2-d
+#                    residual blocks
+#   "fc"           - the original fully connected output layer (nFC is then the bottleneck
+#                    size), for 40x40 images or radial curves
+output_head = "conv_halfres"
