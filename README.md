@@ -135,6 +135,11 @@ python InferenceTest_ValidationSet.py --sample-suffix finalSnapNoM12m --model-pa
 
 Run either with `--help` for the full flag list. `InferenceTest_ValidationSet.py` runs inference on a sample's validation-annotations CSV specifically, to spot-check predictions against known labels.
 
+## Citation and license
+
+If you use CoNNGaFit in your research, please cite it using [`CITATION.cff`](CITATION.cff)
+(GitHub's "Cite this repository" button). CoNNGaFit is released under the [MIT License](LICENSE).
+
 ## Contributing
 
 `main` is protected: changes are merged through pull requests, and the tests
