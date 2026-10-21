@@ -4,7 +4,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import ToTensor, Normalize, Compose
 
-from Datasets import CoNNGaFitImageDataset, TARGETS, inclination_set
+from Datasets import CoNNGaFitImageDataset, TARGETS, inclination_folders
 
 from Unet3d_ResBlock import NeuralNetwork
 import numpy as np
@@ -144,9 +144,9 @@ testingSources = dataset_sources(datasets["testing"], "testing", args.datasets, 
 augmentTraining = None if datasets["augment"] == "none" else datasets["augment"] #TOML has no None
 radialBins = datasets["radial_bins"] or None #0 means train on maps
 radialProjection = datasets["radial_projection"]
-inclinations = datasets["inclinations"] #"all" or a list, for every set (a source line can override it)
-inclination_set(inclinations, args.datasets) #Check it here, so an error names this file
-suffix = datasets.get("suffix", "") #VOF's outputSuffix in the filenames, for every set (a source line can override it)
+inclinations = datasets["inclinations"] #"all" or a list, for every set
+inclination_folders(inclinations, args.datasets) #Check it here, so an error names this file
+suffix = datasets.get("suffix", "") #VOF's outputSuffix in the filenames, for every set
 if not isinstance(suffix, str):
     raise ValueError(f"{args.datasets}: suffix = {suffix!r} should be a string")
 #############################

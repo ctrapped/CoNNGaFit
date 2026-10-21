@@ -17,7 +17,7 @@ radial_bins = 0
 #Where radial curves are measured: "face_on" (each snapshot's i0 image) or "sky"
 radial_projection = "face_on"  
 
-#VOF's outputSuffix in the filenames to load, if that run used one; per folder: { suffix = "_hr" }
+#VOF's outputSuffix in the filenames to load, if that run used one (the same for every folder)
 suffix = ""  # Optional
 
 #Base directory for relative paths below
