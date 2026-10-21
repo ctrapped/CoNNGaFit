@@ -1,24 +1,20 @@
+import argparse
 import os
+
+import h5py
+import matplotlib
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from torchvision import datasets
-from torchvision.transforms import ToTensor, Lambda, Normalize, Compose
+from torchvision.transforms import Compose, Normalize, ToTensor
+
+matplotlib.use('Agg')  # non-interactive backend, selected before anything imports pyplot
+from matplotlib import pyplot as plt
 
 from Datasets import CoNNGaFitImageDataset
-
+from PlottingFunctions import MakeCompImage, MakeCompImage_1d, MakeCorrelationPlot, SaveHDF5, SaveHDF5_1d
 from Unet3d_ResBlock import NeuralNetwork
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-from matplotlib import pyplot as plt
-from matplotlib.colors import LogNorm
-import scipy.stats as stats
-import h5py
-
-from PlottingFunctions import MakeCompImage,RV2coeff,MakeCorrelationPlot,SaveHDF5,MakeCompImage_1d,SaveHDF5_1d
-
-import argparse
 
 ####Trains the Unet read from Unet3d_ResBlock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range below (see Datasets.py).
@@ -80,7 +76,6 @@ def parse_args():
 args = parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#device = 'cpu'
 print(f'Using {device} device')
 eps = 1e-10
 
@@ -148,7 +143,7 @@ modelOutputPath = os.path.join(args.network_dir, modelFilebase)
 #### Load and Normalize Data ####
 training_data = CoNNGaFitImageDataset(args.data_dir, trainingGalaxies, target, augment=augmentTraining, radial_bins=radialBins, radial_plane=radialPlane,
                                    transform = ToTensor())
-                                   
+
 if args.batch_size is not None:
     batchSizeDefault = None if args.batch_size == 0 else args.batch_size #--batch-size 0 means full-batch
 else:
@@ -162,7 +157,7 @@ else:
     batchSize = batchSizeDefault
     batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
     print("Batches per training set = ",batchesPerTrainingSet)
-    
+
 loader0 = DataLoader(training_data, batch_size = batchSize)
 data0 = next(iter(loader0))
 trainingMean = data0[0].mean()
@@ -255,20 +250,20 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     num_batches=len(dataloader)
     validation_loss, correct = 0, 0
     total = 0
-    
+
     predictions = np.array([])
     actuals = np.array([])
     with torch.no_grad():
         for X, y in dataloader:
             X=X.to(device)
             y=y.to(device)
-            
+
             pred=model(X.float())
             validation_loss += loss_fn(pred, y.float()).item()
-            
-            npPred = pred.cpu().float().detach().numpy();
-            npY = y.cpu().float().detach().numpy();
-            
+
+            npPred = pred.cpu().float().detach().numpy()
+            npY = y.cpu().float().detach().numpy()
+
             #### Roughly estimate accuracy of network. Not a great metric but okay for tracking general peformance ####
             deviation = np.std(npY)
             correct += np.size( np.where( ((npPred>npY-deviation) & (npPred<npY+deviation)) )[0] )
@@ -287,7 +282,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     validation_loss /= num_batches
     print(f"Validation Error: \n Accuracy: {(accuracy):>0.1f}%, Avg loss: {validation_loss:>8f} \n")
     print(f"Validation Error: \n Avg loss: {validation_loss:>8f} \n")
-    
+
     if batchSizeDefault is not None:
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
             for tt in range(0,np.shape(pred.cpu().detach().numpy())[0]):
@@ -302,8 +297,8 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 
     model.train()
     return validation_loss,accuracy,specific_accuracy
-    
-    
+
+
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
     """Evaluate the model on the held-out test set (see
@@ -315,7 +310,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     num_batches=len(dataloader)
     test_loss, correct = 0, 0
     total = 0
-    
+
     predictions = np.array([])
     actuals = np.array([])
     with torch.no_grad():
@@ -324,10 +319,10 @@ def test_loop(dataloader, model, loss_fn, epoch):
             y=y.to(device)
             pred=model(X.float())
             test_loss += loss_fn(pred, y.float()).item()
-            
-            npPred = pred.cpu().float().detach().numpy();
-            npY = y.cpu().float().detach().numpy();
-            
+
+            npPred = pred.cpu().float().detach().numpy()
+            npY = y.cpu().float().detach().numpy()
+
             #### Roughly estimate accuracy of network. Not a great metric but okay for tracking general peformance ####
             deviation = np.std(npY)
             correct += np.size( np.where( ((npPred>npY-deviation) & (npPred<npY+deviation)) )[0] )
@@ -347,7 +342,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     test_loss /= num_batches
     print(f"Test Error: \n Accuracy: {(accuracy):>0.1f}%, Avg loss: {test_loss:>8f} \n")
     print(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
-    
+
     if batchSizeDefault is not None:
         if epoch >= (epochs - 1 - batchesPerTrainingSet):
             vmax = np.max( [np.max(np.abs(pred.cpu().detach().numpy())) , np.max(np.abs(y.cpu().float().detach().numpy()))] )
@@ -378,7 +373,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     return test_loss,accuracy,specific_accuracy
 
 
-    
+
 #### Define the Model ####
 inputShape = tuple(training_data[0][0].shape) #(nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
 model = NeuralNetwork(inputShape,nFilt0,(k0,k0,k0),(k1,k1,k1),nFC,fc_dropout_rate=dropout_rate,block_dropout_rate=block_dropout_rate,output_head=outputHead,output_size=radialBins).to(device)
@@ -390,9 +385,9 @@ trainingNames = training_data.names
 
 #### Define Loss Function and Optimizer ####
 loss_fn = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=weight_decay) #Steepest gradient descent, can use different optimizers      
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=weight_decay) #Steepest gradient descent, can use different optimizers
 
-#### Initialize losses and specific accuracies ####      
+#### Initialize losses and specific accuracies ####
 trainingLoss = np.zeros((epochs))
 validationLoss = np.zeros((epochs))
 validationAccuracy=np.zeros((epochs))
@@ -415,7 +410,7 @@ for t in range(epochs):
     else:
         validationLoss[t] , validationAccuracy[t], tmp = validation_loop(validation_dataloader, model, loss_fn, t)
 
-    
+
 #Save the Trained Model
 torch.save(model.state_dict(),modelOutputPath+".pt")
 
@@ -455,7 +450,7 @@ for accuracy in final_test_specific_accuracy:
 
 
 #### Make Basic Diagnostic Outputs ####
-fig1 = plt.figure()    
+fig1 = plt.figure()
 plt.plot(np.log10(trainingLoss))
 plt.title("Training Loss")
 plt.xlabel("Epoch")
@@ -502,4 +497,4 @@ hf_diagnostic.create_dataset("testingSpecificAccuracy",data=final_test_specific_
 
 hf_diagnostic.close()
 
-print("Done!")    
+print("Done!")

@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
-from Unet_blocks import DilatedResidualBlock, ConvMapHead, _ceil_conv_pad
+from Unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
 from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes following
@@ -15,6 +15,7 @@ from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_par
 #
 # Written by Caleb Choban using Claude LLM, adapting Unet3d_ResBlock.py's conventions.
 # DilatedResidualBlock lives in Unet_blocks.py; latent-image diagnostics in Unet_diagnostics.py.
+
 
 def _strided_out_shape(input_shape, stride):
     """(nSpec, nX, nY) shape after a single conv with the given stride and _ceil_conv_pad
@@ -43,7 +44,7 @@ class Encoder(nn.Module):
         self.stride = tuple(stride)
         if all(s == 1 for s in self.stride):
             self.pad = None
-            self.conv = nn.Conv3d(1, out_channels, kernel_size=kernel_size, stride=(1, 1, 1), padding='same')
+            self.conv = nn.Conv3d(1, out_channels, kernel_size=kernel_size, stride=(1, 1, 1), padding="same")
         else:
             self.pad = _ceil_conv_pad(kernel_size, self.stride)
             self.conv = nn.Conv3d(1, out_channels, kernel_size=kernel_size, stride=self.stride, padding=0)
@@ -70,7 +71,7 @@ class Decoder(nn.Module):
 
     def __init__(self, in_channels, out_channels, kernel_size, activation=None):
         super().__init__()
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=(1, 1, 1), padding='same')
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=(1, 1, 1), padding="same")
         self.act = activation() if activation is not None else nn.Identity()
 
     def forward(self, x):
@@ -170,13 +171,31 @@ class NeuralNetwork(nn.Module):
         its own module. encode_activation/decode_activation may also be None for no activation.
     """
 
-    def __init__(self, input_shape, nFilt0, kernel_stem, kernel_coder, nFC, n_blocks=4,
-                 dilation_rates=(1, 2, 4, 8, 4, 2, 1), stem_stride=(1, 1, 1),
-                 n_fc_layers=1, output_size=None, pool_output=(8, 8, 8),
-                 fc_dropout_rate=0.0, block_dropout_rate=0.0,
-                 encode_activation=None, block_activation=nn.ReLU, decode_activation=None,
-                 fc_activation=nn.LeakyReLU, output_activation=nn.Identity,
-                 predict_variance=False, head='fc', output_shape=None, n_head_blocks=2):
+    def __init__(
+        self,
+        input_shape,
+        nFilt0,
+        kernel_stem,
+        kernel_coder,
+        nFC,
+        n_blocks=4,
+        dilation_rates=(1, 2, 4, 8, 4, 2, 1),
+        stem_stride=(1, 1, 1),
+        n_fc_layers=1,
+        output_size=None,
+        pool_output=(8, 8, 8),
+        fc_dropout_rate=0.0,
+        block_dropout_rate=0.0,
+        encode_activation=None,
+        block_activation=nn.ReLU,
+        decode_activation=None,
+        fc_activation=nn.LeakyReLU,
+        output_activation=nn.Identity,
+        predict_variance=False,
+        head="fc",
+        output_shape=None,
+        n_head_blocks=2,
+    ):
         super(NeuralNetwork, self).__init__()
         self.predict_variance = predict_variance
         if n_blocks < 1:
@@ -185,17 +204,20 @@ class NeuralNetwork(nn.Module):
         if len(input_shape) != 3:
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
-        if head not in ('fc', 'conv'):
+        if head not in ("fc", "conv"):
             raise ValueError(f"unknown head {head!r}; use 'fc' or 'conv'")
         self.head_type = head
         # Map grid of the prediction: required by the conv head, optional for the fc head.
-        self.output_shape = (tuple(int(v) for v in output_shape) if output_shape is not None
-                             else (input_shape[1:] if head == 'conv' else None))
-        map_size = (int(np.prod(self.output_shape)) if self.output_shape is not None
-                    else input_shape[1] * input_shape[2])
-        if head == 'conv' and output_size is not None and int(output_size) != map_size:
-            raise ValueError(f"output_size={output_size} does not match output_shape "
-                             f"{self.output_shape} for head='conv'")
+        self.output_shape = (
+            tuple(int(v) for v in output_shape)
+            if output_shape is not None
+            else (input_shape[1:] if head == "conv" else None)
+        )
+        map_size = int(np.prod(self.output_shape)) if self.output_shape is not None else input_shape[1] * input_shape[2]
+        if head == "conv" and output_size is not None and int(output_size) != map_size:
+            raise ValueError(
+                f"output_size={output_size} does not match output_shape {self.output_shape} for head='conv'"
+            )
         self.output_size = int(output_size) if output_size is not None else map_size
         print("output size=", self.output_size)
         self.nFC = nFC
@@ -213,22 +235,33 @@ class NeuralNetwork(nn.Module):
         self.layer_encode = Encoder(nFilt0, kernel_stem, stride=self.stem_stride, activation=encode_activation)
 
         # Process: n_blocks dilated residual blocks, shape and channel count fixed at nFilt0
-        self.process = nn.ModuleList([
-            DilatedResidualBlock(nFilt0, kernel_coder, dilation_rates=self.dilation_rates,
-                                  dropout_rate=block_dropout_rate, activation=block_activation)
-            for _ in range(n_blocks)
-        ])
+        self.process = nn.ModuleList(
+            [
+                DilatedResidualBlock(
+                    nFilt0,
+                    kernel_coder,
+                    dilation_rates=self.dilation_rates,
+                    dropout_rate=block_dropout_rate,
+                    activation=block_activation,
+                )
+                for _ in range(n_blocks)
+            ]
+        )
 
         # Decode: single conv, nFilt0 -> nFilt0 channels, shape unchanged
         self.layer_decode = Decoder(nFilt0, nFilt0, kernel_stem, activation=decode_activation)
 
         self.pool_output = tuple(pool_output)
-        if head == 'conv':
+        if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.fc_widths = []
-            self.conv_head = ConvMapHead(nFilt0, out_channels=2 if predict_variance else 1,
-                                         n_blocks=n_head_blocks, activation=block_activation,
-                                         dropout_rate=fc_dropout_rate)
+            self.conv_head = ConvMapHead(
+                nFilt0,
+                out_channels=2 if predict_variance else 1,
+                n_blocks=n_head_blocks,
+                activation=block_activation,
+                dropout_rate=fc_dropout_rate,
+            )
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
             # Identical to Unet3d_ResBlock.py's head.
@@ -274,25 +307,29 @@ class NeuralNetwork(nn.Module):
         if (nSpec, nX, nY) != self.input_shape:
             raise ValueError(
                 f"input spatial/spectral shape {(nSpec, nX, nY)} does not match the "
-                f"model's input_shape {self.input_shape}")
+                f"model's input_shape {self.input_shape}"
+            )
         x = torch.reshape(x, (nBatch, 1, nSpec, nX, nY))
 
         # Encode
         x = self.layer_encode(x)
         step = 0
         if saveLatentImages:
-            SaveSummedSpectralChannels(x, step, self.saveItr); step += 1
+            SaveSummedSpectralChannels(x, step, self.saveItr)
+            step += 1
 
         # Process: sequence of dilated residual blocks, shape/channels fixed throughout
         for block in self.process:
             x = block(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x, step, self.saveItr); step += 1
+                SaveSummedSpectralChannels(x, step, self.saveItr)
+                step += 1
 
         # Decode
         x = self.layer_decode(x)
         if saveLatentImages:
-            SaveSummedSpectralChannels(x, step, self.saveItr); step += 1
+            SaveSummedSpectralChannels(x, step, self.saveItr)
+            step += 1
 
         # Head
         mean, logvar = self._run_head(x)
@@ -304,8 +341,8 @@ class NeuralNetwork(nn.Module):
     def _run_head(self, x):
         """Body features -> (mean, logvar), each flattened to (nBatch, output_size); logvar is None
         unless predict_variance. 'conv': one output map channel each; 'fc': pool -> FC stack."""
-        if self.head_type == 'conv':
-            out = self.conv_head(x, self.output_shape).flatten(2)   # (nBatch, 1 or 2, H*W)
+        if self.head_type == "conv":
+            out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, 1 or 2, H*W)
             mean = self.out_activation(out[:, 0])
             return mean, (out[:, 1] if self.predict_variance else None)
         x = self.avgpool0(x)
@@ -328,7 +365,7 @@ class NeuralNetwork(nn.Module):
         for i in range(self.n_blocks):
             rows.append((f"process block {i}", self.nFilt0, self.encode_out_shape))
         rows.append(("decode", self.nFilt0, self.encode_out_shape))
-        if self.head_type == 'conv':
+        if self.head_type == "conv":
             rows += self.conv_head.stage_shapes(self.encode_out_shape[1:], self.output_shape)
         else:
             rows.append(("adaptive avg pool", self.nFilt0, self.pool_output))
@@ -379,16 +416,17 @@ class NeuralNetwork(nn.Module):
         """(label, [modules]) for every summary() row, in order: the stage_shapes() rows, then (fc
         head) the fully-connected layers. Rows with no parameters (input, pooling, resize) get []."""
         mods = [[], [self.layer_encode]] + [[block] for block in self.process] + [[self.layer_decode]]
-        if self.head_type == 'conv':
+        if self.head_type == "conv":
             head = self.conv_head.param_groups()
-            head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])   # output conv + activation
+            head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])  # output conv + activation
             mods += [m for _, m in head]
             return [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
-        mods.append([])                # adaptive avg pool
+        mods.append([])  # adaptive avg pool
         groups = [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
         # fc_hidden is [Linear, activation, Dropout] per hidden layer (see __init__)
-        groups += [(f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]])
-                   for k in range(len(self.fc_widths))]
+        groups += [
+            (f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]]) for k in range(len(self.fc_widths))
+        ]
         groups.append(("fc out (mean)", [self.fc_out_mean, self.out_activation]))
         if self.predict_variance:
             groups.append(("fc out (logvar)", [self.fc_out_logvar]))
@@ -416,23 +454,29 @@ class NeuralNetwork(nn.Module):
         decode_act = type(self.layer_decode.act).__name__
         fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
         out_act = type(self.out_activation).__name__
-        if self.head_type == 'conv':
-            head_act = ("head blocks=" + type(self.conv_head.blocks[0].act1).__name__
-                        if len(self.conv_head.blocks) else "head blocks=n/a (none)")
+        if self.head_type == "conv":
+            head_act = (
+                "head blocks=" + type(self.conv_head.blocks[0].act1).__name__
+                if len(self.conv_head.blocks)
+                else "head blocks=n/a (none)"
+            )
         else:
             head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
 
         print_fn(bar)
-        print_fn(f"{type(self).__name__}  |  {self.n_blocks} process blocks  |  "
-                 f"dilation_rates={self.dilation_rates}  |  kernel_stem={self.kernel_stem}  |  "
-                 f"kernel_coder={self.kernel_coder}  |  stem_stride={self.stem_stride}  |  "
-                 f"predict_variance={self.predict_variance}  |  head={self.head_type!r}")
+        print_fn(
+            f"{type(self).__name__}  |  {self.n_blocks} process blocks  |  "
+            f"dilation_rates={self.dilation_rates}  |  kernel_stem={self.kernel_stem}  |  "
+            f"kernel_coder={self.kernel_coder}  |  stem_stride={self.stem_stride}  |  "
+            f"predict_variance={self.predict_variance}  |  head={self.head_type!r}"
+        )
         nS, nX, nY = self.input_shape
-        print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  "
-                 f"output: (nBatch, {self.output_size})")
-        print_fn(f"activations: encode={encode_act}  process blocks={block_act}  "
-                 f"decode={decode_act}  {head_act}  "
-                 f"output={out_act}")
+        print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  output: (nBatch, {self.output_size})")
+        print_fn(
+            f"activations: encode={encode_act}  process blocks={block_act}  "
+            f"decode={decode_act}  {head_act}  "
+            f"output={out_act}"
+        )
         print_fn("-" * (w + 58))
 
         def row_note(label):
@@ -442,7 +486,7 @@ class NeuralNetwork(nn.Module):
                 return f"activation={block_act}  dilation_rates={self.dilation_rates}"
             if label == "decode":
                 return f"activation={decode_act}"
-            if self.head_type == 'conv':
+            if self.head_type == "conv":
                 return self.conv_head.row_note(label)
             return None
 
@@ -464,7 +508,7 @@ class NeuralNetwork(nn.Module):
             print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
             print_layers(label)
 
-        if self.head_type == 'fc':
+        if self.head_type == "fc":
             flat = self.nFilt0 * int(np.prod(self.pool_output))
             print_fn(f"  {'flatten':<{w}}   features={flat}")
             in_f = flat
@@ -472,11 +516,15 @@ class NeuralNetwork(nn.Module):
                 label = f"fc hidden {k}"
                 print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
                 in_f = out_f
-            print_fn(f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
-                     f"params={params_col('fc out (mean)')}  activation={out_act}")
+            print_fn(
+                f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
+                f"params={params_col('fc out (mean)')}  activation={out_act}"
+            )
             if self.predict_variance:
-                print_fn(f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
-                         f"params={params_col('fc out (logvar)')}  activation=None")
+                print_fn(
+                    f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
+                    f"params={params_col('fc out (logvar)')}  activation=None"
+                )
         else:
             print_fn(f"  {'output (mean)':<{w}}   map -> (nBatch, {self.output_size})  activation={out_act}")
             if self.predict_variance:

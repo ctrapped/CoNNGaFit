@@ -1,9 +1,10 @@
 import glob
 import os
 import re
-import pandas as pd
+
 import h5py
 import numpy as np
+import pandas as pd
 from astropy.io import fits
 from torchvision.io import read_image
 
@@ -234,7 +235,7 @@ class CoNNGaFitImageDataset():
             min_label = np.min(label)
             if (min_label<0): min_label=0
             halfRange = (max_label-min_label)/2.
-            
+
             label = (label-min_label-halfRange) / halfRange
             if self.output_transform_filedir is not None:
                 try: hf_ot = h5py.File(self.output_transform_filedir,'r+')
@@ -252,10 +253,10 @@ class CoNNGaFitImageDataset():
                 except:hf_ot['max_label'][...]=current_max_label
                 try: hf_ot.create_dataset("min_label",data=current_min_label)
                 except: hf_ot['min_label'][...]=current_min_label
-             
+
                 hf_ot.close()
 
-                
+
         if self.map_labels_to_tanh=="symmetric_load": # For mass flux, -1 to 1
             hf_ot = h5py.File(self.output_transform_filedir,'r')
             max_label = np.array(hf_ot["max_label"])/1.
@@ -321,4 +322,3 @@ class CoNNGaFitImageInferenceDataset():
         if self.transform:
             image = self.transform(image)
         return image
-

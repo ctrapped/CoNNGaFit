@@ -1,4 +1,5 @@
 """Unet3d_ResBlock: stage-count validation, head/upsample configurations and analytic stage shapes."""
+
 from itertools import chain
 
 import pytest
@@ -12,8 +13,11 @@ UNHOOKED_ROWS = ("+ skip", "resize to map")
 def record_stage_shapes(model):
     """Hook every stage of model in execution order; returns the list the hooks append (channels, dims) to."""
     decoder = chain.from_iterable(zip(model.upsamples, model.dc_layers))
-    head = ([model.conv_head.pool, *model.conv_head.blocks, model.conv_head.out]
-            if model.head_type == "conv" else [model.avgpool0])
+    head = (
+        [model.conv_head.pool, *model.conv_head.blocks, model.conv_head.out]
+        if model.head_type == "conv"
+        else [model.avgpool0]
+    )
     recorded = []
     for module in [model.layer_stem, *model.encoder, *decoder, *head]:
         module.register_forward_hook(lambda m, inputs, out: recorded.append((out.shape[1], tuple(out.shape[2:]))))
@@ -37,14 +41,18 @@ def test_rejects_unknown_upsample_mode(make_model):
 
 @pytest.mark.parametrize("head", ["fc", "conv"])
 @pytest.mark.parametrize("upsample_mode", ["conv_transpose", "trilinear"])
-@pytest.mark.parametrize("input_shape, kernel", [
-    ((16, 16, 16), (3, 3, 3)),
-    ((13, 10, 11), (3, 3, 3)),
-    ((16, 16, 16), (4, 4, 4)),
-])
+@pytest.mark.parametrize(
+    "input_shape, kernel",
+    [
+        ((16, 16, 16), (3, 3, 3)),
+        ((13, 10, 11), (3, 3, 3)),
+        ((16, 16, 16), (4, 4, 4)),
+    ],
+)
 def test_forward_shape_for_every_configuration(make_model, make_cube, head, upsample_mode, input_shape, kernel):
-    model = make_model(unet, input_shape=input_shape, kernel_stem=kernel, kernel_coder=kernel,
-                       head=head, upsample_mode=upsample_mode)
+    model = make_model(
+        unet, input_shape=input_shape, kernel_stem=kernel, kernel_coder=kernel, head=head, upsample_mode=upsample_mode
+    )
     cube = make_cube(input_shape)
     assert model(cube).shape == (len(cube), input_shape[1] * input_shape[2])
 
@@ -62,6 +70,9 @@ def test_stage_shapes_match_forward_pass(make_model, make_cube, head, upsample_m
     model = make_model(unet, head=head, upsample_mode=upsample_mode)
     recorded = record_stage_shapes(model)
     model(make_cube())
-    expected = [(feats, tuple(shape)) for label, feats, shape in model.stage_shapes()[1:]
-                if not any(tag in label for tag in UNHOOKED_ROWS)]
+    expected = [
+        (feats, tuple(shape))
+        for label, feats, shape in model.stage_shapes()[1:]
+        if not any(tag in label for tag in UNHOOKED_ROWS)
+    ]
     assert recorded == expected

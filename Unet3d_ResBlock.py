@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, ConvMapHead, _match_spatial
+from Unet_blocks import ConvMapHead, DeconvBlock, ResidualBlock, Stem, Upsample, _match_spatial
 from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
@@ -36,9 +36,9 @@ def _check_stage_compatibility(input_shape, n_stages):
     for name, n0, n_stem in zip(("spectral", "x", "y"), input_shape, stem_shape):
         if n_stem < 1:
             raise ValueError(
-                f"input {name} axis = {n0} is too small: the stem reduces it to "
-                f"{n_stem} (< 1). Enlarge that axis.")
-        cap, n = 0, n_stem            # count ceil-halvings this axis can take before hitting 1
+                f"input {name} axis = {n0} is too small: the stem reduces it to {n_stem} (< 1). Enlarge that axis."
+            )
+        cap, n = 0, n_stem  # count ceil-halvings this axis can take before hitting 1
         while n >= 2:
             n = -(-n // 2)
             cap += 1
@@ -49,8 +49,10 @@ def _check_stage_compatibility(input_shape, n_stages):
         raise ValueError(
             f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the "
             f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
-            f"Use n_stages <= {cap + 1} or enlarge that axis.")
+            f"Use n_stages <= {cap + 1} or enlarge that axis."
+        )
     return stem_shape
+
 
 #### Full network ####
 class NeuralNetwork(nn.Module):
@@ -145,13 +147,29 @@ class NeuralNetwork(nn.Module):
         its own module.
     """
 
-    def __init__(self, input_shape, nFilt0, kernel_stem, kernel_coder, nFC, n_stages=4,
-                 n_fc_layers=1, output_size=None, pool_output=(8, 8, 8),
-                 fc_dropout_rate=0.0, block_dropout_rate=0.0,
-                 stem_activation=nn.LeakyReLU, block_activation=nn.ReLU,
-                 fc_activation=nn.LeakyReLU, output_activation=nn.Identity,
-                 upsample_mode='conv_transpose', predict_variance=False,
-                 head='fc', output_shape=None, n_head_blocks=2):
+    def __init__(
+        self,
+        input_shape,
+        nFilt0,
+        kernel_stem,
+        kernel_coder,
+        nFC,
+        n_stages=4,
+        n_fc_layers=1,
+        output_size=None,
+        pool_output=(8, 8, 8),
+        fc_dropout_rate=0.0,
+        block_dropout_rate=0.0,
+        stem_activation=nn.LeakyReLU,
+        block_activation=nn.ReLU,
+        fc_activation=nn.LeakyReLU,
+        output_activation=nn.Identity,
+        upsample_mode="conv_transpose",
+        predict_variance=False,
+        head="fc",
+        output_shape=None,
+        n_head_blocks=2,
+    ):
         super(NeuralNetwork, self).__init__()
         self.predict_variance = predict_variance
         if n_stages < 2:
@@ -161,22 +179,25 @@ class NeuralNetwork(nn.Module):
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
         self.n_stages = n_stages
-        if head not in ('fc', 'conv'):
+        if head not in ("fc", "conv"):
             raise ValueError(f"unknown head {head!r}; use 'fc' or 'conv'")
         self.head_type = head
         # Map grid of the prediction: required by the conv head, optional for the fc head.
-        self.output_shape = (tuple(int(v) for v in output_shape) if output_shape is not None
-                             else (input_shape[1:] if head == 'conv' else None))
-        map_size = (int(np.prod(self.output_shape)) if self.output_shape is not None
-                    else input_shape[1] * input_shape[2])
-        if head == 'conv' and output_size is not None and int(output_size) != map_size:
-            raise ValueError(f"output_size={output_size} does not match output_shape "
-                             f"{self.output_shape} for head='conv'")
+        self.output_shape = (
+            tuple(int(v) for v in output_shape)
+            if output_shape is not None
+            else (input_shape[1:] if head == "conv" else None)
+        )
+        map_size = int(np.prod(self.output_shape)) if self.output_shape is not None else input_shape[1] * input_shape[2]
+        if head == "conv" and output_size is not None and int(output_size) != map_size:
+            raise ValueError(
+                f"output_size={output_size} does not match output_shape {self.output_shape} for head='conv'"
+            )
         self.output_size = int(output_size) if output_size is not None else map_size
         # fail fast if this input can't be halved n_stages-1 times after the stem
         self.stem_out_shape = _check_stage_compatibility(input_shape, n_stages)
         print("output size=", self.output_size)
-        self.nFC=nFC
+        self.nFC = nFC
         self.saveItr = 0  # forward() call counter; numbers the latent-image filenames
 
         # Stem: stride-2 conv + stride-2 maxpool + activation, reducing every axis by exactly ceil(N/4)
@@ -184,7 +205,7 @@ class NeuralNetwork(nn.Module):
 
         # Encoder: stage 0 keeps the stem's shape/channels; each later stage -> ceil(N/2)
         # per axis and doubles the channel count.
-        enc_channels = [nFilt0 * (2 ** i) for i in range(n_stages)]
+        enc_channels = [nFilt0 * (2**i) for i in range(n_stages)]
         self.nFilt0 = nFilt0
         self.kernel_stem = tuple(kernel_stem)
         self.kernel_coder = tuple(kernel_coder)
@@ -193,10 +214,26 @@ class NeuralNetwork(nn.Module):
         prev = nFilt0
         for i, ch in enumerate(enc_channels):
             downsample = i > 0
-            self.encoder.append(nn.Sequential(
-                ResidualBlock(prev,ch,downsample=downsample,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation),
-                ResidualBlock(ch,ch,downsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
-            ))
+            self.encoder.append(
+                nn.Sequential(
+                    ResidualBlock(
+                        prev,
+                        ch,
+                        downsample=downsample,
+                        kernel1=kernel_coder,
+                        dropout_rate=block_dropout_rate,
+                        activation=block_activation,
+                    ),
+                    ResidualBlock(
+                        ch,
+                        ch,
+                        downsample=False,
+                        kernel1=kernel_coder,
+                        dropout_rate=block_dropout_rate,
+                        activation=block_activation,
+                    ),
+                )
+            )
             prev = ch
 
         # Decoder: stage j upsamples the running tensor, concatenates the skip map from
@@ -207,23 +244,43 @@ class NeuralNetwork(nn.Module):
             enc_idx = n_stages - 2 - j
             in_ch = enc_channels[n_stages - 1 - j]
             out_ch = enc_channels[enc_idx]
-            self.upsamples.append(Upsample(in_ch,out_ch,kernel1=kernel_coder,mode=upsample_mode))
-            self.dc_layers.append(nn.Sequential(
-                DeconvBlock(2*out_ch,out_ch,upsample=True,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation),
-                DeconvBlock(out_ch,out_ch,upsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
-            ))
+            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=kernel_coder, mode=upsample_mode))
+            self.dc_layers.append(
+                nn.Sequential(
+                    DeconvBlock(
+                        2 * out_ch,
+                        out_ch,
+                        upsample=True,
+                        kernel1=kernel_coder,
+                        dropout_rate=block_dropout_rate,
+                        activation=block_activation,
+                    ),
+                    DeconvBlock(
+                        out_ch,
+                        out_ch,
+                        upsample=False,
+                        kernel1=kernel_coder,
+                        dropout_rate=block_dropout_rate,
+                        activation=block_activation,
+                    ),
+                )
+            )
 
         # Identity pass-through on the skip connections; a named module so it can later be
         # swapped for a learned transform without touching forward().
         self.featureForwarding = nn.Sequential()
 
         self.pool_output = tuple(pool_output)
-        if head == 'conv':
+        if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.fc_widths = []
-            self.conv_head = ConvMapHead(nFilt0, out_channels=2 if predict_variance else 1,
-                                         n_blocks=n_head_blocks, activation=block_activation,
-                                         dropout_rate=fc_dropout_rate)
+            self.conv_head = ConvMapHead(
+                nFilt0,
+                out_channels=2 if predict_variance else 1,
+                n_blocks=n_head_blocks,
+                activation=block_activation,
+                dropout_rate=fc_dropout_rate,
+            )
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
             self.avgpool0 = nn.AdaptiveAvgPool3d(self.pool_output)
@@ -252,7 +309,6 @@ class NeuralNetwork(nn.Module):
                 self.fc_out_logvar = nn.Linear(in_f, self.output_size)
         self.out_activation = output_activation()
 
-
     def forward(self, x, saveLatentImages=False):
         """Run the network on a batch of datacubes.
 
@@ -268,25 +324,28 @@ class NeuralNetwork(nn.Module):
             tuple of two such tensors - logvar is an unconstrained per-element log-variance
             (exp(logvar) to get the variance), with no output_activation applied.
         """
-        nBatch,nSpec,nX,nY = x.size()
+        nBatch, nSpec, nX, nY = x.size()
         if (nSpec, nX, nY) != self.input_shape:
             raise ValueError(
                 f"input spatial/spectral shape {(nSpec, nX, nY)} does not match the "
-                f"model's input_shape {self.input_shape}")
-        x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
+                f"model's input_shape {self.input_shape}"
+            )
+        x = torch.reshape(x, (nBatch, 1, nSpec, nX, nY))
 
         # Stem
         x = self.layer_stem(x)
         step = 0
         if saveLatentImages:
-            SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
+            SaveSummedSpectralChannels(x, step, self.saveItr)
+            step += 1
 
         # Encoder: run every stage, keep all but the last as skip connections
         skips = []
         for i, stage in enumerate(self.encoder):
             x = stage(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
+                SaveSummedSpectralChannels(x, step, self.saveItr)
+                step += 1
             if i < len(self.encoder) - 1:
                 skips.append(self.featureForwarding(x))
 
@@ -298,7 +357,8 @@ class NeuralNetwork(nn.Module):
             x = torch.cat([x, skip], dim=1)
             x = dc(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
+                SaveSummedSpectralChannels(x, step, self.saveItr)
+                step += 1
 
         # Head
         mean, logvar = self._run_head(x)
@@ -310,8 +370,8 @@ class NeuralNetwork(nn.Module):
     def _run_head(self, x):
         """Body features -> (mean, logvar), each flattened to (nBatch, output_size); logvar is None
         unless predict_variance. 'conv': one output map channel each; 'fc': pool -> FC stack."""
-        if self.head_type == 'conv':
-            out = self.conv_head(x, self.output_shape).flatten(2)   # (nBatch, 1 or 2, H*W)
+        if self.head_type == "conv":
+            out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, 1 or 2, H*W)
             mean = self.out_activation(out[:, 0])
             return mean, (out[:, 1] if self.predict_variance else None)
         x = self.avgpool0(x)
@@ -390,14 +450,14 @@ class NeuralNetwork(nn.Module):
             enc_idx = self.n_stages - 2 - j
             out_ch = self.enc_channels[enc_idx]
             up_mode = self.upsamples[j].mode
-            up_shape = tuple((2 * s - 1 if up_mode == 'conv_transpose' else 2 * s) for s in shape)
+            up_shape = tuple((2 * s - 1 if up_mode == "conv_transpose" else 2 * s) for s in shape)
             rows.append((f"decoder {j}: upsample", out_ch, up_shape))
             skip = enc_shapes[enc_idx]
             rows.append((f"decoder {j}: + skip(enc {enc_idx})", 2 * out_ch, skip))
             rows.append((f"decoder {j}: deconv block", out_ch, skip))
             shape = skip
 
-        if self.head_type == 'conv':
+        if self.head_type == "conv":
             rows += self.conv_head.stage_shapes(shape[1:], self.output_shape)
         else:
             rows.append(("adaptive avg pool", self.nFilt0, self.pool_output))
@@ -409,17 +469,18 @@ class NeuralNetwork(nn.Module):
         resize) get []."""
         mods = [[], [self.layer_stem]] + [[stage] for stage in self.encoder]
         for up, dc in zip(self.upsamples, self.dc_layers):
-            mods += [[up], [], [dc]]   # upsample, + skip (concat), deconv block
-        if self.head_type == 'conv':
+            mods += [[up], [], [dc]]  # upsample, + skip (concat), deconv block
+        if self.head_type == "conv":
             head = self.conv_head.param_groups()
-            head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])   # output conv + activation
+            head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])  # output conv + activation
             mods += [m for _, m in head]
             return [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
-        mods.append([])                # adaptive avg pool
+        mods.append([])  # adaptive avg pool
         groups = [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
         # fc_hidden is [Linear, activation, Dropout] per hidden layer (see __init__)
-        groups += [(f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]])
-                   for k in range(len(self.fc_widths))]
+        groups += [
+            (f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]]) for k in range(len(self.fc_widths))
+        ]
         groups.append(("fc out (mean)", [self.fc_out_mean, self.out_activation]))
         if self.predict_variance:
             groups.append(("fc out (logvar)", [self.fc_out_logvar]))
@@ -451,23 +512,26 @@ class NeuralNetwork(nn.Module):
         block_act = type(self.encoder[0][0].act1).__name__  # same class at every block/site
         fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
         out_act = type(self.out_activation).__name__
-        if self.head_type == 'conv':
-            head_act = ("head blocks=" + type(self.conv_head.blocks[0].act1).__name__
-                        if len(self.conv_head.blocks) else "head blocks=n/a (none)")
+        if self.head_type == "conv":
+            head_act = (
+                "head blocks=" + type(self.conv_head.blocks[0].act1).__name__
+                if len(self.conv_head.blocks)
+                else "head blocks=n/a (none)"
+            )
         else:
             head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
         upsample_mode = self.upsamples[0].mode  # same mode at every decoder stage
 
         print_fn(bar)
-        print_fn(f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
-                 f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
-                 f"kernel_coder={self.kernel_coder}  |  upsample_mode={upsample_mode!r}  |  "
-                 f"predict_variance={self.predict_variance}  |  head={self.head_type!r}")
+        print_fn(
+            f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
+            f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
+            f"kernel_coder={self.kernel_coder}  |  upsample_mode={upsample_mode!r}  |  "
+            f"predict_variance={self.predict_variance}  |  head={self.head_type!r}"
+        )
         nS, nX, nY = self.input_shape
-        print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  "
-                 f"output: (nBatch, {self.output_size})")
-        print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  "
-                 f"{head_act}  output={out_act}")
+        print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  output: (nBatch, {self.output_size})")
+        print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  {head_act}  output={out_act}")
         print_fn("-" * (w + 58))
 
         def row_note(label):
@@ -479,7 +543,7 @@ class NeuralNetwork(nn.Module):
                 return f"activation={block_act}"
             if label.endswith(": upsample"):
                 return f"mode={upsample_mode!r}"
-            if self.head_type == 'conv':
+            if self.head_type == "conv":
                 return self.conv_head.row_note(label)
             return None
 
@@ -501,7 +565,7 @@ class NeuralNetwork(nn.Module):
             print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
             print_layers(label)
 
-        if self.head_type == 'fc':
+        if self.head_type == "fc":
             flat = self.nFilt0 * int(np.prod(self.pool_output))
             print_fn(f"  {'flatten':<{w}}   features={flat}")
             in_f = flat
@@ -509,11 +573,15 @@ class NeuralNetwork(nn.Module):
                 label = f"fc hidden {k}"
                 print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
                 in_f = out_f
-            print_fn(f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
-                     f"params={params_col('fc out (mean)')}  activation={out_act}")
+            print_fn(
+                f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
+                f"params={params_col('fc out (mean)')}  activation={out_act}"
+            )
             if self.predict_variance:
-                print_fn(f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
-                         f"params={params_col('fc out (logvar)')}  activation=None")
+                print_fn(
+                    f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
+                    f"params={params_col('fc out (logvar)')}  activation=None"
+                )
         else:
             print_fn(f"  {'output (mean)':<{w}}   map -> (nBatch, {self.output_size})  activation={out_act}")
             if self.predict_variance:

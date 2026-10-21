@@ -6,7 +6,7 @@ Quartz-specific setup. For the training workflow itself see
 Quartz: NVIDIA V100 / H100 GPUs.
 
 
-## 1. Create conda environment 
+## 1. Create conda environment
 
 
 Create a conda environment using the provided .yaml file. This primarily has the specific pytorch-cuda version needed for Quartz. Make sure you have set your conda directory set to your [SLATE project space](https://servicenow.iu.edu/kb?id=kb_article_view&sysparm_article=KB0022379).
@@ -19,7 +19,7 @@ conda activate connga
 
 Verify pytorch is correctly setup using the interactive job below.
 
-## 2. Interactive jobs 
+## 2. Interactive jobs
 
 
 To run an interactive job on the debug queue run the line below, replacing `<ACCOUNT>` with your account number:
@@ -48,7 +48,7 @@ Below is an example SLURM job script for running on a single GPU.
 #SBATCH --partition=h100-single
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=10
-#SBATCH --gpus-per-node=1 
+#SBATCH --gpus-per-node=1
 #SBATCH --time=02:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err

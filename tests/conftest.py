@@ -1,4 +1,5 @@
 """Shared fixtures for the network tests: small, CPU-sized models and input cubes."""
+
 import pytest
 import torch
 
@@ -31,14 +32,18 @@ def network(request):
 @pytest.fixture
 def make_model():
     """Factory for a small module.NeuralNetwork; keyword arguments override the defaults."""
+
     def make(module, **overrides):
         return module.NeuralNetwork(**{**COMMON_KWARGS, **SMALL_KWARGS[module], **overrides})
+
     return make
 
 
 @pytest.fixture
 def make_cube():
     """Factory for a random batch of datacubes of shape (BATCH_SIZE, *input_shape)."""
+
     def make(input_shape=INPUT_SHAPE):
         return torch.randn(BATCH_SIZE, *input_shape)
+
     return make

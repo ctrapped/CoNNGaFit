@@ -1,10 +1,8 @@
-import os
-import pandas as pd
-import numpy as np
 import h5py
+import numpy as np
+from astropy.io import fits
 from matplotlib import pyplot as plt
 
-from astropy.io import fits
 #from torchvision.io import read_image
 deg2arcsec = 60*60
 
@@ -25,10 +23,10 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
     hdul = fits.open(imageDir)
     originalPixelRes = np.abs(hdul[0].header['CDELT1']*deg2arcsec)
     print('pixel res = ',hdul[0].header['CDELT1']*deg2arcsec)
-    rawdata = hdul[0].data 
-    
+    rawdata = hdul[0].data
+
     print("Shape of raw data",np.shape(rawdata))
-    
+
     if saveImages:
         plt.imshow(np.sum(rawdata,axis=1)[0,:,:])
         plt.colorbar()
@@ -37,8 +35,8 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
         hf_original.create_dataset('image',data=np.sum(rawdata,axis=1)[0,:,:])
         hf_original.close()
         plt.close()
-        
-    
+
+
     newImage = np.zeros((targetNpix,targetNpix,targetNspec))
 
     nBin = int(np.round(np.shape(rawdata)[3] / targetNpix))
@@ -46,9 +44,9 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
     newdata = rawdata[0,:,:,:]
     print("shape of newdata=",np.shape(newdata))
     all_but_first = tuple([1,2])
-    
+
     nSpec,nPix,tmp = np.shape(newdata)
-    
+
     dx = int(np.round((targetNpix - nPix/nBin)/2))
     ds = int(np.round((targetNspec-nSpec)/2))
     print("ds=",ds)
@@ -66,11 +64,11 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
     print("ntrunc=",nTrunc)
     offset = nSpec - nTrunc
     print("offset=",offset)
-    
+
     pixOffset=0
     if int(nPix/nBin)+dx > targetNpix:
         pixOffset = int(np.round((targetNpix - int(nPix/nBin) - np.abs(dx))/2))
-    
+
     print('pixOffset=',pixOffset)
     print('pixOffset0=',pixOffset0)
 
@@ -95,9 +93,7 @@ def FITS_to_CoNNGaFit(imageDir,output,targetNpix,targetNspec,distance=-1,saveIma
     hf.create_dataset('pixelRes_arcsec',data = originalPixelRes*nBin)
     hf.create_dataset('pixelRes_kpc',data = originalPixelRes*nBin /60/60 * np.pi/180 * distance)
     hf.close()
-    
+
     print("nBin=",nBin)
     print("newPixelRes=",originalPixelRes*nBin," arcsec")
     print("newPixelRes=",originalPixelRes*nBin /60/60 * np.pi/180 * distance," kpc")
-
-

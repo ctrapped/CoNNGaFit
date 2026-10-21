@@ -1,5 +1,7 @@
 import argparse
+
 from UseModel import RunInferences
+
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
 ####input datacubes. See UseModel.RunInferences for the full parameter description.
 #

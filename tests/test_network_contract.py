@@ -1,4 +1,5 @@
 """Behaviour shared by every regression network module: shapes, heads, gradients and uncertainty estimates."""
+
 import pytest
 import torch
 from torch import nn
@@ -52,12 +53,15 @@ def test_conv_head_requires_one_output_per_pixel(network, make_model):
         make_model(network, head="conv", output_size=OUTPUT_SIZE)
 
 
-@pytest.mark.parametrize("nFC, n_fc_layers, expected", [
-    (8, 1, [8]),
-    (8, 2, [8, 8]),
-    ([8, 6], 1, [8, 6]),
-    (0, 1, []),
-])
+@pytest.mark.parametrize(
+    "nFC, n_fc_layers, expected",
+    [
+        (8, 1, [8]),
+        (8, 2, [8, 8]),
+        ([8, 6], 1, [8, 6]),
+        (0, 1, []),
+    ],
+)
 def test_fc_hidden_widths(network, make_model, make_cube, nFC, n_fc_layers, expected):
     model = make_model(network, nFC=nFC, n_fc_layers=n_fc_layers)
     assert model.fc_widths == expected

@@ -1,11 +1,19 @@
 """Unet_blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
+
 import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from Unet_blocks import (ConvMapHead, DilatedResidualBlock, ResBlock2d, SpectralAttentionPool,
-                         _ceil_conv_pad, _doubling_deconv_pads, _match_spatial)
+from Unet_blocks import (
+    ConvMapHead,
+    DilatedResidualBlock,
+    ResBlock2d,
+    SpectralAttentionPool,
+    _ceil_conv_pad,
+    _doubling_deconv_pads,
+    _match_spatial,
+)
 
 LENGTHS = range(1, 12)
 KERNELS = (2, 3, 4, 5)
@@ -37,11 +45,14 @@ def test_doubling_deconv_pads_give_2n_minus_1(n, k):
     assert deconv(torch.zeros(1, 1, n, n, n)).shape[2:] == (2 * n - 1,) * 3
 
 
-@pytest.mark.parametrize("x_shape, ref_shape", [
-    ((7, 8, 9), (5, 6, 7)),
-    ((3, 4, 5), (5, 6, 7)),
-    ((3, 8, 5), (6, 4, 5)),
-])
+@pytest.mark.parametrize(
+    "x_shape, ref_shape",
+    [
+        ((7, 8, 9), (5, 6, 7)),
+        ((3, 4, 5), (5, 6, 7)),
+        ((3, 8, 5), (6, 4, 5)),
+    ],
+)
 def test_match_spatial_aligns_to_reference(x_shape, ref_shape):
     ref = torch.zeros(BATCH, CHANNELS, *ref_shape)
     assert _match_spatial(torch.randn(BATCH, CHANNELS, *x_shape), ref).shape == ref.shape

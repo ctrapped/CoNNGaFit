@@ -6,7 +6,7 @@ Short guide to training a CoNNGaFit network on your personal computer or GPU clu
 
 ### Personal Computer
 
-Install the requisite python packages below. Make sure to use a CUDA-enabled version of `pytorch` build if training on GPU. 
+Install the requisite python packages below. Make sure to use a CUDA-enabled version of `pytorch` build if training on GPU.
 
 
 ```

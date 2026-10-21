@@ -1,7 +1,8 @@
 import math
+
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 # Shared building blocks for the CoNNGaFit 3-d networks:
 #   Stem, ResidualBlock, Upsample, DeconvBlock - Unet3d_ResBlock.NeuralNetwork and Unet3d_DDPM.DenoisingUNet3d
@@ -121,8 +122,9 @@ class Stem(nn.Module):
     def forward(self, x):
         """x: (nBatch, 1, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4))."""
         x = self.conv(F.pad(x, self.conv_pad))
-        x = self.pool(F.pad(x, self.pool_pad, mode='constant', value=float('-inf')))
+        x = self.pool(F.pad(x, self.pool_pad, mode="constant", value=float("-inf")))
         return self.act(x)
+
 
 #### Encoder-side residual block ####
 class ResidualBlock(nn.Module):
@@ -154,18 +156,18 @@ class ResidualBlock(nn.Module):
             # conv1 pads 0; forward() applies F.pad first so any kernel lands on ceil(N/2).
             stride = (2, 2, 2)
             self.down_pad = _ceil_conv_pad(kernel1, stride)
-            self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=stride,padding=0)
+            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
             # a stride-2 1x1x1 conv already yields ceil(N/2), so the skip needs no padding.
             self.shortcut = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(2,2,2)),
-                nn.BatchNorm3d(out_channels)
+                nn.Conv3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(2, 2, 2)),
+                nn.BatchNorm3d(out_channels),
             )
         else:
-            self.conv1 = nn.Conv3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding='same')
+            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
             self.shortcut = nn.Sequential()
 
         # conv2 keeps the shape fixed
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding='same')
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
         self.bn1 = nn.BatchNorm3d(out_channels)
         self.bn2 = nn.BatchNorm3d(out_channels)
         self.dropout = nn.Dropout3d(p=dropout_rate)
@@ -173,7 +175,7 @@ class ResidualBlock(nn.Module):
         self.act2 = activation()
         self.act3 = activation()
 
-    def forward(self,x):
+    def forward(self, x):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D', H', W'), where
         D'/H'/W' are ceil(D/2) etc. if downsample else unchanged."""
         shortcut = self.shortcut(x)
@@ -184,6 +186,7 @@ class ResidualBlock(nn.Module):
         x = x + shortcut
         x = self.act3(x)
         return self.dropout(x)
+
 
 #### Decoder-side spatial upsampler ####
 class Upsample(nn.Module):
@@ -212,24 +215,32 @@ class Upsample(nn.Module):
         mode: 'conv_transpose' (default) or 'trilinear'.
     """
 
-    def __init__(self, in_channels, out_channels, kernel1, mode='conv_transpose'):
+    def __init__(self, in_channels, out_channels, kernel1, mode="conv_transpose"):
         super().__init__()
-        if mode not in ('conv_transpose', 'trilinear'):
+        if mode not in ("conv_transpose", "trilinear"):
             raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'trilinear'")
         self.mode = mode
-        if mode == 'conv_transpose':
+        if mode == "conv_transpose":
             padding, output_padding = _doubling_deconv_pads(kernel1)
-            self.upconv1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(2,2,2),padding=padding,output_padding=output_padding)
+            self.upconv1 = nn.ConvTranspose3d(
+                in_channels,
+                out_channels,
+                kernel_size=kernel1,
+                stride=(2, 2, 2),
+                padding=padding,
+                output_padding=output_padding,
+            )
         else:
-            self.resize = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
+            self.resize = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
             self.project = nn.Conv3d(in_channels, out_channels, kernel_size=1)
 
-    def forward(self,x):
+    def forward(self, x):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, ~2D, ~2H, ~2W) -
         exactly 2D-1 etc. for mode='conv_transpose', exactly 2D etc. for mode='trilinear'."""
-        if self.mode == 'conv_transpose':
+        if self.mode == "conv_transpose":
             return self.upconv1(x)
         return self.project(self.resize(x))
+
 
 #### Decoder-side deconvolution block ####
 class DeconvBlock(nn.Module):
@@ -253,17 +264,21 @@ class DeconvBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels, upsample, kernel1, dropout_rate=0.0, activation=nn.ReLU):
         super().__init__()
-        pad = _near_same_deconv_pad(kernel1)   # forward() trims any even-kernel overshoot
-        self.convtran1 = nn.ConvTranspose3d(in_channels,out_channels,kernel_size=kernel1,stride=(1,1,1),padding=pad)
+        pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
+        self.convtran1 = nn.ConvTranspose3d(
+            in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
+        )
         if upsample:
             self.shortcut = nn.Sequential(
-                nn.ConvTranspose3d(in_channels, out_channels,kernel_size=(1,1,1),stride=(1,1,1)),
-                nn.BatchNorm3d(out_channels)
+                nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(1, 1, 1)),
+                nn.BatchNorm3d(out_channels),
             )
         else:
             self.shortcut = nn.Sequential()
 
-        self.convtran2 = nn.ConvTranspose3d(out_channels, out_channels, kernel_size=kernel1, stride=(1,1,1),padding=pad)
+        self.convtran2 = nn.ConvTranspose3d(
+            out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
+        )
         self.bn1 = nn.BatchNorm3d(out_channels)
         self.bn2 = nn.BatchNorm3d(out_channels)
         self.dropout = nn.Dropout3d(p=dropout_rate)
@@ -271,9 +286,9 @@ class DeconvBlock(nn.Module):
         self.act2 = activation()
         self.act3 = activation()
 
-    def forward(self,x):
+    def forward(self, x):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D, H, W)."""
-        shortcut = self.shortcut(x)   # carries the target spatial shape
+        shortcut = self.shortcut(x)  # carries the target spatial shape
         x = self.act1(self.bn1(_match_spatial(self.convtran1(x), shortcut)))
         x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
         x = x + shortcut
@@ -305,16 +320,18 @@ class DilatedResidualBlock(nn.Module):
             activation is an independent module.
     """
 
-    def __init__(self, channels, kernel_size, dilation_rates=(1, 2, 4, 8, 4, 2, 1),
-                 dropout_rate=0.0, activation=nn.ReLU):
+    def __init__(
+        self, channels, kernel_size, dilation_rates=(1, 2, 4, 8, 4, 2, 1), dropout_rate=0.0, activation=nn.ReLU
+    ):
         super().__init__()
         self.dilation_rates = tuple(dilation_rates)
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
         self.acts = nn.ModuleList()
         for d in self.dilation_rates:
-            self.convs.append(nn.Conv3d(channels, channels, kernel_size=kernel_size,
-                                         stride=(1, 1, 1), dilation=d, padding='same'))
+            self.convs.append(
+                nn.Conv3d(channels, channels, kernel_size=kernel_size, stride=(1, 1, 1), dilation=d, padding="same")
+            )
             self.bns.append(nn.BatchNorm3d(channels))
             self.acts.append(activation())
         self.final_act = activation()
@@ -342,13 +359,13 @@ class SpectralAttentionPool(nn.Module):
 
     def __init__(self, channels):
         super().__init__()
-        self.score = nn.Conv3d(channels, 1, kernel_size=1) # (B, C, S, X, Y) -> (B, 1, S, X, Y)
+        self.score = nn.Conv3d(channels, 1, kernel_size=1)  # (B, C, S, X, Y) -> (B, 1, S, X, Y)
 
     def forward(self, x):
         # Compute per-pixel attention weights over the spectral axis
         # Score compresses the channels into a single attention map used to sum the spectral dimensions
         w = torch.softmax(self.score(x), dim=2)  # (B, 1, S, X, Y), sums to 1 over S
-        return (x * w).sum(dim=2)                # (B, C, X, Y)
+        return (x * w).sum(dim=2)  # (B, C, X, Y)
 
 
 class ResBlock2d(nn.Module):
@@ -358,13 +375,12 @@ class ResBlock2d(nn.Module):
 
     def __init__(self, in_channels, out_channels, activation=nn.ReLU, max_groups=8, kernel_size=3):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding='same')
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding='same')
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding="same")
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding="same")
         self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
         self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
         self.act1, self.act2 = activation(), activation()
-        self.shortcut = (nn.Conv2d(in_channels, out_channels, 1)
-                         if in_channels != out_channels else nn.Identity())
+        self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x):
         """x: (nBatch, in_channels, H, W) -> (nBatch, out_channels, H, W)."""
@@ -377,7 +393,7 @@ class ConvMapHead(nn.Module):
     """Fully convolutional head: 3-d features (nBatch, C, S, X, Y) -> 2-d maps (nBatch, out_channels, H, W).
 
     Collapses the spectral axis with SpectralAttentionPool, resizes bilinearly to the target map grid
-    (H, W), refines with `n_blocks` ResBlock2d and projects with a 3x3 conv. This ensures each output 
+    (H, W), refines with `n_blocks` ResBlock2d and projects with a 3x3 conv. This ensures each output
     pixel is predicted from the features at and around that pixel.
 
     Parameters:
@@ -389,22 +405,20 @@ class ConvMapHead(nn.Module):
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
     """
 
-    def __init__(self, channels, out_channels=1, n_blocks=2, activation=nn.ReLU, dropout_rate=0.0,
-                 max_groups=8):
+    def __init__(self, channels, out_channels=1, n_blocks=2, activation=nn.ReLU, dropout_rate=0.0, max_groups=8):
         super().__init__()
         if n_blocks < 0:
             raise ValueError("n_blocks must be >= 0")
         self.channels, self.out_channels = channels, out_channels
         self.pool = SpectralAttentionPool(channels)
-        self.blocks = nn.ModuleList([ResBlock2d(channels, channels, activation, max_groups)
-                                     for _ in range(n_blocks)])
+        self.blocks = nn.ModuleList([ResBlock2d(channels, channels, activation, max_groups) for _ in range(n_blocks)])
         self.dropout = nn.Dropout2d(p=dropout_rate)
         self.out = nn.Conv2d(channels, out_channels, 3, padding=1)
 
     def forward(self, x, map_shape):
         """x: (nBatch, C, S, X, Y) -> (nBatch, out_channels, *map_shape)."""
-        h = self.pool(x)                                                           # (B, C, X, Y)
-        h = F.interpolate(h, size=tuple(map_shape), mode='bilinear', align_corners=False)
+        h = self.pool(x)  # (B, C, X, Y)
+        h = F.interpolate(h, size=tuple(map_shape), mode="bilinear", align_corners=False)
         for blk in self.blocks:
             h = blk(h)
         return self.out(self.dropout(h))
@@ -412,8 +426,7 @@ class ConvMapHead(nn.Module):
     def stage_shapes(self, in_xy, map_shape):
         """(label, n_features, dims) rows for the head, given the (X, Y) of its input features."""
         c, map_shape = self.channels, tuple(map_shape)
-        rows = [("head: spectral attention pool", c, tuple(in_xy)),
-                ("head: resize to map", c, map_shape)]
+        rows = [("head: spectral attention pool", c, tuple(in_xy)), ("head: resize to map", c, map_shape)]
         rows += [(f"head: 2-d res block {k}", c, map_shape) for k in range(len(self.blocks))]
         rows.append(("head: output conv", self.out_channels, map_shape))
         return rows
