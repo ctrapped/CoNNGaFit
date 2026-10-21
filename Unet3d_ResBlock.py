@@ -115,8 +115,7 @@ class NeuralNetwork(nn.Module):
         stem_activation: activation for the stem (default nn.LeakyReLU).
         block_activation: activation at all three sites in every ResidualBlock/DeconvBlock
             (post-conv1, post-conv2, post residual-add; default nn.ReLU).
-        fc_activation: activation between hidden fully-connected layers, or after each of the
-            conv head's 3x3 convolutions (default nn.LeakyReLU).
+        fc_activation: activation between hidden fully-connected layers (default nn.LeakyReLU).
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         upsample_mode: how every decoder Upsample resizes spatially - 'conv_transpose'
             (default, a learned stride-2 ConvTranspose3d) or 'trilinear' (nn.Upsample's 3-d
@@ -155,9 +154,6 @@ class NeuralNetwork(nn.Module):
                  head='fc', output_shape=None, n_head_blocks=2):
         super(NeuralNetwork, self).__init__()
         self.predict_variance = predict_variance
-        if output_head not in ('fc', 'conv'):
-            raise ValueError(f"output_head must be 'fc' or 'conv', not {output_head!r}")
-        self.output_head = output_head
         if n_stages < 2:
             raise ValueError("n_stages must be >= 2 (need at least one skip connection)")
         input_shape = tuple(int(v) for v in input_shape)
@@ -216,15 +212,6 @@ class NeuralNetwork(nn.Module):
                 DeconvBlock(2*out_ch,out_ch,upsample=True,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation),
                 DeconvBlock(out_ch,out_ch,upsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
             ))
-
-        if output_head == 'conv':
-            # One more decoder stage, up to the stem conv's half resolution, with a skip
-            # connection from it (see Stem.forward's return_half)
-            self.upsample_half = Upsample(nFilt0,nFilt0,kernel1=kernel_coder,mode=upsample_mode)
-            self.dc_layer_half = nn.Sequential(
-                DeconvBlock(2*nFilt0,nFilt0,upsample=True,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation),
-                DeconvBlock(nFilt0,nFilt0,upsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
-            )
 
         # Identity pass-through on the skip connections; a named module so it can later be
         # swapped for a learned transform without touching forward().
@@ -289,10 +276,7 @@ class NeuralNetwork(nn.Module):
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
 
         # Stem
-        if self.output_head == 'conv':
-            x, stem_half = self.layer_stem(x, return_half=True)
-        else:
-            x = self.layer_stem(x)
+        x = self.layer_stem(x)
         step = 0
         if saveLatentImages:
             SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
@@ -305,7 +289,6 @@ class NeuralNetwork(nn.Module):
                 SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
             if i < len(self.encoder) - 1:
                 skips.append(self.featureForwarding(x))
-        bottleneck = x
 
         # Decoder: upsample, align to the matching skip map, concatenate, reduce channels
         for up, dc in zip(self.upsamples, self.dc_layers):
@@ -316,22 +299,6 @@ class NeuralNetwork(nn.Module):
             x = dc(x)
             if saveLatentImages:
                 SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
-
-        if self.output_head == 'conv':
-            # Last decoder stage, to half resolution, then the per-pixel head
-            x = self.upsample_half(x)
-            skip = self.featureForwarding(stem_half)
-            x = _match_spatial(x, skip)
-            x = torch.cat([x, skip], dim=1)
-            x = self.dc_layer_half(x)
-            if saveLatentImages:
-                SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
-            outputs = self.head(x, bottleneck, output_shape=(nX, nY))
-            self.saveItr += 1
-            mean = self.out_activation(outputs[0])
-            if self.predict_variance:
-                return mean, outputs[1]
-            return mean
 
         # Head
         mean, logvar = self._run_head(x)
@@ -482,10 +449,7 @@ class NeuralNetwork(nn.Module):
         # upsample_mode - read straight off a real Upsample instance.
         stem_act = type(self.layer_stem.act).__name__
         block_act = type(self.encoder[0][0].act1).__name__  # same class at every block/site
-        if self.output_head == 'conv':
-            fc_act = type(self.head.act1).__name__
-        else:
-            fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
+        fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
         out_act = type(self.out_activation).__name__
         if self.head_type == 'conv':
             head_act = ("head blocks=" + type(self.conv_head.blocks[0].act1).__name__
@@ -502,7 +466,6 @@ class NeuralNetwork(nn.Module):
         nS, nX, nY = self.input_shape
         print_fn(f"input:  (nBatch, nSpec={nS}, nX={nX}, nY={nY})  ->  "
                  f"output: (nBatch, {self.output_size})")
-        head_label = "conv head" if self.output_head == 'conv' else "fc hidden"
         print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  "
                  f"{head_act}  output={out_act}")
         print_fn("-" * (w + 58))
