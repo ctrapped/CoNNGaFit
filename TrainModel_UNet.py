@@ -51,7 +51,7 @@ TARGET_SETTINGS = {
 ####   PARAMETER FILES   ####
 #Keys every parameter file must have (see configs/*.toml for what each one does)
 HYPERPARAM_KEYS = {"learning_rate", "weight_decay", "epochs", "nFC", "nFilt0", "k0", "k1",
-                   "dropout_rate", "block_dropout_rate", "output_head"}
+                   "dropout_rate", "block_dropout_rate", "output_head", "label_scaling"}
 DATASET_KEYS = {"target", "augment", "inclinations", "radial_bins", "radial_projection", "training", "validation", "testing"}
 OPTIONAL_DATASET_KEYS = {"base_dir", "suffix"}
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'configs')
@@ -126,6 +126,9 @@ k1 = hyperparams["k1"]
 dropout_rate = hyperparams["dropout_rate"]
 block_dropout_rate = hyperparams["block_dropout_rate"]
 outputHead = hyperparams["output_head"]
+labelScaling = hyperparams["label_scaling"]
+if labelScaling not in ("none", "symmetric", "one-sided"):
+    raise ValueError(f'{args.hyperparams}: label_scaling = {labelScaling!r} should be "none", "symmetric" or "one-sided"')
 #############################
 
 
@@ -168,8 +171,7 @@ modelOutputPath = os.path.join(args.network_dir, runName)
 
 
 #### Load and Normalize Data ####
-training_data = CoNNGaFitImageDataset(trainingSources, target, augment=augmentTraining, radial_bins=radialBins, radial_projection=radialProjection, inclinations=inclinations, suffix=suffix,
-                                   transform = ToTensor())
+training_data = CoNNGaFitImageDataset(trainingSources, target, augment=augmentTraining, radial_bins=radialBins, radial_projection=radialProjection, inclinations=inclinations, suffix=suffix)
 
 if args.batch_size is not None:
     batchSizeDefault = None if args.batch_size == 0 else args.batch_size #--batch-size 0 means full-batch
@@ -186,18 +188,49 @@ else:
     batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
     print("Batches per training set = ",batchesPerTrainingSet)
 
-loader0 = DataLoader(training_data, batch_size = batchSize)
-data0 = next(iter(loader0))
-trainingMean = data0[0].mean()
-trainingStdv = data0[0].std()
-del loader0;del data0
+#### Image normalization, from every training image (augmentation doesn't change their mean/spread) ####
+#Each cube's mean and variance are combined exactly (Chan et al.'s parallel algorithm), one cube in memory at a time
+nPixels, trainingMean, sumSquaredDeviations = 0, 0.0, 0.0
+for i in range(len(training_data.img_paths)):
+    cube = training_data.image(i)
+    n, mean = cube.size, cube.mean(dtype=np.float64)
+    delta = mean - trainingMean
+    sumSquaredDeviations += cube.var(dtype=np.float64) * n + delta**2 * nPixels * n / (nPixels + n)
+    trainingMean += delta * n / (nPixels + n)
+    nPixels += n
+trainingStdv = np.sqrt(sumSquaredDeviations / nPixels)
+del cube
+print(f"Image normalization: mean = {trainingMean:.4g}, stdv = {trainingStdv:.4g}")
+
+#### Label scaling, from every training label (augmentation doesn't change their range) ####
+#Labels are scaled to (label - labelOffset) / labelScale for training; predictions and labels are
+#scaled back to physical units for every saved output and plot
+labelOffset, labelScale = 0.0, 1.0
+if labelScaling != "none":
+    allLabels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
+    if labelScaling == "symmetric": #e.g. mass flux: divide by max(|label|), to [-1, 1]
+        labelScale = np.max(np.abs(allLabels))
+    else: #"one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
+        labelOffset = (np.max(allLabels) + np.min(allLabels)) / 2
+        labelScale = (np.max(allLabels) - np.min(allLabels)) / 2
+    if not labelScale > 0:
+        raise ValueError(f"label_scaling = {labelScaling!r} needs training labels that aren't all {np.max(allLabels)}")
+    del allLabels
+    print(f"Label scaling ({labelScaling}): offset = {labelOffset:.4g}, scale = {labelScale:.4g}")
+
+def scale_labels(label):
+    return (label - labelOffset) / labelScale
+
+def to_physical(a):
+    """Scale labels or predictions back to physical units."""
+    return a * labelScale + labelOffset
 
 
-training_data = CoNNGaFitImageDataset(trainingSources, target, augment=augmentTraining, radial_bins=radialBins, radial_projection=radialProjection, inclinations=inclinations, suffix=suffix,
-                                   transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
+training_data.transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)])
+training_data.target_transform = scale_labels
 
 validation_data = CoNNGaFitImageDataset(validationSources, target, radial_bins=radialBins, radial_projection=radialProjection, inclinations=inclinations, suffix=suffix,
-                                   transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
+                                   transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]), target_transform=scale_labels)
 
 
 
@@ -238,8 +271,8 @@ def save_batch_outputs(X, y, pred, idx, names, outputBase, epoch, compImages=Tru
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
     image via its dataset index (idx), so names stay correct with shuffled or multiple batches."""
     npX = X.cpu().float().detach().numpy()
-    npY = y.cpu().float().detach().numpy()
-    npPred = pred.cpu().detach().numpy()
+    npY = to_physical(y.cpu().float().detach().numpy())
+    npPred = to_physical(pred.cpu().detach().numpy())
     for tt in range(len(idx)):
         outputName = outputBase+"_"+names[int(idx[tt])]+"_Epoch"+str(epoch)
         if compImages:
@@ -317,7 +350,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 
             if final:
                 save_batch_outputs(X, y, pred, idx, validationNames, imageOutput_validation, epoch)
-                allPred.append(npPred); allY.append(npY)
+                allPred.append(to_physical(npPred)); allY.append(to_physical(npY))
 
     accuracy = correct/total * 100
     validation_loss /= num_batches
@@ -367,7 +400,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
             if final:
                 save_batch_outputs(X, y, pred, idx, testingNames, imageOutput_finalTest, epoch)
-                allPred.append(npPred); allY.append(npY)
+                allPred.append(to_physical(npPred)); allY.append(to_physical(npY))
 
     accuracy = correct/total * 100
     test_loss /= num_batches
@@ -424,6 +457,8 @@ torch.save(model.state_dict(),modelOutputPath+".pt")
 #Save the normalization information for loading data
 hf_norm = h5py.File(modelOutputPath+".hdf5",'w')
 hf_norm.create_dataset("imageStats",data=np.array([trainingMean,trainingStdv]))
+hf_norm.create_dataset("labelScaling",data=labelScaling)
+hf_norm.create_dataset("labelStats",data=np.array([labelOffset,labelScale])) #physical label = scaled label * labelScale + labelOffset
 hf_norm.create_dataset("learningRate",data=learning_rate)
 hf_norm.create_dataset("nFC",data=nFC)
 hf_norm.create_dataset("weight_decay",data=weight_decay)
@@ -446,7 +481,7 @@ hf_norm.close()
 #Testing Data
 
 test_data = CoNNGaFitImageDataset(testingSources, target, radial_bins=radialBins, radial_projection=radialProjection, inclinations=inclinations, suffix=suffix,
-                                   transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]))
+                                   transform = Compose([ToTensor() , Normalize(trainingMean,trainingStdv)]), target_transform=scale_labels)
 
 test_dataloader = DataLoader(WithIndices(test_data), batch_size=batchSize)
 testingNames = test_data.names

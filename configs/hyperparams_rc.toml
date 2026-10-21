@@ -27,3 +27,9 @@ block_dropout_rate = 0.0
 #   "fc"           - the original fully connected output layer (nFC is then the bottleneck
 #                    size), for 40x40 images or radial curves
 output_head = "conv_halfres"
+
+# Label scaling, computed once from every training label and saved with the model:
+#   "none"      - train on labels in physical units
+#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. mass flux)
+#   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
+label_scaling = "none"
