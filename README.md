@@ -137,23 +137,6 @@ Run either with `--help` for the full flag list. `InferenceTest_ValidationSet.py
 
 ## Contributing
 
-`main` is protected: every change reaches it through a pull request that passes the test suite.
-
-1. **Branch from an up-to-date `main`**, named for the change (e.g. `fix-linear-schedule`, `add-ddpm-training`):
-   ```
-   git switch main && git pull
-   git switch -c <branch-name>
-   ```
-2. **Commit in small, self-contained steps** with messages that say what changed and why. Run the tests before pushing:
-   ```
-   pip install -e ".[dev]"
-   pytest
-   ```
-3. **Push and open a pull request** into `main`. The PR template asks for a summary, how it was tested, and whether checkpoints or data formats are affected.
-   ```
-   git push -u origin <branch-name>
-   ```
-4. **CI runs automatically** (`.github/workflows/tests.yml`: `pytest` on Python 3.11 and 3.12 with CPU-only PyTorch). Both checks must pass, and the branch must be up to date with `main`, before it can be merged. If `main` has moved on, use "Update branch" on the PR or `git merge main` locally.
-5. **Merge, then delete the branch.**
-
-New network code should come with tests in `tests/`; see `tests/conftest.py` for the shared small-model and datacube fixtures.
+`main` is protected: changes are merged through pull requests, and the tests
+(`.github/workflows/tests.yml`) must pass on Python 3.11 and 3.12 first. Work on a
+branch, add tests in `tests/` for new code, and run `pytest` locally before opening a PR.
