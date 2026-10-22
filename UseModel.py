@@ -57,7 +57,7 @@ def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params
 
     if networkType=='unet18': ####U-Net
         targetShape=[40,40] #output dimensions
-        from AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
+        from NetworkModels.AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
 
         modelOutputPath = modelPath or os.path.join('TrainedNetworks','hiResTests','MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt') #Address of desired model
 

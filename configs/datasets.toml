@@ -1,0 +1,38 @@
+# What TrainModel_UNet.py trains on by default (see Datasets.py)
+
+# Which annotation to learn:
+# mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity, radial_mass_flux, cylindrical_radial_mass_flux
+target = "radial_mass_flux" 
+
+# Rotations/flips added to the training set:
+# "major_axis" (4 per image, keeping the major axis along x), "all" (8 per image), or "none"
+augment = "major_axis"  
+
+# Which inclinations to use in every set: "all", or a list such as [30, 45]
+inclinations = [45] 
+
+#Learn 1-d Curves? (needs output_head = "fc"); 0 trains on maps
+radial_bins = 0
+
+#Where radial curves are measured: "face_on" (each snapshot's i0 image) or "sky"
+radial_projection = "face_on"  
+
+#VOF's outputSuffix in the filenames to load, if that run used one (the same for every folder)
+suffix = ""  # Optional
+
+#Base directory for relative paths below
+base_dir = "/N/project/choban_group/CONGA_project/VOF_outputs/FIRE-2"  # Optional
+
+#Directories for the training data and snapshots to load
+[training]
+"core_md/m12i_res7100" = [500, 600]
+"/path/to/m12f/vof_outputs" = 600
+"/path/to/m12b/vof_outputs" = 600
+
+#Directories for the Validation data and snapshots to load
+[validation]
+"/path/to/m12c/vof_outputs" = 600
+
+#Directories for the Testing data and snapshots to load
+[testing]
+"/path/to/m12m/vof_outputs" = 600
