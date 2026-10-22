@@ -1,4 +1,6 @@
 # CoNNGaFit
+[![tests](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml/badge.svg)](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml)
+
 <b>Co</b>nvoltuional <b>N</b>eural <b>N</b>etwork for <b>Ga</b>laxy <b>Fit</b>ting. Train and use convolutional neural networks to fit various galactic parameters to synthetic HI images. Training images and annotations for the FIRE simulations can be generated using VeryObservableFIRE
 
 ## Requirements
@@ -132,3 +134,9 @@ python InferenceTest_ValidationSet.py --sample-suffix finalSnapNoM12m --model-pa
 ```
 
 Run either with `--help` for the full flag list. `InferenceTest_ValidationSet.py` runs inference on a sample's validation-annotations CSV specifically, to spot-check predictions against known labels.
+
+## Contributing
+
+`main` is protected: changes are merged through pull requests, and the tests
+(`.github/workflows/tests.yml`) must pass on Python 3.11 and 3.12 first. Work on a
+branch, add tests in `tests/` for new code, and run `pytest` locally before opening a PR.

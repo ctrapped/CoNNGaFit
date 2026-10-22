@@ -43,10 +43,13 @@ def _batch_to_group_norm(module, max_groups):
 def make_beta_schedule(name, n_timesteps):
     """Per-step noise variances beta_t.
     'linear' - Ho et al. (2020). 'cosine' - Nichol & Dhariwal (2021); destroys signal more
-    gradually, which helps for small, low-resolution maps."""
+    gradually, which helps for small, low-resolution maps. Both are clamped to beta <= 0.999 so
+    alpha_bar stays positive; the linear schedule's 1000/T scaling otherwise reaches beta >= 1
+    for T <= 20."""
     if name == 'linear':
         scale = 1000.0 / n_timesteps
-        return torch.linspace(scale * 1e-4, scale * 2e-2, n_timesteps, dtype=torch.float64)
+        betas = torch.linspace(scale * 1e-4, scale * 2e-2, n_timesteps, dtype=torch.float64)
+        return betas.clamp(max=0.999)
     if name == 'cosine':
         s = 0.008
         steps = torch.arange(n_timesteps + 1, dtype=torch.float64) / n_timesteps
