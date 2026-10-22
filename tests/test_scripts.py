@@ -1,14 +1,15 @@
 """End-to-end smoke tests: train TrainModel_UNet.py for two epochs on synthetic VOF outputs, then
 check the checkpoint it writes rebuilds the network and reproduces the predictions it saved."""
+
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
+import tomllib
 import torch
 
 from Unet3d_ResBlock import NeuralNetwork
@@ -59,8 +60,13 @@ def write_configs(folder, head, radial_bins):
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": head}
     (folder / "hyperparams.toml").write_text("\n".join(toml_lines(hyperparams)) + "\n")
 
-    datasets = dict(target="radial_mass_flux", augment="major_axis", inclinations=[INCLINATION],
-                    radial_bins=radial_bins, radial_projection="sky")
+    datasets = dict(
+        target="radial_mass_flux",
+        augment="major_axis",
+        inclinations=[INCLINATION],
+        radial_bins=radial_bins,
+        radial_projection="sky",
+    )
     lines = toml_lines(datasets)
     for split, galaxies in GALAXIES.items():
         lines += [f"[{split}]"] + [f'"vof/{galaxy}" = {SNAPSHOT}' for galaxy in galaxies]
@@ -85,9 +91,25 @@ def trained(request, vof_root):
         (vof_root / config).rename(run_dir / config)
     (run_dir / "vof").symlink_to(vof_root / "vof")
     result = subprocess.run(
-        [sys.executable, TRAIN_SCRIPT, "--hyperparams", "hyperparams.toml", "--datasets", "datasets.toml",
-         "--run-name", name, "--network-dir", "nets", "--output-dir", "diag"],
-        cwd=run_dir, capture_output=True, text=True, timeout=TIMEOUT_S)
+        [
+            sys.executable,
+            TRAIN_SCRIPT,
+            "--hyperparams",
+            "hyperparams.toml",
+            "--datasets",
+            "datasets.toml",
+            "--run-name",
+            name,
+            "--network-dir",
+            "nets",
+            "--output-dir",
+            "diag",
+        ],
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S,
+    )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
     return name, head, radial_bins, run_dir
 
@@ -99,8 +121,15 @@ def load_checkpoint(run_dir, name):
     hyperparams = tomllib.loads(meta["hyperparamsFile"].decode())
     radial_bins = int(meta["radialBins"]) if "radialBins" in meta else None
     k0, k1 = hyperparams["k0"], hyperparams["k1"]
-    model = NeuralNetwork(tuple(int(n) for n in meta["inputShape"]), hyperparams["nFilt0"], (k0,) * 3, (k1,) * 3,
-                          hyperparams["nFC"], head=meta["outputHead"].decode(), output_size=radial_bins)
+    model = NeuralNetwork(
+        tuple(int(n) for n in meta["inputShape"]),
+        hyperparams["nFilt0"],
+        (k0,) * 3,
+        (k1,) * 3,
+        hyperparams["nFC"],
+        head=meta["outputHead"].decode(),
+        output_size=radial_bins,
+    )
     model.load_state_dict(torch.load(run_dir / "nets" / f"{name}.pt", map_location="cpu", weights_only=True))
     return model.eval(), meta
 
@@ -136,8 +165,9 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
             pred = model(((cube - mean) / stdv).float()[None]).numpy() * scale + offset
         saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{path.stem}_Epoch*.hdf5"))
         with h5py.File(saved, "r") as hf:
-            np.testing.assert_allclose(pred.reshape(hf["prediction"].shape), hf["prediction"][()],
-                                       rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
+            np.testing.assert_allclose(
+                pred.reshape(hf["prediction"].shape), hf["prediction"][()], rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL
+            )
 
 
 @pytest.mark.xfail(strict=True, reason="UseModel.py still targets the pre-refactor network and dataset API")
@@ -148,8 +178,20 @@ def test_inference_script_runs_on_trained_checkpoint(trained):
     image_list = run_dir / "images.csv"
     image_list.write_text("\n".join(str(p) for p in sorted((run_dir / "vof").glob("m12d/*/*.hdf5"))) + "\n")
     result = subprocess.run(
-        [sys.executable, INFERENCE_SCRIPT, "--image-list", image_list, "--output-prefix", run_dir / "inference_",
-         "--model-path", run_dir / "nets" / name],
-        cwd=run_dir, capture_output=True, text=True, timeout=TIMEOUT_S)
+        [
+            sys.executable,
+            INFERENCE_SCRIPT,
+            "--image-list",
+            image_list,
+            "--output-prefix",
+            run_dir / "inference_",
+            "--model-path",
+            run_dir / "nets" / name,
+        ],
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S,
+    )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]  # script exits cleanly
     assert list(run_dir.glob("inference_*"))  # and writes its prediction outputs
