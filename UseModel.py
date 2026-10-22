@@ -59,9 +59,6 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
             k0 = 9  # Initial kernel size
             k1 = 3  # Kernel Size
             nFC = 1500  # Nodes in FC layer
-            learning_rate = 0.0001  # lr used in training
-            weight_decay = 0.001  # wd used in training
-            epochs = 100  # epochs used in training
             params = [nFilt0, k0, k1, nFC]
 
         model = NeuralNetwork(
@@ -75,14 +72,13 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
 
     imageOutput_suffix = "_massFlux_FacePlot_" + networkType + "_TR_Comp_"
     plotOutput_suffix = "_massFlux_RadialPlot_" + networkType + "_TR_Comp_"
-    compositeOutput_suffix = "_massFlux_CompositePlot_" + networkType + "_TR_Comp_"
 
     try:  # Get normalization (saved under the 'imageStats' dataset by the training scripts)
         hf_model = h5py.File(modelOutputPath + ".hdf5", "r")
         imageStats = np.array(hf_model["imageStats"])
         imageMean = imageStats[0]
         imageStdv = imageStats[1]
-    except:  # Default to per image normalization if training values not available for some reason
+    except (OSError, KeyError):  # Default to per image normalization if training values not available for some reason
         dataset0 = CoNNGaFitImageInferenceDataset(annotations_file=imageList, root_dir=".", transform=ToTensor())
 
         loader0 = torch.utils.data.DataLoader(dataset0, batch_size=1, shuffle=False)

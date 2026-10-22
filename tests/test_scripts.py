@@ -4,12 +4,12 @@ check the checkpoint it writes rebuilds the network and reproduces the predictio
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
-import tomllib
 import torch
 
 from Unet3d_ResBlock import NeuralNetwork

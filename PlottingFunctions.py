@@ -50,7 +50,7 @@ def MakeCompImage(
         npix = int(np.round(np.sqrt(np.size(image_pred))))
         image_pred = np.reshape(image_pred, [npix, npix])
         image_input = np.reshape(image_input, [npix, npix])
-    except:  # data_pred/data_input were already (nBatch,1,npix,npix) rather than flattened
+    except ValueError:  # data_pred/data_input were already (nBatch,1,npix,npix) rather than flattened
         image_pred = data_pred[Nsnap, 0, :, :]
         image_input = data_input[Nsnap, 0, :, :]
         npix = int(np.round(np.sqrt(np.size(image_pred))))
@@ -243,7 +243,7 @@ def RV2coeff(dataList):
     # Now compute the 'between study cosine matrix' C
     C = np.zeros((len(dataList), len(dataList)), float)
 
-    for index, element in np.ndenumerate(C):
+    for index in np.ndindex(C.shape):
         nom = np.trace(np.dot(np.transpose(scalArrList[index[0]]), scalArrList[index[1]]))
         denom1 = np.trace(np.dot(np.transpose(scalArrList[index[0]]), scalArrList[index[0]]))
         denom2 = np.trace(np.dot(np.transpose(scalArrList[index[1]]), scalArrList[index[1]]))
@@ -267,9 +267,6 @@ def MakeCorrelationPlot(pred_image, input_image, Nsnaps, output):
     """
     tickSize = 14
     labelSize = 16
-    titleSize = 18
-    cbarSize = 14
-    nameSize = 14
     legendSize = 14
 
     npix = 40
@@ -304,13 +301,6 @@ def MakeCorrelationPlot(pred_image, input_image, Nsnaps, output):
         corr1d[i] = correlationMatrix1d[1][0]
 
     plt.figure()
-    size = 60
-    alpha = 0.7
-    predColor = "r"
-    inputColor = "k"
-
-    xplot = np.linspace(0, np.size(corr1d), np.size(corr1d))
-
     nBins = 20
     alpha = 0.7
     plt.hist(corr1d, bins=nBins, range=[-1, 1], histtype="step", color="k", label="1d Corr.", alpha=alpha, linewidth=2)
@@ -371,7 +361,6 @@ def LoadNames(inputDir):
         corresponds to the CSV's first data row. Callers must index this list starting at 0,
         not 1.
     """
-    Nlines = 0
     fid = open(inputDir, "r")
     names = []
     for line in fid:
@@ -429,8 +418,6 @@ def MakeCompImage_1d(
     plt.subplot(121)
 
     rmag = np.linspace(0, 30, np.size(data_pred[Nsnap, :]))
-
-    nBins = 20
 
     maxPlot = np.max(
         [

@@ -12,9 +12,9 @@ from Unet3d_ResBlock import NeuralNetwork
 
 matplotlib.use("Agg")
 import argparse
+import tomllib
 
 import h5py
-import tomllib
 from matplotlib import pyplot as plt
 
 from PlottingFunctions import MakeCompImage, MakeCompImage_1d, MakeCorrelationPlot, SaveHDF5, SaveHDF5_1d
