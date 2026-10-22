@@ -9,6 +9,7 @@ from torch import nn
 #   DilatedResidualBlock                       - Unet3d_Dilated_ResNet.NeuralNetwork
 #   SpectralAttentionPool                      - the conv heads below and Unet3d_DDPM's MapHead
 #   ResBlock2d, ConvMapHead                    - head='conv' option of both regression networks
+#   HalfResConvHead                            - head='conv_halfres' option of Unet3d_ResBlock.NeuralNetwork
 # plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
@@ -119,10 +120,16 @@ class Stem(nn.Module):
         self.pool = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=stride, padding=0)
         self.act = activation()
 
-    def forward(self, x):
-        """x: (nBatch, 1, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4))."""
-        x = self.conv(F.pad(x, self.conv_pad))
-        x = self.pool(F.pad(x, self.pool_pad, mode="constant", value=float("-inf")))
+    def forward(self, x, return_half=False):
+        """x: (nBatch, 1, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4)).
+
+        With return_half=True, also returns the activated conv output, at ceil(N/2) per axis
+        (the last skip connection of head='conv_halfres').
+        """
+        half = self.conv(F.pad(x, self.conv_pad))
+        x = self.pool(F.pad(half, self.pool_pad, mode="constant", value=float("-inf")))
+        if return_half:
+            return self.act(x), self.act(half)
         return self.act(x)
 
 
@@ -449,3 +456,61 @@ class ConvMapHead(nn.Module):
         if label == "head: output conv":
             return "channels: mean" + (" + logvar" if self.out_channels == 2 else "")
         return None
+
+
+class HalfResConvHead(nn.Module):
+    """Predicts one value per map pixel from the decoder's half-resolution features.
+
+    The spectral axis is folded into channels, so each pixel's line-profile features are combined
+    by learned weights rather than averaged away. A global summary of the galaxy (the deepest
+    encoder features, averaged over the whole cube) is appended to every pixel. Two 3x3
+    convolutions then give each prediction a 5x5 field of view at half resolution (~10x10 image
+    pixels), and a 1x1 convolution gives the output, resized bilinearly to the output map.
+
+    Parameters:
+        in_channels: decoder channels * half-resolution spectral length (after folding).
+        global_channels: channel count of the deepest encoder stage.
+        head_channels: channel count of the two 3x3 convolutions.
+        dropout_rate: probability for the channel-wise nn.Dropout2d before the output conv.
+        activation: zero-arg callable returning an nn.Module; called once per 3x3 conv.
+        predict_variance: if True, a second 1x1 conv predicts a per-pixel log-variance.
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        global_channels,
+        head_channels,
+        dropout_rate=0.0,
+        activation=nn.LeakyReLU,
+        predict_variance=False,
+    ):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels + global_channels, head_channels, kernel_size=3, padding=1)
+        self.act1 = activation()
+        self.conv2 = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
+        self.act2 = activation()
+        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.out_mean = nn.Conv2d(head_channels, 1, kernel_size=1)
+        self.out_logvar = nn.Conv2d(head_channels, 1, kernel_size=1) if predict_variance else None
+
+    def forward(self, x, bottleneck, map_shape):
+        """x: (nBatch, C, nSpec, nX, nY) decoder features; bottleneck: the deepest encoder features.
+
+        Returns a list of flattened (nBatch, H*W) maps at map_shape: the mean, then the
+        log-variance if predict_variance.
+        """
+        nBatch, nFilt, nSpec, nX, nY = x.shape
+        x = torch.reshape(x, (nBatch, nFilt * nSpec, nX, nY))  # fold the spectral axis into channels
+        # Global context: average the bottleneck over the whole cube and give every pixel a copy
+        context = torch.mean(bottleneck, dim=(2, 3, 4))[:, :, None, None].expand(-1, -1, nX, nY)
+        x = torch.cat([x, context], dim=1)
+        x = self.act2(self.conv2(self.act1(self.conv1(x))))
+        x = self.dropout(x)
+        outputs = [self.out_mean(x)]
+        if self.out_logvar is not None:
+            outputs.append(self.out_logvar(x))
+        return [
+            torch.flatten(F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False), 1)
+            for o in outputs
+        ]

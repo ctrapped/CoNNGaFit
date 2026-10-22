@@ -56,9 +56,9 @@ def denoiser_inputs(input_shape=INPUT_SHAPE, map_shape=MAP_SHAPE):
 def test_beta_schedule_is_a_valid_noising_process(schedule):
     betas = ddpm.make_beta_schedule(schedule, N_TIMESTEPS)
     alpha_bar = torch.cumprod(1 - betas, dim=0)
-    assert betas.shape == (N_TIMESTEPS,)
-    assert ((betas > 0) & (betas < 1)).all()
-    assert (alpha_bar[1:] < alpha_bar[:-1]).all()
+    assert betas.shape == (N_TIMESTEPS,)  # one beta per timestep
+    assert ((betas > 0) & (betas < 1)).all()  # every step adds some noise, but never all of it
+    assert (alpha_bar[1:] < alpha_bar[:-1]).all()  # remaining signal strictly decreases with t
 
 
 def test_linear_schedule_matches_ho_et_al():
@@ -90,8 +90,8 @@ def test_batch_to_group_norm_replaces_every_batchnorm():
 def test_timestep_embedding_shape_and_dependence_on_t(dim):
     out_dim = 16
     emb = ddpm.TimestepEmbedding(dim, out_dim)(torch.tensor([0, N_TIMESTEPS - 1]))
-    assert emb.shape == (2, out_dim)
-    assert not torch.allclose(emb[0], emb[1])
+    assert emb.shape == (2, out_dim)  # one embedding per timestep, odd dims included
+    assert not torch.allclose(emb[0], emb[1])  # different timesteps give different embeddings
 
 
 #### Denoising network ####
@@ -140,8 +140,8 @@ def test_denoiser_backward_reaches_every_parameter(make_denoiser):
     model = randomize_output(make_denoiser())
     model(*denoiser_inputs()).square().mean().backward()
     for name, param in model.named_parameters():
-        assert param.grad is not None, name
-        assert torch.isfinite(param.grad).all(), name
+        assert param.grad is not None, name  # parameter is connected to the output
+        assert torch.isfinite(param.grad).all(), name  # no NaN/inf gradients
 
 
 @pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
@@ -172,9 +172,9 @@ def test_denoiser_param_breakdown_accounts_for_every_parameter(make_denoiser):
 #### Diffusion process ####
 def test_alpha_bar_is_a_saved_decreasing_buffer(make_diffusion):
     diffusion = make_diffusion()
-    assert "alpha_bar" in diffusion.state_dict()
-    assert diffusion.alpha_bar.shape == (N_TIMESTEPS,)
-    assert (diffusion.alpha_bar[1:] < diffusion.alpha_bar[:-1]).all()
+    assert "alpha_bar" in diffusion.state_dict()  # saved with checkpoints and moved by .to(device)
+    assert diffusion.alpha_bar.shape == (N_TIMESTEPS,)  # one value per timestep
+    assert (diffusion.alpha_bar[1:] < diffusion.alpha_bar[:-1]).all()  # signal strictly decreases with t
 
 
 def test_q_sample_mixes_signal_and_noise(make_diffusion):
@@ -190,8 +190,8 @@ def test_training_loss_is_a_finite_scalar(make_diffusion, flatten):
     diffusion = make_diffusion(target_shape=MAP_SHAPE if flatten else None)
     y0 = torch.randn(BATCH_SIZE, *MAP_SHAPE)
     loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0.flatten(1) if flatten else y0)
-    assert loss.shape == ()
-    assert torch.isfinite(loss)
+    assert loss.shape == ()  # a single scalar to backpropagate
+    assert torch.isfinite(loss)  # no NaN/inf from the noising or denoiser
 
 
 def test_flattened_labels_need_target_shape(make_diffusion):
@@ -222,8 +222,8 @@ def test_samples_respect_clip_range(make_diffusion):
 
 def test_predict_with_uncertainty_shapes(make_diffusion):
     mean, std = make_diffusion().predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), n_samples=N_SAMPLES)
-    assert mean.shape == std.shape == (BATCH_SIZE, *MAP_SHAPE)
-    assert (std > 0).any()
+    assert mean.shape == std.shape == (BATCH_SIZE, *MAP_SHAPE)  # one posterior mean and spread per pixel
+    assert (std > 0).any()  # the posterior samples differ
 
 
 def test_summary_reports_parameter_count(make_diffusion):
