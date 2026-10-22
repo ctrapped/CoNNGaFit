@@ -7,7 +7,7 @@ name = "conngafit"
 version = "0.1.0"
 description = "Convolutional neural networks for fitting galactic parameters to synthetic HI 21cm datacubes."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Cameron Trapp" }, { name = "Caleb Choban" }]
 dependencies = [
     "torch",
