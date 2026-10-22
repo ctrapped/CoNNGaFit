@@ -120,7 +120,8 @@ class NeuralNetwork(nn.Module):
         stem_activation: activation for the stem (default nn.LeakyReLU).
         block_activation: activation at all three sites in every ResidualBlock/DeconvBlock
             (post-conv1, post-conv2, post residual-add; default nn.ReLU).
-        fc_activation: activation between hidden fully-connected layers (default nn.LeakyReLU).
+        fc_activation: activation between hidden fully-connected layers, or after each of the
+            conv head's 3x3 convolutions (default nn.LeakyReLU).
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         upsample_mode: how every decoder Upsample resizes spatially - 'conv_transpose'
             (default, a learned stride-2 ConvTranspose3d) or 'trilinear' (nn.Upsample's 3-d
@@ -317,6 +318,7 @@ class NeuralNetwork(nn.Module):
                 SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
             if i < len(self.encoder) - 1:
                 skips.append(self.featureForwarding(x))
+        bottleneck = x
 
         # Decoder: upsample, align to the matching skip map, concatenate, reduce channels
         for up, dc in zip(self.upsamples, self.dc_layers):
