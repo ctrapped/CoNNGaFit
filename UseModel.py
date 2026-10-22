@@ -8,11 +8,13 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 from Datasets import CoNNGaFitImageInferenceDataset
 from PlottingFunctions import CreateBasicPlots, LoadNames, MakeImage
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#device = 'cpu'
-print(f'Using {device} device')
+device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = 'cpu'
+print(f"Using {device} device")
 
-Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np.power(10.,7.)) * np.power(10,10) #1/pixel_res * kpc2km * s2yr * unit mass to solar masses
+Sim2PhysicalUnits_MassFlux = (
+    (2 / np.pi) * 1 / (3.086 * np.power(10.0, 16.0)) * (3.154 * np.power(10.0, 7.0)) * np.power(10, 10)
+)  # 1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 ####Functions to calculate inferences on HI spectral datacubes from a previously trained CoNNGaFit network. Generates a projection map and a radial plot for the fitted parameter of interest.
 ####For use, you need the trained network and the images to run the inferences on with a corresponding .csv file listing their location.
@@ -22,8 +24,7 @@ Sim2PhysicalUnits_MassFlux = (2/np.pi) * 1/(3.086*np.power(10.,16.)) * (3.154*np
 ####Updated 11/21/2023
 
 
-
-def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params=None,saveLatentImages=False):
+def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False):
     """Load a previously trained CoNNGaFit network and run it on a list of input datacubes,
     writing a projection-map PNG/hdf5 and a radial-profile PNG/hdf5 per input image.
 
@@ -45,69 +46,71 @@ def RunInferences(networkType,imageOutput_prefix,imageList,modelPath=None,params
 
     #####Set variables based on desired network type
 
-    if networkType=='unet18': ####U-Net
-        targetShape=[40,40] #output dimensions
+    if networkType == "unet18":  ####U-Net
+        targetShape = [40, 40]  # output dimensions
         from NetworkModels.AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
 
-        modelOutputPath = modelPath or os.path.join('TrainedNetworks','hiResTests','MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt') #Address of desired model
+        modelOutputPath = modelPath or os.path.join(
+            "TrainedNetworks", "hiResTests", "MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt"
+        )  # Address of desired model
 
         if params is None:
-            nFilt0 = 6 #Number of filters
-            k0 = 9 #Initial kernel size
-            k1 = 3 #Kernel Size
-            nFC = 1500 #Nodes in FC layer
-            learning_rate= 0.0001 #lr used in training
-            weight_decay= 0.001 #wd used in training
-            epochs= 100 #epochs used in training
-            params=[nFilt0,k0,k1,nFC]
+            nFilt0 = 6  # Number of filters
+            k0 = 9  # Initial kernel size
+            k1 = 3  # Kernel Size
+            nFC = 1500  # Nodes in FC layer
+            learning_rate = 0.0001  # lr used in training
+            weight_decay = 0.001  # wd used in training
+            epochs = 100  # epochs used in training
+            params = [nFilt0, k0, k1, nFC]
 
-        model = NeuralNetwork(params[0],(params[1],params[1],params[1]),(params[2],params[2],params[2]),params[3]).to(device)
+        model = NeuralNetwork(
+            params[0], (params[1], params[1], params[1]), (params[2], params[2], params[2]), params[3]
+        ).to(device)
     else:
         raise ValueError(f"Unrecognized networkType '{networkType}' - only 'unet18' is currently implemented.")
 
     model.load_state_dict(torch.load(modelOutputPath))
     model.eval()
 
-    imageOutput_suffix = '_massFlux_FacePlot_'+networkType+"_TR_Comp_"
-    plotOutput_suffix = '_massFlux_RadialPlot_'+networkType+"_TR_Comp_"
-    compositeOutput_suffix = '_massFlux_CompositePlot_'+networkType+"_TR_Comp_"
+    imageOutput_suffix = "_massFlux_FacePlot_" + networkType + "_TR_Comp_"
+    plotOutput_suffix = "_massFlux_RadialPlot_" + networkType + "_TR_Comp_"
+    compositeOutput_suffix = "_massFlux_CompositePlot_" + networkType + "_TR_Comp_"
 
-
-    try: #Get normalization (saved under the 'imageStats' dataset by the training scripts)
-        hf_model = h5py.File(modelOutputPath+".hdf5",'r')
-        imageStats = np.array(hf_model['imageStats'])
+    try:  # Get normalization (saved under the 'imageStats' dataset by the training scripts)
+        hf_model = h5py.File(modelOutputPath + ".hdf5", "r")
+        imageStats = np.array(hf_model["imageStats"])
         imageMean = imageStats[0]
         imageStdv = imageStats[1]
-    except: #Default to per image normalization if training values not available for some reason
-        dataset0 = CoNNGaFitImageInferenceDataset(annotations_file=imageList,
-                                   root_dir = '.',
-                                   transform = ToTensor())
+    except:  # Default to per image normalization if training values not available for some reason
+        dataset0 = CoNNGaFitImageInferenceDataset(annotations_file=imageList, root_dir=".", transform=ToTensor())
 
-
-        loader0 = torch.utils.data.DataLoader(dataset0,batch_size=1,shuffle=False)
+        loader0 = torch.utils.data.DataLoader(dataset0, batch_size=1, shuffle=False)
         data0 = next(iter(loader0))
         imageMean = data0[0].mean()
         imageStdv = data0[0].std()
-        del loader0;del data0;del dataset0
+        del loader0
+        del data0
+        del dataset0
 
-    #Load spectral datacubes to run data on
-    dataset = CoNNGaFitImageInferenceDataset(annotations_file=imageList,
-                                   root_dir = '.',
-                                   transform = Compose([ToTensor() , Normalize(imageMean,imageStdv)]))
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size=1,shuffle=False)
+    # Load spectral datacubes to run data on
+    dataset = CoNNGaFitImageInferenceDataset(
+        annotations_file=imageList, root_dir=".", transform=Compose([ToTensor(), Normalize(imageMean, imageStdv)])
+    )
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
-    #Get names of images
+    # Get names of images
     inferenceNames = LoadNames(imageList)
 
-    #Make inference for each image loaded
+    # Make inference for each image loaded
     for i, inputs in enumerate(dataloader):
-        X=inputs.to(device)
-        pred = model(X.float(),saveLatentImages)
+        X = inputs.to(device)
+        pred = model(X.float(), saveLatentImages)
 
         imageOutput = imageOutput_prefix + inferenceNames[i] + imageOutput_suffix
         plotOutput = imageOutput_prefix + inferenceNames[i] + plotOutput_suffix
 
-        MakeImage(pred.cpu().detach().numpy(),imageOutput,targetShape=targetShape) #Generate Projection Map
-        CreateBasicPlots(pred.cpu().detach().numpy(),plotOutput,targetShape) #Generate Radial Plots
+        MakeImage(pred.cpu().detach().numpy(), imageOutput, targetShape=targetShape)  # Generate Projection Map
+        CreateBasicPlots(pred.cpu().detach().numpy(), plotOutput, targetShape)  # Generate Radial Plots
 
     print("Done!")

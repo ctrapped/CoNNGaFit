@@ -30,7 +30,11 @@ def inclination_folders(inclinations, where):
     """The i<inclination>/ folders to search: all of them for "all" (or None), otherwise those listed (in degrees)."""
     if inclinations is None or inclinations == "all":
         return ["i*"]
-    if isinstance(inclinations, (list, tuple)) and inclinations and all(isinstance(v, (int, float)) for v in inclinations):
+    if (
+        isinstance(inclinations, (list, tuple))
+        and inclinations
+        and all(isinstance(v, (int, float)) for v in inclinations)
+    ):
         return [f"i{inclination:g}" for inclination in inclinations]  # :g writes 45 and 45.0 as "45", like VOF
     raise ValueError(f'{where}: inclinations = {inclinations!r} should be "all" or a list such as [30, 45]')
 
@@ -59,7 +63,9 @@ def find_vof_images(sources, inclinations="all", suffix=""):
                     found.append(path)
         if not found:
             looked_for = os.path.join("{" + ",".join(folders) + "}", filename)
-            raise FileNotFoundError(f"No VOF images for snapshots {min_snap}-{max_snap} in {data_dir} matching {looked_for}")
+            raise FileNotFoundError(
+                f"No VOF images for snapshots {min_snap}-{max_snap} in {data_dir} matching {looked_for}"
+            )
         paths += sorted(found)
     return paths
 
@@ -72,7 +78,7 @@ def face_on_path(path):
     """
     name = os.path.basename(path)
     view = VOF_VIEW.search(name)
-    galaxy, rest = name[:view.start()], name[view.end():]  # rest: VOF's outputSuffix and "_fullSpectra.hdf5"
+    galaxy, rest = name[: view.start()], name[view.end() :]  # rest: VOF's outputSuffix and "_fullSpectra.hdf5"
     face_on_dir = os.path.join(os.path.dirname(os.path.dirname(path)), "i0")
     same_pa = os.path.join(face_on_dir, f"{galaxy}_i0_pa{view['position_angle']}_{view['snapshot']}_image{rest}")
     if os.path.isfile(same_pa):
@@ -80,7 +86,9 @@ def face_on_path(path):
     any_pa = f"{glob.escape(galaxy)}_i0_pa*_{view['snapshot']}_image{glob.escape(rest)}"
     others = sorted(glob.glob(os.path.join(glob.escape(face_on_dir), any_pa)))
     if not others:
-        raise FileNotFoundError(f"No face-on (i0) image for {name}; run VOF with inclination 0, or use radial_projection='sky'")
+        raise FileNotFoundError(
+            f"No face-on (i0) image for {name}; run VOF with inclination 0, or use radial_projection='sky'"
+        )
     return others[0]
 
 
@@ -162,11 +170,11 @@ def augment_array(a, rotations, flip):
 
 def augmentation_suffix(rotations, flip):
     """Name suffix for an augmentation, e.g. "_r180_lr" (empty for the original)."""
-    return (f"_r{90*rotations}" if rotations else "") + ("_lr" if flip else "")
+    return (f"_r{90 * rotations}" if rotations else "") + ("_lr" if flip else "")
 
 
 ####Dataset class for training. Finds each galaxy's VOF datacubes; get loads one (optionally rotated/flipped) datacube and its target annotation map or radial curve ('label')
-class CoNNGaFitImageDataset():
+class CoNNGaFitImageDataset:
     """PyTorch-style dataset of (datacube, label) pairs from VOF's optically thin outputs, for training CoNNGaFit networks.
 
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
@@ -194,8 +202,18 @@ class CoNNGaFitImageDataset():
     an augmentation suffix such as "_r180_lr"), in dataset order.
     """
 
-    def __init__(self, sources, target, transform=None, target_transform=None, augment=None, radial_bins=None,
-                 radial_projection="face_on", inclinations="all", suffix=""):
+    def __init__(
+        self,
+        sources,
+        target,
+        transform=None,
+        target_transform=None,
+        augment=None,
+        radial_bins=None,
+        radial_projection="face_on",
+        inclinations="all",
+        suffix="",
+    ):
         if target not in TARGETS:
             raise ValueError(f"Unknown target {target!r}; choose from {sorted(TARGETS)}")
         if augment not in AUGMENTATIONS:
@@ -215,7 +233,9 @@ class CoNNGaFitImageDataset():
             filename = os.path.splitext(os.path.basename(path))[0]
             for rotations, flip in self.augmentations:
                 self.names.append(filename + augmentation_suffix(rotations, flip))
-        print(f"Found {len(self.img_paths)} images in {len(sources)} folders, {len(self.names)} samples with augmentation {augment}")
+        print(
+            f"Found {len(self.img_paths)} images in {len(sources)} folders, {len(self.names)} samples with augmentation {augment}"
+        )
 
         if radial_bins is not None:
             # Where each image's radial curve comes from; check every face-on file exists up front
@@ -233,36 +253,38 @@ class CoNNGaFitImageDataset():
         if self.radial_bins is None:
             return label_map(hf, self.target)
         if file_idx not in self.curves:
-            with h5py.File(self.curve_paths[file_idx], 'r') as hf_curve:
+            with h5py.File(self.curve_paths[file_idx], "r") as hf_curve:
                 self.curves[file_idx] = radial_profile(hf_curve, self.target, self.radial_bins)
         return self.curves[file_idx]
 
     def image(self, file_idx):
         """The datacube of image file_idx before augmentation and transform (e.g. to compute image normalization)."""
-        with h5py.File(self.img_paths[file_idx], 'r') as hf:
-            return np.array(hf['spectra']).astype('float')
+        with h5py.File(self.img_paths[file_idx], "r") as hf:
+            return np.array(hf["spectra"]).astype("float")
 
     def label(self, file_idx):
         """The flattened label of image file_idx before augmentation and target_transform (e.g. to compute label scaling)."""
-        with h5py.File(self.img_paths[file_idx], 'r') as hf:
-            return self._label(hf, file_idx).flatten().astype('float')
+        with h5py.File(self.img_paths[file_idx], "r") as hf:
+            return self._label(hf, file_idx).flatten().astype("float")
 
     def __getitem__(self, idx):
         file_idx, aug_idx = divmod(idx, len(self.augmentations))
         rotations, flip = self.augmentations[aug_idx]
         path = self.img_paths[file_idx]
-        with h5py.File(path, 'r') as hf:
-            image = np.array(hf['spectra']).astype('float')
+        with h5py.File(path, "r") as hf:
+            image = np.array(hf["spectra"]).astype("float")
             label = self._label(hf, file_idx)
         if rotations % 2 and image.shape[0] != image.shape[1]:
-            raise ValueError(f"{path}: 90-degree rotations need a square image, not {image.shape[:2]}; use augment='major_axis'")
+            raise ValueError(
+                f"{path}: 90-degree rotations need a square image, not {image.shape[:2]}; use augment='major_axis'"
+            )
         image = augment_array(image, rotations, flip)
         if self.radial_bins is None:
             # The annotations are projected onto the same pixels as the datacube's two sky axes
             if label.shape != image.shape[:2]:
                 raise ValueError(f"{path}: {self.target} map is {label.shape}, but the image is {image.shape}")
             label = augment_array(label, rotations, flip)
-        label = label.flatten().astype('float')
+        label = label.flatten().astype("float")
 
         if self.transform:
             image = self.transform(image)
@@ -272,7 +294,7 @@ class CoNNGaFitImageDataset():
 
 
 ####Dataset class for inference. Loads datacubes with no labels, e.g. VOF images or real observations converted with FITS_to_CoNNGaFit.py
-class CoNNGaFitImageInferenceDataset():
+class CoNNGaFitImageInferenceDataset:
     """PyTorch-style dataset of datacubes to run a trained network on, with no labels.
 
     paths: the hdf5 files to load, each holding a 'spectra' datacube (y, x, velocity channel) -
@@ -294,8 +316,8 @@ class CoNNGaFitImageInferenceDataset():
         return len(self.img_paths)
 
     def __getitem__(self, idx):
-        with h5py.File(self.img_paths[idx], 'r') as hf:
-            image = np.array(hf['spectra']).astype('float')
+        with h5py.File(self.img_paths[idx], "r") as hf:
+            image = np.array(hf["spectra"]).astype("float")
         if self.transform:
             image = self.transform(image)
         return image
