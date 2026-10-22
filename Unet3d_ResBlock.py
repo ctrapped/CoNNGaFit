@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, ConvMapHead, _match_spatial
+from Unet_blocks import Stem, ResidualBlock, Upsample, DeconvBlock, ConvMapHead, HalfResConvHead, _match_spatial
 from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
@@ -76,6 +76,11 @@ class NeuralNetwork(nn.Module):
         'conv': ConvMapHead (see Unet_blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
+        'conv_halfres': one more decoder stage up to the stem conv's half resolution (with a
+        skip connection from it), then HalfResConvHead (see Unet_blocks.py) - spectral axis
+        folded into channels, plus global context from the bottleneck, two 3x3 convs, a 1x1
+        output conv, and a bilinear resize to `output_shape`. Its size also does not grow
+        with the map size.
 
     The encoder/decoder are built in loops and the skip alignment + adaptive pool are
     shape-agnostic, so the network runs at any input size and any depth >= 2. __init__
@@ -98,11 +103,11 @@ class NeuralNetwork(nn.Module):
         n_fc_layers: number of hidden fully-connected layers when nFC is a scalar (ignored
             when nFC is a sequence of widths).
         output_size: length of the flattened prediction. Defaults to nX*nY from input_shape
-            (or H*W from output_shape); must equal H*W for head='conv'.
+            (or H*W from output_shape); must equal H*W for the conv heads.
         pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
             nFilt0 * prod(pool_output); the default (8, 8, 8) gives 512 * nFilt0.
         fc_dropout_rate: dropout probability after every hidden FC layer's activation (and,
-            when there are no hidden layers, once before the output Linear); for head='conv',
+            when there are no hidden layers, once before the output Linear); for the conv heads,
             a channel-wise Dropout2d before the output conv. 0.0 disables. Active in training
             mode only.
         block_dropout_rate: probability for a channel-wise nn.Dropout3d (drops whole feature
@@ -127,17 +132,20 @@ class NeuralNetwork(nn.Module):
             forward() returns (mean, logvar) - train against a heteroscedastic loss such as
             nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
             no output_activation applied (it must stay unconstrained for exp() to reach any
-            positive variance). With head='conv' the log-variance is a second output channel
-            of the head's final conv instead of a second Linear.
+            positive variance). With a conv head the log-variance is a second output map
+            from the head's output conv instead of a second Linear.
         head: 'fc' (default) - adaptive average pool -> flatten -> fully-connected layers, as
             set by pool_output/nFC/n_fc_layers; its output Linear has
             nFilt0 * prod(pool_output) * output_size weights, so it grows with the map size.
             'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
             n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
             the input and map size (pool_output, nFC and n_fc_layers are then unused).
+            'conv_halfres' - half-resolution decoder stage -> HalfResConvHead (see the
+            Architecture entry above); pool_output, nFC and n_fc_layers are also unused.
         output_shape: (H, W) of the predicted map. Required grid for head='conv' (default
-            (nX, nY)); for head='fc' it only sets the default output_size = H*W.
-        n_head_blocks: number of 2-d residual blocks in the conv head (>= 0; default 2).
+            (nX, nY)) and head='conv_halfres'; for head='fc' it only sets the default output_size = H*W.
+        n_head_blocks: number of 2-d residual blocks in head='conv' (>= 0; default 2).
+        head_channels: channel count of head='conv_halfres''s two 3x3 convolutions (default 64).
 
         Each *_activation is a zero-arg callable returning an nn.Module - the activation
         class itself (nn.ReLU, nn.GELU, nn.Tanh, ...) or a lambda for non-default arguments
@@ -151,7 +159,7 @@ class NeuralNetwork(nn.Module):
                  stem_activation=nn.LeakyReLU, block_activation=nn.ReLU,
                  fc_activation=nn.LeakyReLU, output_activation=nn.Identity,
                  upsample_mode='conv_transpose', predict_variance=False,
-                 head='fc', output_shape=None, n_head_blocks=2):
+                 head='fc', output_shape=None, n_head_blocks=2, head_channels=64):
         super(NeuralNetwork, self).__init__()
         self.predict_variance = predict_variance
         if n_stages < 2:
@@ -161,17 +169,17 @@ class NeuralNetwork(nn.Module):
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
         self.n_stages = n_stages
-        if head not in ('fc', 'conv'):
-            raise ValueError(f"unknown head {head!r}; use 'fc' or 'conv'")
+        if head not in ('fc', 'conv', 'conv_halfres'):
+            raise ValueError(f"unknown head {head!r}; use 'fc', 'conv' or 'conv_halfres'")
         self.head_type = head
         # Map grid of the prediction: required by the conv head, optional for the fc head.
         self.output_shape = (tuple(int(v) for v in output_shape) if output_shape is not None
-                             else (input_shape[1:] if head == 'conv' else None))
+                             else (input_shape[1:] if head != 'fc' else None))
         map_size = (int(np.prod(self.output_shape)) if self.output_shape is not None
                     else input_shape[1] * input_shape[2])
-        if head == 'conv' and output_size is not None and int(output_size) != map_size:
+        if head != 'fc' and output_size is not None and int(output_size) != map_size:
             raise ValueError(f"output_size={output_size} does not match output_shape "
-                             f"{self.output_shape} for head='conv'")
+                             f"{self.output_shape} for head={head!r}")
         self.output_size = int(output_size) if output_size is not None else map_size
         # fail fast if this input can't be halved n_stages-1 times after the stem
         self.stem_out_shape = _check_stage_compatibility(input_shape, n_stages)
@@ -213,6 +221,15 @@ class NeuralNetwork(nn.Module):
                 DeconvBlock(out_ch,out_ch,upsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
             ))
 
+        if head == 'conv_halfres':
+            # One more decoder stage, up to the stem conv's half resolution, with a skip
+            # connection from it (see Stem.forward's return_half)
+            self.upsample_half = Upsample(nFilt0,nFilt0,kernel1=kernel_coder,mode=upsample_mode)
+            self.dc_layer_half = nn.Sequential(
+                DeconvBlock(2*nFilt0,nFilt0,upsample=True,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation),
+                DeconvBlock(nFilt0,nFilt0,upsample=False,kernel1=kernel_coder,dropout_rate=block_dropout_rate,activation=block_activation)
+            )
+
         # Identity pass-through on the skip connections; a named module so it can later be
         # swapped for a learned transform without touching forward().
         self.featureForwarding = nn.Sequential()
@@ -224,6 +241,14 @@ class NeuralNetwork(nn.Module):
             self.conv_head = ConvMapHead(nFilt0, out_channels=2 if predict_variance else 1,
                                          n_blocks=n_head_blocks, activation=block_activation,
                                          dropout_rate=fc_dropout_rate)
+        elif head == 'conv_halfres':
+            # Head: fold the half-resolution spectral axis into channels -> HalfResConvHead
+            self.half_shape = tuple(-(-n // 2) for n in input_shape)
+            self.fc_widths = []
+            self.head_channels = head_channels
+            self.halfres_head = HalfResConvHead(nFilt0 * self.half_shape[0], enc_channels[-1], head_channels,
+                                                dropout_rate=fc_dropout_rate, activation=fc_activation,
+                                                predict_variance=predict_variance)
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
             self.avgpool0 = nn.AdaptiveAvgPool3d(self.pool_output)
@@ -276,7 +301,10 @@ class NeuralNetwork(nn.Module):
         x = torch.reshape(x,(nBatch,1,nSpec,nX,nY))
 
         # Stem
-        x = self.layer_stem(x)
+        if self.head_type == 'conv_halfres':
+            x, stem_half = self.layer_stem(x, return_half=True)
+        else:
+            x = self.layer_stem(x)
         step = 0
         if saveLatentImages:
             SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
@@ -299,6 +327,22 @@ class NeuralNetwork(nn.Module):
             x = dc(x)
             if saveLatentImages:
                 SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
+
+        if self.head_type == 'conv_halfres':
+            # Last decoder stage, to half resolution, then the per-pixel head
+            x = self.upsample_half(x)
+            skip = self.featureForwarding(stem_half)
+            x = _match_spatial(x, skip)
+            x = torch.cat([x, skip], dim=1)
+            x = self.dc_layer_half(x)
+            if saveLatentImages:
+                SaveSummedSpectralChannels(x,step,self.saveItr); step += 1
+            outputs = self.halfres_head(x, bottleneck, self.output_shape)
+            self.saveItr += 1
+            mean = self.out_activation(outputs[0])
+            if self.predict_variance:
+                return mean, outputs[1]
+            return mean
 
         # Head
         mean, logvar = self._run_head(x)
@@ -399,6 +443,16 @@ class NeuralNetwork(nn.Module):
 
         if self.head_type == 'conv':
             rows += self.conv_head.stage_shapes(shape[1:], self.output_shape)
+        elif self.head_type == 'conv_halfres':
+            up_mode = self.upsample_half.mode
+            up_shape = tuple((2 * s - 1 if up_mode == 'conv_transpose' else 2 * s) for s in shape)
+            rows.append(("half-res decoder: upsample", self.nFilt0, up_shape))
+            rows.append(("half-res decoder: + skip(stem conv)", 2 * self.nFilt0, self.half_shape))
+            rows.append(("half-res decoder: deconv block", self.nFilt0, self.half_shape))
+            folded = self.nFilt0 * self.half_shape[0] + self.enc_channels[-1]
+            rows.append(("conv head: fold spectra + global context", folded, self.half_shape[1:]))
+            rows.append(("conv head: 2x 3x3 conv", self.head_channels, self.half_shape[1:]))
+            rows.append(("conv head: 1x1 conv + resize", 1, self.output_shape))
         else:
             rows.append(("adaptive avg pool", self.nFilt0, self.pool_output))
         return rows
@@ -414,6 +468,12 @@ class NeuralNetwork(nn.Module):
             head = self.conv_head.param_groups()
             head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])   # output conv + activation
             mods += [m for _, m in head]
+            return [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
+        if self.head_type == 'conv_halfres':
+            h = self.halfres_head
+            out = [h.dropout, h.out_mean] + ([h.out_logvar] if h.out_logvar is not None else [])
+            mods += [[self.upsample_half], [], [self.dc_layer_half],   # half-res decoder stage
+                     [], [h.conv1, h.act1, h.conv2, h.act2], out + [self.out_activation]]
             return [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
         mods.append([])                # adaptive avg pool
         groups = [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
@@ -449,11 +509,16 @@ class NeuralNetwork(nn.Module):
         # upsample_mode - read straight off a real Upsample instance.
         stem_act = type(self.layer_stem.act).__name__
         block_act = type(self.encoder[0][0].act1).__name__  # same class at every block/site
-        fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
+        if self.head_type == 'conv_halfres':
+            fc_act = type(self.halfres_head.act1).__name__
+        else:
+            fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
         out_act = type(self.out_activation).__name__
         if self.head_type == 'conv':
             head_act = ("head blocks=" + type(self.conv_head.blocks[0].act1).__name__
                         if len(self.conv_head.blocks) else "head blocks=n/a (none)")
+        elif self.head_type == 'conv_halfres':
+            head_act = f"conv head={fc_act}"
         else:
             head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
         upsample_mode = self.upsamples[0].mode  # same mode at every decoder stage
@@ -481,6 +546,8 @@ class NeuralNetwork(nn.Module):
                 return f"mode={upsample_mode!r}"
             if self.head_type == 'conv':
                 return self.conv_head.row_note(label)
+            if label.startswith("conv head: 2x"):
+                return f"activation={fc_act}"
             return None
 
         groups = dict(self._param_groups())
