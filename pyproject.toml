@@ -45,32 +45,8 @@ addopts = "-ra"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "B", "I"]
 ignore = ["B905"]  # zip(strict=) is noisy for loops over shape-matched tensors
-
-[tool.ruff.lint.per-file-ignores]
-# Existing findings in files not yet rewritten; remove an entry once its file is cleaned up
-"Datasets.py" = ["E701", "E722"]
-"PlottingFunctions.py" = ["B007", "E722", "F841"]
-"TrainModel_MassFlux_UNet.py" = ["E701", "E702", "E722", "F841"]
-"TrainModel_RC_UNet.py" = ["E701", "E702", "E722", "F841"]
-"UseModel.py" = ["E702", "E722", "F841"]
-"examples/*.ipynb" = ["B023", "E731"]
-
-[tool.ruff.format]
-# Files not yet rewritten; remove an entry once its file is cleaned up
-exclude = [
-    "Datasets.py",
-    "FITS_to_CoNNGaFit.py",
-    "FITS_to_CoNNGaFit_Template.py",
-    "InferenceTemplate.py",
-    "InferenceTest_ValidationSet.py",
-    "PlottingFunctions.py",
-    "TrainModel_MassFlux_UNet.py",
-    "TrainModel_RC_UNet.py",
-    "UseModel.py",
-    "examples/*.ipynb",
-]
