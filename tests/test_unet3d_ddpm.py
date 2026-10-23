@@ -12,7 +12,7 @@ N_SAMPLES = 3
 # float32 convolutions sum in a different order for different batch sizes
 BATCH_RTOL, BATCH_ATOL = 1e-4, 1e-4
 MAP_SHAPE = INPUT_SHAPE[1:]
-DENOISER_KWARGS = dict(nFilt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_stages=3, n_head_blocks=2)
+DENOISER_KWARGS = dict(n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_stages=3, n_head_blocks=2)
 # stage_shapes() rows with no module of their own (inputs, concatenation, resize) are not hooked
 UNHOOKED_ROWS = ("input:", "+ skip", "resize to map", "+ noisy map")
 
