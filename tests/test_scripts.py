@@ -38,15 +38,15 @@ RUNS = [("fc", "fc", 0), ("conv", "conv", 0), ("conv_halfres", "conv_halfres", 0
 def write_vof_outputs(root):
     """Write random VOF-style datacubes and annotation maps, one folder per galaxy."""
     rng = np.random.default_rng(0)
-    nX, nY, _ = CUBE_SHAPE
+    n_x, n_y, _ = CUBE_SHAPE
     for galaxy in sum(GALAXIES.values(), []):
         folder = root / galaxy / f"i{INCLINATION}"
         folder.mkdir(parents=True)
         for pa in POSITION_ANGLES:
             with h5py.File(folder / f"{galaxy}_i{INCLINATION}_pa{pa}_{SNAPSHOT}_image_fullSpectra.hdf5", "w") as hf:
                 hf["spectra"] = rng.random(CUBE_SHAPE)
-                hf["mass_annotation"] = rng.random((nX, nY)) * 1e6
-                hf["radial_velocity_annotation"] = rng.normal(0, 50, (nX, nY))
+                hf["mass_annotation"] = rng.random((n_x, n_y)) * 1e6
+                hf["radial_velocity_annotation"] = rng.normal(0, 50, (n_x, n_y))
                 hf.attrs["fov_kpc"] = FOV_KPC
 
 

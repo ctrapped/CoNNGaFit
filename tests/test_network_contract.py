@@ -26,8 +26,8 @@ def pytest_generate_tests(metafunc):
 def test_default_output_is_one_value_per_pixel(network, make_model, make_cube, head):
     model = make_model(network, head=head)
     cube = make_cube()
-    _, nX, nY = model.input_shape
-    assert model(cube).shape == (len(cube), nX * nY)
+    _, n_x, n_y = model.input_shape
+    assert model(cube).shape == (len(cube), n_x * n_y)
 
 
 def test_output_size_override(network, make_model, make_cube):
@@ -44,9 +44,9 @@ def test_predict_variance_returns_mean_and_logvar(network, make_model, make_cube
 
 def test_rejects_cube_of_wrong_shape(network, make_model, make_cube):
     model = make_model(network)
-    nSpec, nX, nY = model.input_shape
+    n_spec, n_x, n_y = model.input_shape
     with pytest.raises(ValueError, match="does not match"):
-        model(make_cube((nSpec, nX + 1, nY)))
+        model(make_cube((n_spec, n_x + 1, n_y)))
 
 
 def test_rejects_input_shape_without_three_axes(network, make_model):
