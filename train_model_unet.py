@@ -578,27 +578,27 @@ torch.save(model.state_dict(), model_output_path + ".pt")
 
 # Save the normalization information for loading data
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
-hf_norm.create_dataset("imageStats", data=np.array([training_mean, training_stdv]))
-hf_norm.create_dataset("labelScaling", data=label_scaling)
+hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
+hf_norm.create_dataset("label_scaling", data=label_scaling)
 hf_norm.create_dataset(
-    "labelStats", data=np.array([label_offset, label_scale])
+    "label_stats", data=np.array([label_offset, label_scale])
 )  # physical label = scaled label * label_scale + label_offset
-hf_norm.create_dataset("learningRate", data=learning_rate)
-hf_norm.create_dataset("nFC", data=n_fc)
+hf_norm.create_dataset("learning_rate", data=learning_rate)
+hf_norm.create_dataset("n_fc", data=n_fc)
 hf_norm.create_dataset("weight_decay", data=weight_decay)
-hf_norm.create_dataset("nFilt0", data=n_filt0)
+hf_norm.create_dataset("n_filt0", data=n_filt0)
 hf_norm.create_dataset("dropout_rate", data=dropout_rate)
 hf_norm.create_dataset("block_dropout_rate", data=block_dropout_rate)
-hf_norm.create_dataset("runName", data=run_name)
-hf_norm.create_dataset("inputShape", data=input_shape)  # Needed to rebuild the network for inference
+hf_norm.create_dataset("run_name", data=run_name)
+hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
-hf_norm.create_dataset("outputHead", data=output_head)
+hf_norm.create_dataset("output_head", data=output_head)
 if radial_bins is not None:
-    hf_norm.create_dataset("radialBins", data=radial_bins)
-    hf_norm.create_dataset("radialProjection", data=radial_projection)
+    hf_norm.create_dataset("radial_bins", data=radial_bins)
+    hf_norm.create_dataset("radial_projection", data=radial_projection)
 # The full parameter files, so every trained model records exactly what it was trained with
-hf_norm.create_dataset("hyperparamsFile", data=hyperparams_text)
-hf_norm.create_dataset("datasetsFile", data=datasets_text)
+hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
+hf_norm.create_dataset("datasets_text", data=datasets_text)
 hf_norm.close()
 
 
@@ -662,15 +662,15 @@ plt.savefig(diagnostic_output + "_ValdiationAccuracyPerSnapshot.png")
 
 
 hf_diagnostic = h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w")
-hf_diagnostic.create_dataset("trainingLoss", data=training_losses)
-hf_diagnostic.create_dataset("validationLoss", data=validation_losses)
-hf_diagnostic.create_dataset("validationAccuracy", data=validation_accuracies)
-hf_diagnostic.create_dataset("specificAccuracy", data=specific_accuracies)
-hf_diagnostic.create_dataset("trainingNames", data=training_names)
-hf_diagnostic.create_dataset("validationNames", data=validation_names)
-hf_diagnostic.create_dataset("testingNames", data=testing_names)
-hf_diagnostic.create_dataset("testingLoss", data=final_test_loss)
-hf_diagnostic.create_dataset("testingAccuracy", data=final_test_accuracy)
-hf_diagnostic.create_dataset("testingSpecificAccuracy", data=final_test_specific_accuracy)
+hf_diagnostic.create_dataset("training_losses", data=training_losses)
+hf_diagnostic.create_dataset("validation_losses", data=validation_losses)
+hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
+hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
+hf_diagnostic.create_dataset("training_names", data=training_names)
+hf_diagnostic.create_dataset("validation_names", data=validation_names)
+hf_diagnostic.create_dataset("testing_names", data=testing_names)
+hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
+hf_diagnostic.create_dataset("final_test_accuracy", data=final_test_accuracy)
+hf_diagnostic.create_dataset("final_test_specific_accuracy", data=final_test_specific_accuracy)
 
 hf_diagnostic.close()

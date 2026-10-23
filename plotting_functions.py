@@ -232,7 +232,7 @@ def create_basic_plots(
     # Save hdf5 for generating figures
     hf = h5py.File(output + "radialPlot.hdf5", "w")
     hf.create_dataset("binned_data", data=binned_data)
-    hf.create_dataset("rPlot", data=np.linspace(0, np.max(rmag), n_bins))
+    hf.create_dataset("r_plot", data=np.linspace(0, np.max(rmag), n_bins))
 
     hf.close()
 

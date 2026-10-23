@@ -78,9 +78,9 @@ def run_inferences(
     image_output_suffix = "_massFlux_FacePlot_" + network_type + "_TR_Comp_"
     plot_output_suffix = "_massFlux_RadialPlot_" + network_type + "_TR_Comp_"
 
-    try:  # Get normalization (saved under the 'imageStats' dataset by the training scripts)
+    try:  # Get normalization (saved under the 'image_stats' dataset by the training scripts)
         hf_model = h5py.File(model_output_path + ".hdf5", "r")
-        image_stats = np.array(hf_model["imageStats"])
+        image_stats = np.array(hf_model["image_stats"])
         image_mean = image_stats[0]
         image_stdv = image_stats[1]
     except (OSError, KeyError):  # Default to per image normalization if training values not available for some reason

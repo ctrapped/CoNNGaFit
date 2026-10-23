@@ -118,16 +118,16 @@ def load_checkpoint(run_dir, name):
     """Rebuild the trained network from its .hdf5 metadata and .pt weights; returns (model, metadata)."""
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
         meta = {key: hf[key][()] for key in hf}
-    hyperparams = tomllib.loads(meta["hyperparamsFile"].decode())
-    radial_bins = int(meta["radialBins"]) if "radialBins" in meta else None
+    hyperparams = tomllib.loads(meta["hyperparams_text"].decode())
+    radial_bins = int(meta["radial_bins"]) if "radial_bins" in meta else None
     k0, k1 = hyperparams["k0"], hyperparams["k1"]
     model = NeuralNetwork(
-        tuple(int(n) for n in meta["inputShape"]),
+        tuple(int(n) for n in meta["input_shape"]),
         hyperparams["n_filt0"],
         (k0,) * 3,
         (k1,) * 3,
         hyperparams["n_fc"],
-        head=meta["outputHead"].decode(),
+        head=meta["output_head"].decode(),
         output_size=radial_bins,
     )
     model.load_state_dict(torch.load(run_dir / "nets" / f"{name}.pt", map_location="cpu", weights_only=True))
@@ -137,15 +137,15 @@ def load_checkpoint(run_dir, name):
 def test_training_writes_checkpoint_and_diagnostics(trained):
     name, head, radial_bins, run_dir = trained
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
-        assert hf["outputHead"][()].decode() == head  # checkpoint records the head it was trained with
+        assert hf["output_head"][()].decode() == head  # checkpoint records the head it was trained with
         # the saved copy of the datasets file round-trips
-        assert tomllib.loads(hf["datasetsFile"][()].decode())["radial_bins"] == radial_bins
+        assert tomllib.loads(hf["datasets_text"][()].decode())["radial_bins"] == radial_bins
         # image normalization and label scaling needed for inference are finite
-        assert np.isfinite(hf["imageStats"][()]).all() and np.isfinite(hf["labelStats"][()]).all()
+        assert np.isfinite(hf["image_stats"][()]).all() and np.isfinite(hf["label_stats"][()]).all()
     with h5py.File(run_dir / "diag" / "diagnostics" / f"{name}_LossesAndAccuracies.hdf5", "r") as hf:
-        assert np.isfinite(hf["trainingLoss"][()]).all()  # every epoch's training loss is finite
-        assert np.isfinite(hf["validationLoss"][()]).all()  # every epoch's validation loss is finite
-        assert np.isfinite(hf["testingLoss"][()])  # final test loss is finite
+        assert np.isfinite(hf["training_losses"][()]).all()  # every epoch's training loss is finite
+        assert np.isfinite(hf["validation_losses"][()]).all()  # every epoch's validation loss is finite
+        assert np.isfinite(hf["final_test_loss"][()])  # final test loss is finite
     n_test = len(GALAXIES["testing"]) * len(POSITION_ANGLES)
     # one prediction snapshot per test image
     assert len(list((run_dir / "diag" / "images").glob(f"{name}_test_*.hdf5"))) == n_test
@@ -156,8 +156,8 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
     if radial_bins:
         pytest.skip("radial-curve snapshots save the whole batch rather than one sample")
     model, meta = load_checkpoint(run_dir, name)
-    mean, stdv = meta["imageStats"]
-    offset, scale = meta["labelStats"]
+    mean, stdv = meta["image_stats"]
+    offset, scale = meta["label_stats"]
     for path in sorted((run_dir / "vof").glob("m12d/*/*.hdf5")):
         with h5py.File(path, "r") as hf:
             cube = torch.from_numpy(hf["spectra"][()].transpose(2, 0, 1))  # (nSpec, nX, nY), as ToTensor gives

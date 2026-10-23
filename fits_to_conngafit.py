@@ -99,8 +99,8 @@ def fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1,
 
     hf = h5py.File(output + ".hdf5", "w")
     hf.create_dataset("spectra", data=new_image)
-    hf.create_dataset("pixelRes_arcsec", data=original_pixel_res * n_bin)
-    hf.create_dataset("pixelRes_kpc", data=original_pixel_res * n_bin / 60 / 60 * np.pi / 180 * distance)
+    hf.create_dataset("pixel_res_arcsec", data=original_pixel_res * n_bin)
+    hf.create_dataset("pixel_res_kpc", data=original_pixel_res * n_bin / 60 / 60 * np.pi / 180 * distance)
     hf.close()
 
     logger.info("n_bin = %d", n_bin)
