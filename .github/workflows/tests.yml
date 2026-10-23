@@ -39,3 +39,22 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install "ruff==0.16.9"
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      - name: Check formatting
+        run: ruff format --check .

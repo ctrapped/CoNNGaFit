@@ -1,0 +1,46 @@
+name: Bug report
+description: Something crashes, gives wrong results, or doesn't match the documentation.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead. Paste the full error traceback if there is one.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The script or code you ran, with its arguments and hyperparameters, and the data it was run on (galaxies, snapshots, input shape).
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Training scripts
+        - Inference (use_model / inference scripts)
+        - Networks (unet3d_resblock / unet3d_dilated_resnet / unet3d_ddpm / unet_blocks)
+        - Datasets
+        - FITS conversion
+        - Plotting
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `python -c "import sys, torch; print(sys.version, torch.__version__, torch.cuda.is_available())"`, the OS, and the machine (laptop, Quartz, ...).
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.

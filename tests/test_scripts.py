@@ -1,5 +1,6 @@
-"""End-to-end smoke tests: train TrainModel_UNet.py for two epochs on synthetic VOF outputs, then
+"""End-to-end smoke tests: train train_model_unet.py for two epochs on synthetic VOF outputs, then
 check the checkpoint it writes rebuilds the network and reproduces the predictions it saved."""
+
 import json
 import subprocess
 import sys
@@ -11,11 +12,11 @@ import numpy as np
 import pytest
 import torch
 
-from Unet3d_ResBlock import NeuralNetwork
+from unet3d_resblock import NeuralNetwork
 
 REPO = Path(__file__).resolve().parents[1]
-TRAIN_SCRIPT = REPO / "TrainModel_UNet.py"
-INFERENCE_SCRIPT = REPO / "InferenceTemplate.py"
+TRAIN_SCRIPT = REPO / "train_model_unet.py"
+INFERENCE_SCRIPT = REPO / "inference_template.py"
 DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
 
 CUBE_SHAPE = (32, 32, 32)  # (nX, nY, nSpec) as VOF writes it; 32 survives the default 4 encoder stages
@@ -25,7 +26,7 @@ SNAPSHOT = 600
 POSITION_ANGLES = (0, 90)
 GALAXIES = {"training": ["m12a", "m12b"], "validation": ["m12c"], "testing": ["m12d"]}
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
-SMALL_HYPERPARAMS = dict(epochs=2, nFC=8, nFilt0=2, k0=3, k1=3, label_scaling="symmetric")
+SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="symmetric")
 RADIAL_BINS = 8
 TIMEOUT_S = 600
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
@@ -37,15 +38,15 @@ RUNS = [("fc", "fc", 0), ("conv", "conv", 0), ("conv_halfres", "conv_halfres", 0
 def write_vof_outputs(root):
     """Write random VOF-style datacubes and annotation maps, one folder per galaxy."""
     rng = np.random.default_rng(0)
-    nX, nY, _ = CUBE_SHAPE
+    n_x, n_y, _ = CUBE_SHAPE
     for galaxy in sum(GALAXIES.values(), []):
         folder = root / galaxy / f"i{INCLINATION}"
         folder.mkdir(parents=True)
         for pa in POSITION_ANGLES:
             with h5py.File(folder / f"{galaxy}_i{INCLINATION}_pa{pa}_{SNAPSHOT}_image_fullSpectra.hdf5", "w") as hf:
                 hf["spectra"] = rng.random(CUBE_SHAPE)
-                hf["mass_annotation"] = rng.random((nX, nY)) * 1e6
-                hf["radial_velocity_annotation"] = rng.normal(0, 50, (nX, nY))
+                hf["mass_annotation"] = rng.random((n_x, n_y)) * 1e6
+                hf["radial_velocity_annotation"] = rng.normal(0, 50, (n_x, n_y))
                 hf.attrs["fov_kpc"] = FOV_KPC
 
 
@@ -59,8 +60,13 @@ def write_configs(folder, head, radial_bins):
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": head}
     (folder / "hyperparams.toml").write_text("\n".join(toml_lines(hyperparams)) + "\n")
 
-    datasets = dict(target="radial_mass_flux", augment="major_axis", inclinations=[INCLINATION],
-                    radial_bins=radial_bins, radial_projection="sky")
+    datasets = dict(
+        target="radial_mass_flux",
+        augment="major_axis",
+        inclinations=[INCLINATION],
+        radial_bins=radial_bins,
+        radial_projection="sky",
+    )
     lines = toml_lines(datasets)
     for split, galaxies in GALAXIES.items():
         lines += [f"[{split}]"] + [f'"vof/{galaxy}" = {SNAPSHOT}' for galaxy in galaxies]
@@ -85,9 +91,25 @@ def trained(request, vof_root):
         (vof_root / config).rename(run_dir / config)
     (run_dir / "vof").symlink_to(vof_root / "vof")
     result = subprocess.run(
-        [sys.executable, TRAIN_SCRIPT, "--hyperparams", "hyperparams.toml", "--datasets", "datasets.toml",
-         "--run-name", name, "--network-dir", "nets", "--output-dir", "diag"],
-        cwd=run_dir, capture_output=True, text=True, timeout=TIMEOUT_S)
+        [
+            sys.executable,
+            TRAIN_SCRIPT,
+            "--hyperparams",
+            "hyperparams.toml",
+            "--datasets",
+            "datasets.toml",
+            "--run-name",
+            name,
+            "--network-dir",
+            "nets",
+            "--output-dir",
+            "diag",
+        ],
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S,
+    )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
     return name, head, radial_bins, run_dir
 
@@ -96,11 +118,18 @@ def load_checkpoint(run_dir, name):
     """Rebuild the trained network from its .hdf5 metadata and .pt weights; returns (model, metadata)."""
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
         meta = {key: hf[key][()] for key in hf}
-    hyperparams = tomllib.loads(meta["hyperparamsFile"].decode())
-    radial_bins = int(meta["radialBins"]) if "radialBins" in meta else None
+    hyperparams = tomllib.loads(meta["hyperparams_text"].decode())
+    radial_bins = int(meta["radial_bins"]) if "radial_bins" in meta else None
     k0, k1 = hyperparams["k0"], hyperparams["k1"]
-    model = NeuralNetwork(tuple(int(n) for n in meta["inputShape"]), hyperparams["nFilt0"], (k0,) * 3, (k1,) * 3,
-                          hyperparams["nFC"], head=meta["outputHead"].decode(), output_size=radial_bins)
+    model = NeuralNetwork(
+        tuple(int(n) for n in meta["input_shape"]),
+        hyperparams["n_filt0"],
+        (k0,) * 3,
+        (k1,) * 3,
+        hyperparams["n_fc"],
+        head=meta["output_head"].decode(),
+        output_size=radial_bins,
+    )
     model.load_state_dict(torch.load(run_dir / "nets" / f"{name}.pt", map_location="cpu", weights_only=True))
     return model.eval(), meta
 
@@ -108,15 +137,15 @@ def load_checkpoint(run_dir, name):
 def test_training_writes_checkpoint_and_diagnostics(trained):
     name, head, radial_bins, run_dir = trained
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
-        assert hf["outputHead"][()].decode() == head  # checkpoint records the head it was trained with
+        assert hf["output_head"][()].decode() == head  # checkpoint records the head it was trained with
         # the saved copy of the datasets file round-trips
-        assert tomllib.loads(hf["datasetsFile"][()].decode())["radial_bins"] == radial_bins
+        assert tomllib.loads(hf["datasets_text"][()].decode())["radial_bins"] == radial_bins
         # image normalization and label scaling needed for inference are finite
-        assert np.isfinite(hf["imageStats"][()]).all() and np.isfinite(hf["labelStats"][()]).all()
+        assert np.isfinite(hf["image_stats"][()]).all() and np.isfinite(hf["label_stats"][()]).all()
     with h5py.File(run_dir / "diag" / "diagnostics" / f"{name}_LossesAndAccuracies.hdf5", "r") as hf:
-        assert np.isfinite(hf["trainingLoss"][()]).all()  # every epoch's training loss is finite
-        assert np.isfinite(hf["validationLoss"][()]).all()  # every epoch's validation loss is finite
-        assert np.isfinite(hf["testingLoss"][()])  # final test loss is finite
+        assert np.isfinite(hf["training_losses"][()]).all()  # every epoch's training loss is finite
+        assert np.isfinite(hf["validation_losses"][()]).all()  # every epoch's validation loss is finite
+        assert np.isfinite(hf["final_test_loss"][()])  # final test loss is finite
     n_test = len(GALAXIES["testing"]) * len(POSITION_ANGLES)
     # one prediction snapshot per test image
     assert len(list((run_dir / "diag" / "images").glob(f"{name}_test_*.hdf5"))) == n_test
@@ -127,8 +156,8 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
     if radial_bins:
         pytest.skip("radial-curve snapshots save the whole batch rather than one sample")
     model, meta = load_checkpoint(run_dir, name)
-    mean, stdv = meta["imageStats"]
-    offset, scale = meta["labelStats"]
+    mean, stdv = meta["image_stats"]
+    offset, scale = meta["label_stats"]
     for path in sorted((run_dir / "vof").glob("m12d/*/*.hdf5")):
         with h5py.File(path, "r") as hf:
             cube = torch.from_numpy(hf["spectra"][()].transpose(2, 0, 1))  # (nSpec, nX, nY), as ToTensor gives
@@ -136,11 +165,12 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
             pred = model(((cube - mean) / stdv).float()[None]).numpy() * scale + offset
         saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{path.stem}_Epoch*.hdf5"))
         with h5py.File(saved, "r") as hf:
-            np.testing.assert_allclose(pred.reshape(hf["prediction"].shape), hf["prediction"][()],
-                                       rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
+            np.testing.assert_allclose(
+                pred.reshape(hf["prediction"].shape), hf["prediction"][()], rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL
+            )
 
 
-@pytest.mark.xfail(strict=True, reason="UseModel.py still targets the pre-refactor network and dataset API")
+@pytest.mark.xfail(strict=True, reason="use_model.py still targets the pre-refactor network and dataset API")
 def test_inference_script_runs_on_trained_checkpoint(trained):
     name, _, radial_bins, run_dir = trained
     if radial_bins:
@@ -148,8 +178,20 @@ def test_inference_script_runs_on_trained_checkpoint(trained):
     image_list = run_dir / "images.csv"
     image_list.write_text("\n".join(str(p) for p in sorted((run_dir / "vof").glob("m12d/*/*.hdf5"))) + "\n")
     result = subprocess.run(
-        [sys.executable, INFERENCE_SCRIPT, "--image-list", image_list, "--output-prefix", run_dir / "inference_",
-         "--model-path", run_dir / "nets" / name],
-        cwd=run_dir, capture_output=True, text=True, timeout=TIMEOUT_S)
+        [
+            sys.executable,
+            INFERENCE_SCRIPT,
+            "--image-list",
+            image_list,
+            "--output-prefix",
+            run_dir / "inference_",
+            "--model-path",
+            run_dir / "nets" / name,
+        ],
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S,
+    )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]  # script exits cleanly
     assert list(run_dir.glob("inference_*"))  # and writes its prediction outputs

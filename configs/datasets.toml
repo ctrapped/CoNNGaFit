@@ -1,21 +1,21 @@
-# What TrainModel_UNet.py trains on by default (see Datasets.py)
+# What train_model_unet.py trains on by default (see conngafit_datasets.py)
 
 # Which annotation to learn:
 # mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity, radial_mass_flux, cylindrical_radial_mass_flux
-target = "radial_mass_flux" 
+target = "radial_mass_flux"
 
 # Rotations/flips added to the training set:
 # "major_axis" (4 per image, keeping the major axis along x), "all" (8 per image), or "none"
-augment = "major_axis"  
+augment = "major_axis"
 
 # Which inclinations to use in every set: "all", or a list such as [30, 45]
-inclinations = [45] 
+inclinations = [45]
 
 #Learn 1-d Curves? (needs output_head = "fc"); 0 trains on maps
 radial_bins = 0
 
 #Where radial curves are measured: "face_on" (each snapshot's i0 image) or "sky"
-radial_projection = "face_on"  
+radial_projection = "face_on"
 
 #VOF's outputSuffix in the filenames to load, if that run used one (the same for every folder)
 suffix = ""  # Optional

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Convolutional neural networks for fitting galactic parameters to synthetic HI 21cm datacubes."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Cameron Trapp" }, { name = "Caleb Choban" }]
 dependencies = [
     "torch",
@@ -21,22 +23,41 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "ruff", "pre-commit"]
 
 [tool.setuptools]
 py-modules = [
-    "Datasets",
-    "FITS_to_CoNNGaFit",
-    "PlottingFunctions",
-    "Unet3d_DDPM",
-    "Unet3d_Dilated_ResNet",
-    "Unet3d_ResBlock",
-    "Unet_blocks",
-    "Unet_diagnostics",
-    "UseModel",
+    "conngafit_datasets",
+    "fits_to_conngafit",
+    "logging_setup",
+    "plotting_functions",
+    "unet3d_ddpm",
+    "unet3d_dilated_resnet",
+    "unet3d_resblock",
+    "unet_blocks",
+    "unet_diagnostics",
+    "use_model",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "F", "B", "I",
+    "T20",  # flag print() calls: use the module logger instead (see logging_setup.py)
+    "N",  # PEP 8 naming: snake_case functions/variables, CapWords classes, UPPER_CASE constants
+]
+ignore = [
+    "B905",  # zip(strict=) is noisy for loops over shape-matched tensors
+    "N812",  # allow the standard `import torch.nn.functional as F`
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["T20"]  # notebooks show results by printing them

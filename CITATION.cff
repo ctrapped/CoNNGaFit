@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use CoNNGaFit in your research, please cite it as below."
+title: "CoNNGaFit: Convolutional Neural Networks for Galaxy Fitting"
+abstract: >-
+  Convolutional neural networks that infer galactic properties, such as the radial
+  mass flux and rotational velocity of neutral gas, from HI 21cm spectral datacubes.
+type: software
+authors:
+  - family-names: Trapp
+    given-names: Cameron
+  - family-names: Choban
+    given-names: Caleb
+license: MIT
+repository-code: "https://github.com/ctrapped/CoNNGaFit"
+version: 0.1.0
+keywords:
+  - astronomy
+  - galaxies
+  - HI 21cm
+  - spectral datacubes
+  - convolutional neural networks
+  - FIRE simulations

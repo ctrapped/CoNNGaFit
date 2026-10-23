@@ -1,0 +1,3 @@
+# Store every text file with Unix (LF) line endings, whatever editor or OS it was written on.
+# Git detects binary files (images, .hdf5, .pt) and leaves them alone.
+* text=auto eol=lf

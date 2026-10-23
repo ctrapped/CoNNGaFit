@@ -1,17 +1,18 @@
-"""Unet3d_DDPM: noise schedules, time conditioning, the denoising U-Net and the diffusion process."""
+"""unet3d_ddpm: noise schedules, time conditioning, the denoising U-Net and the diffusion process."""
+
 import pytest
 import torch
+from conftest import BATCH_SIZE, INPUT_SHAPE
 from torch import nn
 
-import Unet3d_DDPM as ddpm
-from conftest import BATCH_SIZE, INPUT_SHAPE
+import unet3d_ddpm as ddpm
 
 N_TIMESTEPS = 10
 N_SAMPLES = 3
 # float32 convolutions sum in a different order for different batch sizes
 BATCH_RTOL, BATCH_ATOL = 1e-4, 1e-4
 MAP_SHAPE = INPUT_SHAPE[1:]
-DENOISER_KWARGS = dict(nFilt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_stages=3, n_head_blocks=2)
+DENOISER_KWARGS = dict(n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_stages=3, n_head_blocks=2)
 # stage_shapes() rows with no module of their own (inputs, concatenation, resize) are not hooked
 UNHOOKED_ROWS = ("input:", "+ skip", "resize to map", "+ noisy map")
 
@@ -19,16 +20,20 @@ UNHOOKED_ROWS = ("input:", "+ skip", "resize to map", "+ noisy map")
 @pytest.fixture
 def make_denoiser():
     """Factory for a small DenoisingUNet3d; keyword arguments override the defaults."""
+
     def make(**overrides):
         return ddpm.DenoisingUNet3d(**{**DENOISER_KWARGS, **overrides})
+
     return make
 
 
 @pytest.fixture
 def make_diffusion(make_denoiser):
     """Factory for a GaussianDiffusion around a small denoiser; keyword arguments go to GaussianDiffusion."""
+
     def make(**kwargs):
         return ddpm.GaussianDiffusion(make_denoiser(), n_timesteps=N_TIMESTEPS, **kwargs)
+
     return make
 
 
@@ -91,11 +96,14 @@ def test_timestep_embedding_shape_and_dependence_on_t(dim):
 
 #### Denoising network ####
 @pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
-@pytest.mark.parametrize("input_shape, map_shape", [
-    (INPUT_SHAPE, MAP_SHAPE),
-    (INPUT_SHAPE, (8, 8)),
-    ((13, 10, 11), (20, 24)),
-])
+@pytest.mark.parametrize(
+    "input_shape, map_shape",
+    [
+        (INPUT_SHAPE, MAP_SHAPE),
+        (INPUT_SHAPE, (8, 8)),
+        ((13, 10, 11), (20, 24)),
+    ],
+)
 def test_denoiser_predicts_noise_on_the_map_grid(make_denoiser, upsample_mode, input_shape, map_shape):
     cube, y_t, t = denoiser_inputs(input_shape, map_shape)
     assert make_denoiser(upsample_mode=upsample_mode)(cube, y_t, t).shape == y_t.shape
@@ -123,7 +131,9 @@ def test_denoiser_uses_no_batchnorm(make_denoiser):
 def test_denoiser_samples_are_independent_of_the_batch(make_denoiser):
     model = randomize_output(make_denoiser())
     cube, y_t, t = denoiser_inputs()
-    torch.testing.assert_close(model(cube[:1], y_t[:1], t[:1]), model(cube, y_t, t)[:1], rtol=BATCH_RTOL, atol=BATCH_ATOL)
+    torch.testing.assert_close(
+        model(cube[:1], y_t[:1], t[:1]), model(cube, y_t, t)[:1], rtol=BATCH_RTOL, atol=BATCH_ATOL
+    )
 
 
 def test_denoiser_backward_reaches_every_parameter(make_denoiser):
@@ -146,8 +156,11 @@ def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, upsample_mode, 
     for module in stages:
         module.register_forward_hook(lambda m, inputs, out: recorded.append((out.shape[1], tuple(out.shape[2:]))))
     model(*denoiser_inputs(map_shape=map_shape))
-    expected = [(feats, tuple(shape)) for label, feats, shape in model.stage_shapes(INPUT_SHAPE, map_shape)
-                if not any(tag in label for tag in UNHOOKED_ROWS)]
+    expected = [
+        (feats, tuple(shape))
+        for label, feats, shape in model.stage_shapes(INPUT_SHAPE, map_shape)
+        if not any(tag in label for tag in UNHOOKED_ROWS)
+    ]
     assert recorded == expected
 
 
@@ -186,10 +199,13 @@ def test_flattened_labels_need_target_shape(make_diffusion):
         make_diffusion()(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.randn(BATCH_SIZE, MAP_SHAPE[0] * MAP_SHAPE[1]))
 
 
-@pytest.mark.parametrize("target_shape, expected", [
-    (None, (N_SAMPLES, BATCH_SIZE, *MAP_SHAPE)),
-    ((8, 8), (N_SAMPLES, BATCH_SIZE, 64)),
-])
+@pytest.mark.parametrize(
+    "target_shape, expected",
+    [
+        (None, (N_SAMPLES, BATCH_SIZE, *MAP_SHAPE)),
+        ((8, 8), (N_SAMPLES, BATCH_SIZE, 64)),
+    ],
+)
 @pytest.mark.parametrize("sample_kw", [dict(), dict(n_steps=4, eta=0.0), dict(max_batch=2)])
 def test_sample_shape(make_diffusion, target_shape, expected, sample_kw):
     diffusion = make_diffusion(target_shape=target_shape)
