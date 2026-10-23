@@ -500,10 +500,10 @@ class HalfResConvHead(nn.Module):
         Returns a list of flattened (nBatch, H*W) maps at map_shape: the mean, then the
         log-variance if predict_variance.
         """
-        nBatch, nFilt, nSpec, nX, nY = x.shape
-        x = torch.reshape(x, (nBatch, nFilt * nSpec, nX, nY))  # fold the spectral axis into channels
+        n_batch, n_filt, n_spec, n_x, n_y = x.shape
+        x = torch.reshape(x, (n_batch, n_filt * n_spec, n_x, n_y))  # fold the spectral axis into channels
         # Global context: average the bottleneck over the whole cube and give every pixel a copy
-        context = torch.mean(bottleneck, dim=(2, 3, 4))[:, :, None, None].expand(-1, -1, nX, nY)
+        context = torch.mean(bottleneck, dim=(2, 3, 4))[:, :, None, None].expand(-1, -1, n_x, n_y)
         x = torch.cat([x, context], dim=1)
         x = self.act2(self.conv2(self.act1(self.conv1(x))))
         x = self.dropout(x)
