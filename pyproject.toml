@@ -29,6 +29,7 @@ dev = ["pytest", "ruff", "pre-commit"]
 py-modules = [
     "conngafit_datasets",
     "fits_to_conngafit",
+    "logging_setup",
     "plotting_functions",
     "unet3d_ddpm",
     "unet3d_dilated_resnet",
