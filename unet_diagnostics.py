@@ -36,7 +36,7 @@ def save_summed_spectral_channels(x, step, save_itr):
 
     x has shape (nBatch, C, nSpec, nX, nY); writes LATENT_IMAGE_OUTPUT +
     "sum_step<step>_filter<i>_gal<save_itr>.png" for the first batch element. save_itr is
-    the caller's forward() call counter (NeuralNetwork.saveItr). Diagnostic only.
+    the caller's forward() call counter (NeuralNetwork.save_itr). Diagnostic only.
     """
     logger.debug("Saving latent images for activations of shape %s", tuple(x.shape))
     np_x = x.cpu().float().detach().numpy()

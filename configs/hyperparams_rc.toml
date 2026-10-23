@@ -4,8 +4,8 @@
 learning_rate = 1e-4
 weight_decay = 1e-3
 epochs = 300
-nFC = 3000    # Width of the fully connected head's hidden layers (output_head = "fc" only)
-nFilt0 = 6    # Filters in the first encoder stage; doubles at each later stage
+n_fc = 3000   # Width of the fully connected head's hidden layers (output_head = "fc" only)
+n_filt0 = 6   # Filters in the first encoder stage; doubles at each later stage
 k0 = 9        # Initial kernel size
 k1 = 3        # Kernel size for residual/deconv blocks
 
@@ -24,7 +24,7 @@ block_dropout_rate = 0.0
 #                    and adds global context
 #   "conv"         - pools the spectra with learned attention weights, then refines with 2-d
 #                    residual blocks
-#   "fc"           - the original fully connected output layer (nFC is then the bottleneck
+#   "fc"           - the original fully connected output layer (n_fc is then the bottleneck
 #                    size), for 40x40 images or radial curves
 output_head = "conv_halfres"
 

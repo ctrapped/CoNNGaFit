@@ -105,7 +105,7 @@ class Stem(nn.Module):
     asymmetric padding an even kernel/odd axis length needs.
 
     Parameters:
-        out_channels: number of filters (== nFilt0, the encoder's stage-0 channel count).
+        out_channels: number of filters (== n_filt0, the encoder's stage-0 channel count).
         kernel_size: 3-tuple kernel size for the conv (the pool's kernel is fixed at 2).
         activation: zero-arg callable returning an nn.Module (see ResidualBlock's activation
             parameter for the accepted forms).

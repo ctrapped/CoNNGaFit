@@ -60,7 +60,7 @@ file — `40*40` for the standard networks). CSVs are produced by a
 
 Not CLI flags — edit the `HYPERPARAMETERS` block near the top of the script:
 `learning_rate`, `weight_decay`, `epochs` (default 4000; drives wall time),
-`nFilt0`/`k0`/`k1`/`nFC` (network size; `nFC=0` removes the FC bottleneck),
+`n_filt0`/`k0`/`k1`/`n_fc` (network size; `n_fc=0` removes the FC bottleneck),
 `dropout_rate`, `block_dropout_rate`, `batchSizeDefault` (`None` = full dataset
 as one batch each epoch, used by the first three scripts).
 

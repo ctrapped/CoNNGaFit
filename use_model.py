@@ -43,7 +43,7 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
         with different hyperparameters than the current default). Pass None to use the
         default params for the chosen networkType.
     saveLatentImages: if True, dump intermediate activation images during the forward pass
-        (see NeuralNetwork.forward's saveLatentImages argument) - useful for debugging only.
+        (see NeuralNetwork.forward's save_latent_images argument) - useful for debugging only.
     """
     logger.info("Using %s device", device)
 

@@ -11,7 +11,7 @@ BATCH_SIZE = 2
 SEED = 0
 
 # Constructor arguments shared by every network, plus per-network arguments that keep it small
-COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, nFilt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), nFC=8)
+COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8)
 SMALL_KWARGS = {
     unet3d_resblock: dict(n_stages=3),
     unet3d_dilated_resnet: dict(n_blocks=1, dilation_rates=(1, 2, 1)),

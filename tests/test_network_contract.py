@@ -67,7 +67,7 @@ def test_conv_heads_require_one_output_per_pixel(network, make_model, head):
 
 
 @pytest.mark.parametrize(
-    "nFC, n_fc_layers, expected",
+    "n_fc, n_fc_layers, expected",
     [
         (8, 1, [8]),
         (8, 2, [8, 8]),
@@ -75,9 +75,9 @@ def test_conv_heads_require_one_output_per_pixel(network, make_model, head):
         (0, 1, []),
     ],
 )
-def test_fc_hidden_widths(network, make_model, make_cube, nFC, n_fc_layers, expected):
-    model = make_model(network, nFC=nFC, n_fc_layers=n_fc_layers)
-    assert model.fc_widths == expected  # hidden-layer widths resolved from nFC/n_fc_layers
+def test_fc_hidden_widths(network, make_model, make_cube, n_fc, n_fc_layers, expected):
+    model = make_model(network, n_fc=n_fc, n_fc_layers=n_fc_layers)
+    assert model.fc_widths == expected  # hidden-layer widths resolved from n_fc/n_fc_layers
     assert model(make_cube()).shape[1] == model.output_size  # forward pass still works with those widths
 
 

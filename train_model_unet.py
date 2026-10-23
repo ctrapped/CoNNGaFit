@@ -56,8 +56,8 @@ HYPERPARAM_KEYS = {
     "learning_rate",
     "weight_decay",
     "epochs",
-    "nFC",
-    "nFilt0",
+    "n_fc",
+    "n_filt0",
     "k0",
     "k1",
     "dropout_rate",
@@ -178,8 +178,8 @@ hyperparams, hyperparamsText = load_parameter_file(args.hyperparams, HYPERPARAM_
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
-nFC = hyperparams["nFC"]
-nFilt0 = hyperparams["nFilt0"]
+nFC = hyperparams["n_fc"]
+nFilt0 = hyperparams["n_filt0"]
 k0 = hyperparams["k0"]
 k1 = hyperparams["k1"]
 dropout_rate = hyperparams["dropout_rate"]

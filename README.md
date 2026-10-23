@@ -102,7 +102,7 @@ Not exposed on the command line (batch sizes are the exception - see the table a
 `HYPERPARAMETERS` block near the top of the script you're running:
 
 - `learning_rate`, `weight_decay`, `epochs` - standard training controls (Adam optimizer).
-- `nFilt0`, `k0`, `k1`, `nFC` - network size: initial filter count, initial/block kernel sizes, and the size of the optional FC bottleneck (set `nFC = 0` to remove it).
+- `n_filt0`, `k0`, `k1`, `n_fc` - network size: initial filter count, initial/block kernel sizes, and the size of the optional FC bottleneck (set `n_fc = 0` to remove it).
 - `dropout_rate` (default `0.3`) - dropout applied just before the output layer.
 - `block_dropout_rate` (default `0.0`, off) - channel-wise dropout inside every residual/deconv block; see the in-file comment before enabling.
 

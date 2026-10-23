@@ -26,7 +26,7 @@ SNAPSHOT = 600
 POSITION_ANGLES = (0, 90)
 GALAXIES = {"training": ["m12a", "m12b"], "validation": ["m12c"], "testing": ["m12d"]}
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
-SMALL_HYPERPARAMS = dict(epochs=2, nFC=8, nFilt0=2, k0=3, k1=3, label_scaling="symmetric")
+SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="symmetric")
 RADIAL_BINS = 8
 TIMEOUT_S = 600
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
@@ -123,10 +123,10 @@ def load_checkpoint(run_dir, name):
     k0, k1 = hyperparams["k0"], hyperparams["k1"]
     model = NeuralNetwork(
         tuple(int(n) for n in meta["inputShape"]),
-        hyperparams["nFilt0"],
+        hyperparams["n_filt0"],
         (k0,) * 3,
         (k1,) * 3,
-        hyperparams["nFC"],
+        hyperparams["n_fc"],
         head=meta["outputHead"].decode(),
         output_size=radial_bins,
     )
