@@ -120,7 +120,7 @@ python WriteDatasetsToCsv_HiResTests.py --sim-dir /path/to/fire-2 --output-dir /
 
 Run with `--help` for the full flag list (`--output-name`, `--use-denoised-spectra`, `--use-time-averaged-annotations`); the galaxy/snapshot/inclination/position-angle lists to scan are set as in-file variables near the bottom of the script rather than CLI flags.
 
-To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, use `FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, saveImages=False)` from `fits_to_conngafit.py` - see `fits_to_conngafit_template.py` for example usage (edited directly, no CLI).
+To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, use `fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1, save_images=False)` from `fits_to_conngafit.py` - see `fits_to_conngafit_template.py` for example usage (edited directly, no CLI).
 
 ## Inference
 
