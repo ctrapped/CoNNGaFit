@@ -1,0 +1,23 @@
+# Commits that only reformat or rename, skipped by `git blame` so it shows who wrote each line's logic.
+# GitHub's blame view reads this file automatically; locally, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Full hashes, as git requires. They must be the hashes that end up on main.
+
+# ruff formatting
+923e8e942fd232e39015dfcf90fa998a8e4af810  # Apply ruff fixes and formatting
+8d06f0555a83e27c456578be882fa868a0728e14  # Add ruff formating changes
+ec918d3a6eea5613fdfd76a1cda3e5abd607b22b  # More ruff enforced formatting for files that were originally excluded
+
+# Line endings
+431f2340a8d01e6e1f5185af0a8e13e8384b231a  # Normalize line endings to LF and add .gitattributes
+
+# snake_case renames
+8b3ec7c9c8613870c6be50631d06f32fade983e8  # Rename modules to snake-case
+c31e31dcfe326bdc0ee20b35b06ce7807db91f5e  # Rename unet_diagnostics names to snake case.
+db82024d9cd974063d3b8524519f1cfae1a0799f  # Rename unet_blocks to snake_case
+035a25613808a1aa2c6e36f5ece910bbe8eb8c34  # Rename unet3d_resbloc, unet3d_dilated_resnet names, and hyperparameter keys to snake_case
+fd9bebb3d9eeb57c21a567c61164f2af6b199911  # Rename unet3d_ddpm names to snake_case
+8c0d8b51a59cb6ee51ef547d630d0f1f2c671c9c  # Rename plotting_functions names to snake_case
+a50a9000051b3160874e6a0ce769be1217f20143  # Rename fits_to_conngafit names to snake_case
+014b1dbb3d0b0ae10d1034df7e01e6858efe50e7  # Rename train_model_unet names to snake_case
+c43a5218896a631c6b6a8798a146d2769a5283ce  # Rename test variables to snake_case
