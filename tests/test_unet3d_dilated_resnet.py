@@ -1,8 +1,8 @@
-"""Unet3d_Dilated_ResNet: block-count validation and analytic stage shapes."""
+"""unet3d_dilated_resnet: block-count validation and analytic stage shapes."""
 
 import pytest
 
-import Unet3d_Dilated_ResNet as dilated
+import unet3d_dilated_resnet as dilated
 
 
 def record_stage_shapes(model):

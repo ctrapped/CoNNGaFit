@@ -1,4 +1,4 @@
-# Training hyperparameters for TrainModel_UNet.py (tuned for rotational_velocity)
+# Training hyperparameters for train_model_unet.py (tuned for rotational_velocity)
 # Pass a different file with --hyperparams. Every key below is required.
 
 learning_rate = 1e-4
@@ -18,7 +18,7 @@ dropout_rate = 0.3  # Applied before the output layer, to regularize the head
 # dropping whole channels removes a large fraction of that stage's information.
 block_dropout_rate = 0.0
 
-# Output head, see NeuralNetwork in Unet3d_ResBlock.py. Both conv heads predict each pixel from
+# Output head, see NeuralNetwork in unet3d_resblock.py. Both conv heads predict each pixel from
 # its neighborhood (needed for 128x128/512x512 images):
 #   "conv_halfres" - adds a decoder stage to half resolution, folds the spectra into channels
 #                    and adds global context

@@ -1,4 +1,4 @@
-"""End-to-end smoke tests: train TrainModel_UNet.py for two epochs on synthetic VOF outputs, then
+"""End-to-end smoke tests: train train_model_unet.py for two epochs on synthetic VOF outputs, then
 check the checkpoint it writes rebuilds the network and reproduces the predictions it saved."""
 
 import json
@@ -12,11 +12,11 @@ import numpy as np
 import pytest
 import torch
 
-from Unet3d_ResBlock import NeuralNetwork
+from unet3d_resblock import NeuralNetwork
 
 REPO = Path(__file__).resolve().parents[1]
-TRAIN_SCRIPT = REPO / "TrainModel_UNet.py"
-INFERENCE_SCRIPT = REPO / "InferenceTemplate.py"
+TRAIN_SCRIPT = REPO / "train_model_unet.py"
+INFERENCE_SCRIPT = REPO / "inference_template.py"
 DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
 
 CUBE_SHAPE = (32, 32, 32)  # (nX, nY, nSpec) as VOF writes it; 32 survives the default 4 encoder stages
@@ -170,7 +170,7 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
             )
 
 
-@pytest.mark.xfail(strict=True, reason="UseModel.py still targets the pre-refactor network and dataset API")
+@pytest.mark.xfail(strict=True, reason="use_model.py still targets the pre-refactor network and dataset API")
 def test_inference_script_runs_on_trained_checkpoint(trained):
     name, _, radial_bins, run_dir = trained
     if radial_bins:

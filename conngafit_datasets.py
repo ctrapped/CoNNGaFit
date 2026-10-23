@@ -293,12 +293,12 @@ class CoNNGaFitImageDataset:
         return image, label
 
 
-####Dataset class for inference. Loads datacubes with no labels, e.g. VOF images or real observations converted with FITS_to_CoNNGaFit.py
+####Dataset class for inference. Loads datacubes with no labels, e.g. VOF images or real observations converted with fits_to_conngafit.py
 class CoNNGaFitImageInferenceDataset:
     """PyTorch-style dataset of datacubes to run a trained network on, with no labels.
 
     paths: the hdf5 files to load, each holding a 'spectra' datacube (y, x, velocity channel) -
-        VOF's *_fullSpectra.hdf5 outputs, or real observations converted with FITS_to_CoNNGaFit.py.
+        VOF's *_fullSpectra.hdf5 outputs, or real observations converted with fits_to_conngafit.py.
     transform: callable applied to each loaded datacube (e.g. torchvision ToTensor/Normalize).
 
     The names attribute holds each datacube's filename without extension, in dataset order.

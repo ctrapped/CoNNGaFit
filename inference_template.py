@@ -1,11 +1,11 @@
 import argparse
 
-from UseModel import RunInferences
+from use_model import RunInferences
 
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
-####input datacubes. See UseModel.RunInferences for the full parameter description.
+####input datacubes. See use_model.RunInferences for the full parameter description.
 #
-####Run as: python InferenceTemplate.py [options]
+####Run as: python inference_template.py [options]
 ####  Run with --help to see all options.
 
 

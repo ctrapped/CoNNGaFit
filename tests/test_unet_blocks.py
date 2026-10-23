@@ -1,11 +1,11 @@
-"""Unet_blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
+"""unet_blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
 
 import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from Unet_blocks import (
+from unet_blocks import (
     ConvMapHead,
     DilatedResidualBlock,
     ResBlock2d,

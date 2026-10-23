@@ -4,12 +4,12 @@ import pytest
 import torch
 from torch import nn
 
-import Unet3d_Dilated_ResNet
-import Unet3d_ResBlock
+import unet3d_dilated_resnet
+import unet3d_resblock
 
 HEADS = {
-    Unet3d_ResBlock: ("fc", "conv", "conv_halfres"),
-    Unet3d_Dilated_ResNet: ("fc", "conv"),
+    unet3d_resblock: ("fc", "conv", "conv_halfres"),
+    unet3d_dilated_resnet: ("fc", "conv"),
 }
 OUTPUT_SIZE = 5
 DROPOUT = 0.5

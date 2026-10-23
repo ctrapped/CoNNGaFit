@@ -2,15 +2,15 @@ import numpy as np
 import torch
 from torch import nn
 
-from Unet_blocks import ConvMapHead, DeconvBlock, HalfResConvHead, ResidualBlock, Stem, Upsample, _match_spatial
-from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+from unet_blocks import ConvMapHead, DeconvBlock, HalfResConvHead, ResidualBlock, Stem, Upsample, _match_spatial
+from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
 # arbitrary size and predicts a flattened output map. See NeuralNetwork for the full
 # parameter list.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
-# Building blocks live in Unet_blocks.py; latent-image diagnostics in Unet_diagnostics.py.
+# Building blocks live in unet_blocks.py; latent-image diagnostics in unet_diagnostics.py.
 
 
 #### Input-shape checks ####
@@ -75,11 +75,11 @@ class NeuralNetwork(nn.Module):
         `pool_output`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see Unet_blocks.py) - spectral attention pool, bilinear resize to
+        'conv': ConvMapHead (see unet_blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
         'conv_halfres': one more decoder stage up to the stem conv's half resolution (with a
-        skip connection from it), then HalfResConvHead (see Unet_blocks.py) - spectral axis
+        skip connection from it), then HalfResConvHead (see unet_blocks.py) - spectral axis
         folded into channels, plus global context from the bottleneck, two 3x3 convs, a 1x1
         output conv, and a bilinear resize to `output_shape`. Its size also does not grow
         with the map size.
@@ -362,7 +362,7 @@ class NeuralNetwork(nn.Module):
             sample; (nSpec, nX, nY) must equal the model's input_shape. A channel dim of
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations at each
-            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels in Unet_diagnostics.py) -
+            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels in unet_diagnostics.py) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
@@ -451,7 +451,7 @@ class NeuralNetwork(nn.Module):
         """Put every Dropout/Dropout2d/Dropout3d submodule into train mode while leaving BatchNorm3d
         (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
         sample, but BatchNorm3d in train mode would normalize against a single-sample batch
-        at inference (RunInferences in UseModel.py runs batch_size=1)."""
+        at inference (RunInferences in use_model.py runs batch_size=1)."""
         for m in self.modules():
             if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
                 m.train()

@@ -4,14 +4,14 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from Unet3d_ResBlock import _check_stage_compatibility
-from Unet_blocks import DeconvBlock, ResidualBlock, SpectralAttentionPool, Stem, Upsample, _match_spatial
-from Unet_diagnostics import count_params, layer_param_lines
+from unet3d_resblock import _check_stage_compatibility
+from unet_blocks import DeconvBlock, ResidualBlock, SpectralAttentionPool, Stem, Upsample, _match_spatial
+from unet_diagnostics import count_params, layer_param_lines
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
 # Learns p(map | cube): a 2-d target map (e.g. radial mass flux) is diffused with Gaussian noise
-# and a 3-d residual U-Net, built from the shared blocks in Unet_blocks.py, learns to remove it while
+# and a 3-d residual U-Net, built from the shared blocks in unet_blocks.py, learns to remove it while
 # looking at the datacube. Sampling many maps per cube gives a posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
@@ -182,7 +182,7 @@ class MapHead(nn.Module):
 class DenoisingUNet3d(nn.Module):
     """eps_theta(cube, y_t, t): predicts the noise added to a 2-d map, conditioned on a 3-d cube.
 
-    Layout mirrors Unet3d_ResBlock.NeuralNetwork, minus its fixed-size FC head:
+    Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy map resized to (nX, nY) and tiled along nSpec (1 ch)
       stem   - ConditionalStem, every axis -> ceil(N/4)
       encoder- n_stages stages of 2 TimeResidualBlocks; channels nFilt0 * 2**i, axes halve after stage 0
@@ -462,7 +462,7 @@ class GaussianDiffusion(nn.Module):
         n_timesteps: number of diffusion steps T.
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
         target_shape: (H, W) of the map. Needed only to reshape flattened (B, H*W) labels, as
-            produced by Datasets.py; if None, 3-d (B, H, W) labels are required and sampling
+            produced by conngafit_datasets.py; if None, 3-d (B, H, W) labels are required and sampling
             defaults to the cube's (nX, nY).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
@@ -479,7 +479,7 @@ class GaussianDiffusion(nn.Module):
         # buffers move with .to(device) and are saved in state_dict
         self.register_buffer("alpha_bar", alpha_bar.float())
 
-    # -- shape handling: accept flattened (B, H*W) labels from Datasets.py --
+    # -- shape handling: accept flattened (B, H*W) labels from conngafit_datasets.py --
     def _to_map(self, y):
         if y.dim() == 3:
             return y

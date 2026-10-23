@@ -1,12 +1,12 @@
 import argparse
 import os
 
-from UseModel import RunInferences
+from use_model import RunInferences
 
 ####Runs inference with a previously trained 'unet18' network on the validation set for a
 ####given sample, so predictions can be spot-checked against the known validation labels.
 #
-####Run as: python InferenceTest_ValidationSet.py [options]
+####Run as: python inference_test_validation_set.py [options]
 ####  Run with --help to see all options.
 
 

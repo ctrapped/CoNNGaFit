@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-import Unet3d_Dilated_ResNet
-import Unet3d_ResBlock
+import unet3d_dilated_resnet
+import unet3d_resblock
 
 INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
@@ -13,8 +13,8 @@ SEED = 0
 # Constructor arguments shared by every network, plus per-network arguments that keep it small
 COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, nFilt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), nFC=8)
 SMALL_KWARGS = {
-    Unet3d_ResBlock: dict(n_stages=3),
-    Unet3d_Dilated_ResNet: dict(n_blocks=1, dilation_rates=(1, 2, 1)),
+    unet3d_resblock: dict(n_stages=3),
+    unet3d_dilated_resnet: dict(n_blocks=1, dilation_rates=(1, 2, 1)),
 }
 
 

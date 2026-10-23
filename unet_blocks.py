@@ -5,11 +5,11 @@ import torch.nn.functional as F
 from torch import nn
 
 # Shared building blocks for the CoNNGaFit 3-d networks:
-#   Stem, ResidualBlock, Upsample, DeconvBlock - Unet3d_ResBlock.NeuralNetwork and Unet3d_DDPM.DenoisingUNet3d
-#   DilatedResidualBlock                       - Unet3d_Dilated_ResNet.NeuralNetwork
-#   SpectralAttentionPool                      - the conv heads below and Unet3d_DDPM's MapHead
+#   Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
+#   DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
+#   SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
 #   ResBlock2d, ConvMapHead                    - head='conv' option of both regression networks
-#   HalfResConvHead                            - head='conv_halfres' option of Unet3d_ResBlock.NeuralNetwork
+#   HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
 # plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
@@ -51,7 +51,7 @@ def _ceil_conv_pad(kernel_size, stride):
     when total_pad == k - 1. The required total is therefore the same for every stride; stride
     is still taken per axis to validate it. For stride=1 this is the usual 'same' padding.
     For odd k this splits symmetrically; for even k the extra 1 goes on the trailing side.
-    Used by Stem, ResidualBlock and Unet3d_Dilated_ResNet's Encoder. Returned as an F.pad arg
+    Used by Stem, ResidualBlock and unet3d_dilated_resnet's Encoder. Returned as an F.pad arg
     for a 5-d tensor: (W_b, W_a, H_b, H_a, D_b, D_a).
     """
     kernel_size, stride = tuple(kernel_size), tuple(stride)
@@ -303,7 +303,7 @@ class DeconvBlock(nn.Module):
         return self.dropout(x)
 
 
-#### Dilated residual block (Unet3d_Dilated_ResNet's Process stack) ####
+#### Dilated residual block (unet3d_dilated_resnet's Process stack) ####
 class DilatedResidualBlock(nn.Module):
     """One dilated residual block: a chain of Conv3d layers whose dilation rates cycle through
     `dilation_rates` (default (1, 2, 4, 8, 4, 2, 1)), each at stride 1 with 'same' padding so

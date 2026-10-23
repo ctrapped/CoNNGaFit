@@ -3,18 +3,18 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from Unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
-from Unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+from unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
+from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
 
 # 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes following
 # architecture in Stachenfeld et al. 2021, (https://arxiv.org/abs/2112.15275).
 # Reads an (nSpec x nX x nY) cube of arbitrary size and predicts a flattened output map,
-# matching the input/output conventions of Unet3d_ResBlock.py. There is no spatial
+# matching the input/output conventions of unet3d_resblock.py. There is no spatial
 # downsampling/upsampling path or skip connections; the receptive field is grown entirely
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
 #
-# Written by Caleb Choban using Claude LLM, adapting Unet3d_ResBlock.py's conventions.
-# DilatedResidualBlock lives in Unet_blocks.py; latent-image diagnostics in Unet_diagnostics.py.
+# Written by Caleb Choban using Claude LLM, adapting unet3d_resblock.py's conventions.
+# DilatedResidualBlock lives in unet_blocks.py; latent-image diagnostics in unet_diagnostics.py.
 
 
 def _strided_out_shape(input_shape, stride):
@@ -95,12 +95,12 @@ class NeuralNetwork(nn.Module):
         spatial/spectral shape fixed at nFilt0 and the encoder's output shape.
       - Decode (layer_decode): a single Conv3d (see Decoder) projecting back to nFilt0
         channels, feeding the regression head.
-      - Head, chosen by `head` (both options identical to Unet3d_ResBlock.py's):
+      - Head, chosen by `head` (both options identical to unet3d_resblock.py's):
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
         `pool_output`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see Unet_blocks.py) - spectral attention pool, bilinear resize to
+        'conv': ConvMapHead (see unet_blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
 
@@ -264,7 +264,7 @@ class NeuralNetwork(nn.Module):
             )
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
-            # Identical to Unet3d_ResBlock.py's head.
+            # Identical to unet3d_resblock.py's head.
             self.avgpool0 = nn.AdaptiveAvgPool3d(self.pool_output)
             flat_features = nFilt0 * int(np.prod(self.pool_output))
 
@@ -296,7 +296,7 @@ class NeuralNetwork(nn.Module):
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations after the
             encoder and after each Process block to latentImageOutput (see
-            SaveSummedSpectralChannels in Unet_diagnostics.py) - useful for visually debugging what the network
+            SaveSummedSpectralChannels in unet_diagnostics.py) - useful for visually debugging what the network
             is learning, not needed for normal training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
             - the flattened predicted output map. If predict_variance=True, a (mean, logvar)
@@ -375,7 +375,7 @@ class NeuralNetwork(nn.Module):
         """Put every Dropout/Dropout2d/Dropout3d submodule into train mode while leaving BatchNorm3d
         (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
         sample, but BatchNorm3d in train mode would normalize against a single-sample batch
-        at inference (RunInferences in UseModel.py runs batch_size=1)."""
+        at inference (RunInferences in use_model.py runs batch_size=1)."""
         for m in self.modules():
             if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
                 m.train()

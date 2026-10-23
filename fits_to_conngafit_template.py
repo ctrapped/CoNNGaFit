@@ -1,8 +1,8 @@
 import numpy as np
 
-from FITS_to_CoNNGaFit import FITS_to_CoNNGaFit
+from fits_to_conngafit import FITS_to_CoNNGaFit
 
-####Template for how to convert from fits to CoNNGaFit compatible hdf5 files using FITS_to_CoNNGaFit.py
+####Template for how to convert from fits to CoNNGaFit compatible hdf5 files using fits_to_conngafit.py
 ####imageDir should point to the FITS file
 ####output should point to where you want to write the converted datacubes
 ####distance is not necesarry

@@ -23,8 +23,8 @@ body:
       label: Component
       options:
         - Training scripts
-        - Inference (UseModel / Inference scripts)
-        - Networks (Unet3d_ResBlock / Dilated_ResNet / DDPM / Unet_blocks)
+        - Inference (use_model / inference scripts)
+        - Networks (unet3d_resblock / unet3d_dilated_resnet / unet3d_ddpm / unet_blocks)
         - Datasets
         - FITS conversion
         - Plotting

@@ -11,7 +11,7 @@ pip install torch torchvision numpy pandas h5py matplotlib scipy astropy
 
 ## Data format
 
-Each of `Datasets.py`, `Datasets_600x600.py`, `Datasets_60x60.py`, `Datasets_1d.py` defines a `CoNNGaFitImageDataset` that reads a CSV with no header:
+Each of `conngafit_datasets.py`, `Datasets_600x600.py`, `Datasets_60x60.py`, `Datasets_1d.py` defines a `CoNNGaFitImageDataset` that reads a CSV with no header:
 
 - Column 0: path (relative to the dataset's `root_dir`, normally `.`) to the input datacube - an `.hdf5` file containing a `spectra` dataset (or `moments`, if `use_moment_maps=True`), a `.fits` file, or a plain image.
 - Columns 1..N: the flattened target label map. N must match `Nlabels` at the top of the dataset file being used (`40*40` for the standard/HiRes-test networks, `600*600` for the 600x600 network, `60*60` for the 60x60 variant).
@@ -120,20 +120,20 @@ python WriteDatasetsToCsv_HiResTests.py --sim-dir /path/to/fire-2 --output-dir /
 
 Run with `--help` for the full flag list (`--output-name`, `--use-denoised-spectra`, `--use-time-averaged-annotations`); the galaxy/snapshot/inclination/position-angle lists to scan are set as in-file variables near the bottom of the script rather than CLI flags.
 
-To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, use `FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, saveImages=False)` from `FITS_to_CoNNGaFit.py` - see `FITS_to_CoNNGaFit_Template.py` for example usage (edited directly, no CLI).
+To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, use `FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, saveImages=False)` from `fits_to_conngafit.py` - see `fits_to_conngafit_template.py` for example usage (edited directly, no CLI).
 
 ## Inference
 
-`UseModel.RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `networkType='unet18'` is implemented. `modelPath` overrides the built-in default checkpoint path; `params=[nFilt0, k0, k1, nFC]` overrides the default architecture hyperparameters.
+`use_model.RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `networkType='unet18'` is implemented. `modelPath` overrides the built-in default checkpoint path; `params=[nFilt0, k0, k1, nFC]` overrides the default architecture hyperparameters.
 
 Two ready-to-run scripts wrap this with `argparse`:
 
 ```
-python InferenceTemplate.py --image-list path/to/list.csv --output-prefix path/to/output_ --model-path path/to/checkpoint
-python InferenceTest_ValidationSet.py --sample-suffix finalSnapNoM12m --model-path path/to/checkpoint
+python inference_template.py --image-list path/to/list.csv --output-prefix path/to/output_ --model-path path/to/checkpoint
+python inference_test_validation_set.py --sample-suffix finalSnapNoM12m --model-path path/to/checkpoint
 ```
 
-Run either with `--help` for the full flag list. `InferenceTest_ValidationSet.py` runs inference on a sample's validation-annotations CSV specifically, to spot-check predictions against known labels.
+Run either with `--help` for the full flag list. `inference_test_validation_set.py` runs inference on a sample's validation-annotations CSV specifically, to spot-check predictions against known labels.
 
 ## Citation and license
 

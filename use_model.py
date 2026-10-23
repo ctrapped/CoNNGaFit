@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from Datasets import CoNNGaFitImageInferenceDataset
-from PlottingFunctions import CreateBasicPlots, LoadNames, MakeImage
+from conngafit_datasets import CoNNGaFitImageInferenceDataset
+from plotting_functions import CreateBasicPlots, LoadNames, MakeImage
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = 'cpu'
@@ -18,7 +18,7 @@ Sim2PhysicalUnits_MassFlux = (
 
 ####Functions to calculate inferences on HI spectral datacubes from a previously trained CoNNGaFit network. Generates a projection map and a radial plot for the fitted parameter of interest.
 ####For use, you need the trained network and the images to run the inferences on with a corresponding .csv file listing their location.
-####Call RunInferences, providing the network type you wish to use, the output directory, and the .csv file containing the input images. See InferenceTemplate.py for an example
+####Call RunInferences, providing the network type you wish to use, the output directory, and the .csv file containing the input images. See inference_template.py for an example
 ####
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 11/21/2023
@@ -32,7 +32,7 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
         implemented; any other value raises ValueError.
     imageOutput_prefix: directory/filename prefix prepended to every output file written.
     imageList: path to a CSV listing the input datacubes to run inference on (see
-        CoNNGaFitImageInferenceDataset in Datasets.py for the expected format).
+        CoNNGaFitImageInferenceDataset in conngafit_datasets.py for the expected format).
     modelPath: path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint
         to load, overriding the networkType's hardcoded default checkpoint below. Pass None to
         use the default checkpoint for the chosen networkType.

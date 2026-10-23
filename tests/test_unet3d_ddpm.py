@@ -1,11 +1,11 @@
-"""Unet3d_DDPM: noise schedules, time conditioning, the denoising U-Net and the diffusion process."""
+"""unet3d_ddpm: noise schedules, time conditioning, the denoising U-Net and the diffusion process."""
 
 import pytest
 import torch
 from conftest import BATCH_SIZE, INPUT_SHAPE
 from torch import nn
 
-import Unet3d_DDPM as ddpm
+import unet3d_ddpm as ddpm
 
 N_TIMESTEPS = 10
 N_SAMPLES = 3

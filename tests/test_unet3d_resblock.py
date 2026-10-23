@@ -1,10 +1,10 @@
-"""Unet3d_ResBlock: stage-count validation, head/upsample configurations and analytic stage shapes."""
+"""unet3d_resblock: stage-count validation, head/upsample configurations and analytic stage shapes."""
 
 from itertools import chain
 
 import pytest
 
-import Unet3d_ResBlock as unet
+import unet3d_resblock as unet
 
 HEADS = ["fc", "conv", "conv_halfres"]
 CONV_HEADS = ["conv", "conv_halfres"]

@@ -7,8 +7,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from Datasets import TARGETS, CoNNGaFitImageDataset, inclination_folders
-from Unet3d_ResBlock import NeuralNetwork
+from conngafit_datasets import TARGETS, CoNNGaFitImageDataset, inclination_folders
+from unet3d_resblock import NeuralNetwork
 
 matplotlib.use("Agg")
 import argparse
@@ -17,15 +17,15 @@ import tomllib
 import h5py
 from matplotlib import pyplot as plt
 
-from PlottingFunctions import MakeCompImage, MakeCompImage_1d, MakeCorrelationPlot, SaveHDF5, SaveHDF5_1d
+from plotting_functions import MakeCompImage, MakeCompImage_1d, MakeCorrelationPlot, SaveHDF5, SaveHDF5_1d
 
-####Trains the Unet read from Unet3d_ResBlock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see Datasets.py).
+####Trains the Unet read from unet3d_resblock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Hyperparameters and datasets (including the target annotation) are read from two parameter files,
 ####configs/hyperparams.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS below
 #
-####Run as: python TrainModel_UNet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
+####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
 ####  Run with --help to see all options. The two parameter files and --run-name are normally the
 ####  only options you need. The datasets file gives the path to each galaxy's VOF outputs, and by default:
 ####    NetworkWeights/    receives the trained model checkpoint (<run-name>.pt/.hdf5)
@@ -91,7 +91,7 @@ def load_parameter_file(path, keys, optional_keys=frozenset()):
 
 def dataset_sources(section, name, path, base_dir=None):
     """Check a datasets-file section ("VOF output directory" = snapshots lines) and resolve each
-    directory relative to base_dir (default: the datasets file's folder). Returns the dict Datasets.py expects."""
+    directory relative to base_dir (default: the datasets file's folder). Returns the dict conngafit_datasets.py expects."""
     if not isinstance(section, dict):
         raise ValueError(f'{path}: write [{name}] as "/path/to/vof_outputs" = snapshots lines')
     # base_dir itself may be relative, to the datasets file's folder

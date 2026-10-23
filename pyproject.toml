@@ -27,15 +27,15 @@ dev = ["pytest", "ruff", "pre-commit"]
 
 [tool.setuptools]
 py-modules = [
-    "Datasets",
-    "FITS_to_CoNNGaFit",
-    "PlottingFunctions",
-    "Unet3d_DDPM",
-    "Unet3d_Dilated_ResNet",
-    "Unet3d_ResBlock",
-    "Unet_blocks",
-    "Unet_diagnostics",
-    "UseModel",
+    "conngafit_datasets",
+    "fits_to_conngafit",
+    "plotting_functions",
+    "unet3d_ddpm",
+    "unet3d_dilated_resnet",
+    "unet3d_resblock",
+    "unet_blocks",
+    "unet_diagnostics",
+    "use_model",
 ]
 
 [tool.pytest.ini_options]
