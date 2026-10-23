@@ -1,92 +1,97 @@
 # Training walkthrough
 
-Short guide to training a CoNNGaFit network on your personal computer or GPU cluster.
+Short guide to training a CoNNGaFit network on your personal computer or a GPU cluster, from VOF outputs to a trained model.
 
 ## 1. Environment setup
 
-### Personal Computer
+### Personal computer
 
-Install the requisite python packages below. Make sure to use a CUDA-enabled version of `pytorch` build if training on GPU.
+From the repository root:
 
-
-```
-pip install torch torchvision numpy pandas h5py matplotlib scipy astropy
-```
-
-
-### GPU Cluster
-
-
-For supported GPU clusters (currently only Quartz at IU), follow the instructions in the appropriately named subfolder (i.e. Quartz). You will also find example job scripts for training on said clusters.
-
-
-
-## 2. Data layout
-
-The standard training scripts expect, relative to `--data-dir` (default
-`CoNNGaFitData`):
-
-```
-<data-dir>/
-  annotation_datasets/
-    training_annotations_MassFlux_<suffix>.csv
-    validation_annotations_MassFlux_<suffix>.csv
-    test_annotations_MassFlux_<suffix>.csv
-  outputs/images/          <- create manually
-  outputs/diagnostics/     <- create manually
-<network-dir>/             (default TrainedNetworks)
+```bash
+pip install -e .
 ```
 
-`outputs/images` and `outputs/diagnostics` are **not** created automatically —
-`mkdir` them first or `plt.savefig` will fail.
+This installs CoNNGaFit's dependencies and lets Python import its modules from this folder. To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)).
 
-Each annotation CSV has no header: column 0 is the path to an input datacube
-(`.hdf5` with a `spectra` dataset, `.fits`, or a plain image), resolved relative
-to the dataset `root_dir` (normally `.`, i.e. the launch directory); columns
-1..N are the flattened target label map (N must match `Nlabels` in the dataset
-file — `40*40` for the standard networks). CSVs are produced by a
-`WriteDatasetsToCsv`-style script; the training scripts expect them to exist.
+### GPU cluster
 
-## 3. Pick a script
+For supported GPU clusters (currently only Quartz at IU), follow the instructions in the matching subfolder, e.g. [`Quartz/`](Quartz/README.md), which also has an example SLURM job script.
 
-| Script | Target |
-|---|---|
-| `TrainModel_MassFlux_UNet.py` | Radial mass flux (40×40) |
-| `TrainModel_RC_UNet.py` | Rotational velocity (40×40) |
-| `TrainModel_MassFlux_UNet_HiResTest.py` | Radial mass flux, lighter stem |
-| `TrainModel_MassFlux_UNet_HiResTest2.py` | Radial mass flux (600×600), flat dir layout |
+## 2. Generate training data with VOF
 
-## 4. Set hyperparameters
+CoNNGaFit trains on the optically thin outputs of [VeryObservableFIRE](https://github.com/ctrapped/VeryObservableFIRE) (VOF): one `.hdf5` file per galaxy, snapshot and viewing angle, holding the spectral datacube (`spectra`) and the true gas properties at every pixel. VOF writes them as:
 
-Not CLI flags — edit the `HYPERPARAMETERS` block near the top of the script:
-`learning_rate`, `weight_decay`, `epochs` (default 4000; drives wall time),
-`n_filt0`/`k0`/`k1`/`n_fc` (network size; `n_fc=0` removes the FC bottleneck),
-`dropout_rate`, `block_dropout_rate`, `batchSizeDefault` (`None` = full dataset
-as one batch each epoch, used by the first three scripts).
+```
+<VOF output directory>/
+  i45/
+    m12i_i45_pa0_600_image_fullSpectra.hdf5
+    m12i_i45_pa90_600_image_fullSpectra.hdf5
+    ...
+  i0/
+    ...
+```
+
+Run VOF for each galaxy you want to train, validate or test on, using the inclinations you want to train on. To train on radial curves measured face on (`radial_projection = "face_on"`, below), also include inclination 0: each image's curve is read from its snapshot's `i0` image.
+
+## 3. Write a datasets file
+
+Copy `configs/datasets.toml` and edit it. It sets what to learn and which VOF output directories to learn it from:
+
+```toml
+target = "radial_mass_flux"
+augment = "major_axis"
+inclinations = [45]
+radial_bins = 0
+radial_projection = "face_on"
+base_dir = "/path/to/VOF_outputs"   # optional: relative paths below are relative to this
+
+[training]
+"m12i" = [500, 600]   # VOF output directory = a snapshot, or an inclusive [min, max] range
+"m12f" = 600
+
+[validation]
+"m12c" = 600
+
+[testing]
+"m12m" = 600
+```
+
+- `target`: `mass`, `radial_velocity`, `cylindrical_radial_velocity`, `rotational_velocity`, `radial_mass_flux` or `cylindrical_radial_mass_flux`.
+- `augment`: rotations/flips added to the training set: `"major_axis"` (4 per image, keeping the major axis along x), `"all"` (8 per image) or `"none"`.
+- `inclinations`: `"all"`, or a list in degrees, used for every set.
+- `radial_bins`: `0` trains on maps (one value per pixel); `N > 0` trains on `N`-bin radial curves.
+- `suffix` (optional): VOF's `outputSuffix`, if that VOF run used one.
+
+Every key is checked when training starts, and a missing directory, snapshot or inclination stops the run with an error naming it.
+
+## 4. Choose hyperparameters
+
+`configs/hyperparams.toml` (tuned for radial mass flux) and `configs/hyperparams_rc.toml` (rotational velocity) are the starting points; the comments in each file explain every key. The ones you'll most often change:
+
+- `epochs`: training length, and the main driver of run time.
+- `output_head`: `"conv_halfres"` or `"conv"` for large maps (128×128 and up), `"fc"` for small maps or radial curves.
+- `n_filt0`, `k0`, `k1`: network size.
+- `label_scaling`: `"symmetric"` for signed targets like mass flux, `"one-sided"` for targets like rotational velocity.
 
 ## 5. Run
 
 ```bash
-python TrainModel_MassFlux_UNet.py \
-    --data-dir CoNNGaFitData \
-    --network-dir TrainedNetworks \
-    --sample-suffix All_Inclinations_finalSnapNoM12m
+python train_model_unet.py \
+    --hyperparams configs/hyperparams.toml \
+    --datasets my_datasets.toml \
+    --run-name m12_massflux
 ```
 
-`--sample-suffix` builds the default CSV / output / model names; override any
-individually with `--training-csv` / `--validation-csv` / `--testing-csv` /
-`--output-name` / `--model-name`. Run with `--help` for the full list.
+Run from the repository root. The defaults for `--hyperparams` and `--datasets` are the files in `configs/`. `--run-name` names the checkpoint and every output (default: the target). Batch sizes default to about a tenth of each set; override them with `--batch-size` and `--test-batch-size`. Run with `--help` for every option.
 
-The `HiResTest2` script uses a different layout: `--data-dir ./training_datasets
---output-dir ./outputs --network-dir ./networks` plus explicit `--*-csv`.
+Progress is logged with timestamps (`-v` for debug detail, `-q` for warnings only). Log messages go to stderr, so on a cluster make sure your job script keeps it, e.g. with `#SBATCH --error` as in the Quartz example.
 
 ## 6. Outputs
 
-- `<network-dir>/<model-name>.pt` — trained weights.
-- `<network-dir>/<model-name>.hdf5` — normalization stats + hyperparameters,
-  needed to rebuild the model for inference.
-- `<data-dir>/outputs/diagnostics/` — loss / accuracy / correlation plots.
-- `<data-dir>/outputs/images/` — per-epoch comparison images / hdf5 snapshots
-  (written on the final epoch).
+- `NetworkWeights/<run-name>.pt`: trained weights.
+- `NetworkWeights/<run-name>.hdf5`: everything needed to rebuild and use the network, including the image normalization (`image_stats`), label scaling (`label_stats`), input shape, output head and the full text of both parameter files.
+- `DiagnosticOutputs/diagnostics/`: loss and accuracy curves, prediction/truth correlation plots, and `<run-name>_LossesAndAccuracies.hdf5`.
+- `DiagnosticOutputs/images/`: final-epoch prediction vs. truth for every sample (`.hdf5`, plus a comparison `.png` for validation and test samples), in physical units.
 
-See the top-level `README.md` "Inference" section for using the checkpoint.
+Change the two folders with `--network-dir` and `--output-dir`; both are created if missing.

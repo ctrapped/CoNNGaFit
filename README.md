@@ -1,149 +1,136 @@
 # CoNNGaFit
+
 [![tests](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml/badge.svg)](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml)
 
-<b>Co</b>nvoltuional <b>N</b>eural <b>N</b>etwork for <b>Ga</b>laxy <b>Fit</b>ting. Train and use convolutional neural networks to fit various galactic parameters to synthetic HI images. Training images and annotations for the FIRE simulations can be generated using VeryObservableFIRE
+**Co**nvolutional **N**eural **N**etworks for **Ga**laxy **Fit**ting: train 3-d convolutional neural networks to predict the physical properties of a galaxy's gas, such as its radial mass flux or rotation, directly from HI 21cm spectral datacubes.
 
-## Requirements
+Training data comes from [VeryObservableFIRE](https://github.com/ctrapped/VeryObservableFIRE) (VOF), which turns FIRE galaxy simulations into synthetic telescope observations paired with the true gas properties at every pixel.
 
-```
-pip install torch torchvision numpy pandas h5py matplotlib scipy astropy
-```
+## Highlights
 
-## Data format
+- **Network:** a 3-d residual U-Net (`unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves.
+- **Targets:** mass, radial / cylindrical-radial / rotational velocity, and radial / cylindrical-radial mass flux, all read from VOF's per-pixel annotations.
+- **Configuration:** hyperparameters and datasets live in two TOML files, so a training run is reproducible from its config, and every trained model stores both files alongside its weights.
+- **Development:** 360 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
 
-Each of `conngafit_datasets.py`, `Datasets_600x600.py`, `Datasets_60x60.py`, `Datasets_1d.py` defines a `CoNNGaFitImageDataset` that reads a CSV with no header:
+## Installation
 
-- Column 0: path (relative to the dataset's `root_dir`, normally `.`) to the input datacube - an `.hdf5` file containing a `spectra` dataset (or `moments`, if `use_moment_maps=True`), a `.fits` file, or a plain image.
-- Columns 1..N: the flattened target label map. N must match `Nlabels` at the top of the dataset file being used (`40*40` for the standard/HiRes-test networks, `600*600` for the 600x600 network, `60*60` for the 60x60 variant).
+Requires Python 3.11+. From the repository root:
 
-Training/validation/test CSVs are normally produced by a `WriteDatasetsToCsv`-style script (see below) - training scripts expect these to already exist.
-
-## Directory layout
-
-All four training scripts share the same three-directory convention and the same defaults, so with data already
-in place, **the only argument you normally need to pass is `--sample-suffix`**:
-
-```
-TrainingData/                    (input - override with --data-dir)
-  annotation_datasets/
-    training_annotations_*.csv
-    validation_annotations_*.csv
-    test_annotations_*.csv
-NetworkWeights/                  (output - override with --network-dir; created automatically)
-  <model-name>.pt                (trained weights)
-  <model-name>.hdf5              (normalization stats + hyperparameters)
-DiagnosticOutputs/                (output - override with --output-dir; created automatically)
-  images/                        (per-epoch comparison plots/hdf5 snapshots)
-  diagnostics/                   (loss curves, correlation plots)
+```bash
+pip install -e .            # CoNNGaFit and its dependencies
+pip install -e ".[dev]"     # + development tools (pytest, ruff, pre-commit)
 ```
 
-`TrainModel_MassFlux_UNet_HiResTest2.py` is the one exception: its CSVs sit directly in `<data-dir>` with no
-`annotation_datasets/` subfolder (see below). `<network-dir>` and `<output-dir>/{images,diagnostics}` are created
-automatically on every run if they don't already exist; `<data-dir>` (input) is not.
+To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)). Instructions for the Quartz cluster at IU are in [`Tutorials/Quartz`](Tutorials/Quartz/README.md).
 
 ## Training
 
-Four training scripts are available, each pairing a training loop with one network implementation:
+```bash
+python train_model_unet.py --run-name my_run
+```
 
-| Script | Network used | Target |
+Training is set by two parameter files, `configs/hyperparams.toml` and `configs/datasets.toml` by default; pass others with `--hyperparams` and `--datasets`. Every key is required unless marked optional.
+
+### Datasets file
+
+`configs/datasets.toml` sets what to learn and which VOF outputs to learn it from:
+
+```toml
+target = "radial_mass_flux"     # mass, radial_velocity, cylindrical_radial_velocity,
+                                # rotational_velocity, radial_mass_flux, cylindrical_radial_mass_flux
+augment = "major_axis"          # rotations/flips added to the training set: "major_axis", "all" or "none"
+inclinations = [45]             # inclinations to use in every set: "all", or a list in degrees
+radial_bins = 0                 # 0 trains on maps; N > 0 trains on N-bin radial curves
+radial_projection = "face_on"   # where radial curves are measured: "face_on" or "sky"
+suffix = ""                     # optional: VOF's outputSuffix in the filenames
+base_dir = "/path/to/VOF_outputs"  # optional: relative paths below are relative to this
+
+[training]
+"m12i/vof_outputs" = [500, 600]   # a VOF output directory = a snapshot, or an inclusive [min, max] range
+"m12f/vof_outputs" = 600
+
+[validation]
+"m12c/vof_outputs" = 600
+
+[testing]
+"m12m/vof_outputs" = 600
+```
+
+Each path is a VOF output directory, containing one folder per inclination (`i45/`, ...). CoNNGaFit loads every `*_fullSpectra.hdf5` image in it that matches the inclinations, snapshots and suffix.
+
+### Hyperparameters file
+
+| Key | Meaning |
+|---|---|
+| `learning_rate`, `weight_decay`, `epochs` | Adam optimizer settings and training length |
+| `n_filt0`, `k0`, `k1` | Filters in the first encoder stage (doubling at each later stage), stem kernel size, residual/deconv block kernel size |
+| `output_head` | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
+| `n_fc` | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
+| `dropout_rate`, `block_dropout_rate` | Dropout before the output layer, and channel-wise dropout inside every block (off by default) |
+| `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]) |
+
+`configs/hyperparams_rc.toml` is a starting point for rotational velocity.
+
+### Command-line options
+
+| Option | Default | Purpose |
 |---|---|---|
-| `TrainModel_MassFlux_UNet.py` | `NetworkModels/NeuralNetwork_Unet3d.py` | Radial mass flux (40x40) |
-| `TrainModel_RC_UNet.py` | `NetworkModels/NeuralNetwork_Unet3d.py` | Rotational velocity (40x40) |
-| `TrainModel_MassFlux_UNet_HiResTest.py` | `NetworkModels/AlternativeNetworks/Unet3d_HiResTest.py` | Radial mass flux (40x40, lighter stem) |
-| `TrainModel_MassFlux_UNet_HiResTest2.py` | `NetworkModels/NeuralNetwork_Unet3d_600x600.py` | Radial mass flux (600x600) |
+| `--run-name` | the target | Name of the checkpoint and every diagnostic output |
+| `--network-dir` | `NetworkWeights` | Where the trained model is written |
+| `--output-dir` | `DiagnosticOutputs` | Where diagnostic images and plots are written |
+| `--batch-size` | ~1/10 of the training set (at least 2) | Training batch size; `0` trains on the full set as one batch |
+| `--test-batch-size` | ~1/10 of the validation set | Validation/testing batch size |
+| `-v` / `-q` | | Show debug messages / only warnings and errors |
 
-All four are run directly with Python and take command-line options via `argparse` - run any of them with `--help`
-to see the full list, grouped as below. Typical usage:
+Both output directories are created if missing. Run with `--help` for details.
 
-```
-python TrainModel_MassFlux_UNet.py --sample-suffix All_Inclinations_finalSnapNoM12m
-```
-
-### `--sample-suffix`
-
-The one option you're expected to pass routinely. It's used to build every default CSV/output/model filename
-below, so as long as `TrainingData/annotation_datasets/` holds annotation CSVs named for it, nothing else needs
-to be given.
-
-### Input/output directories (override the default layout)
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--data-dir` | `TrainingData` | Root annotation CSVs are read from (`<data-dir>/annotation_datasets/`) |
-| `--network-dir` | `NetworkWeights` | Where the trained `.pt`/`.hdf5` checkpoint is written; created automatically |
-| `--output-dir` | `DiagnosticOutputs` | Root for diagnostic images (`<output-dir>/images/`) and plots (`<output-dir>/diagnostics/`); created automatically |
-
-`TrainModel_MassFlux_UNet_HiResTest2.py` reads CSVs directly from `<data-dir>` instead of
-`<data-dir>/annotation_datasets/`, and defaults `--sample-suffix` to `HiResTest`; its directory flags otherwise
-default the same as above.
-
-### Explicit filenames (override individual files derived from `--sample-suffix`)
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--training-csv` / `--validation-csv` / `--testing-csv` | built from `--sample-suffix` | Annotation CSV filenames, read from `<data-dir>` (see above) |
-| `--output-name` | built from `--sample-suffix` | Base name for diagnostic images/plots |
-| `--model-name` | built from `--sample-suffix` | Base filename for the saved checkpoint |
-
-### Training options (override values computed from the dataset)
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--batch-size` | ~1/10 of the training set (floored at 2) | Mini-batch size for training; `0` trains on the full dataset as a single batch per epoch |
-| `--test-batch-size` | ~1/10 of the validation set (floored at 1) | Mini-batch size for validation/testing |
-
-`TrainModel_MassFlux_UNet_HiResTest2.py` defaults `--training-csv` to the fixed filename
-`training_annotations_HiRes_MassFlux.csv` rather than one built from `--sample-suffix`, and defaults
-`--validation-csv`/`--testing-csv` to reusing whatever `--training-csv` resolves to.
-
-### Hyperparameters
-
-Not exposed on the command line (batch sizes are the exception - see the table above) - edit the
-`HYPERPARAMETERS` block near the top of the script you're running:
-
-- `learning_rate`, `weight_decay`, `epochs` - standard training controls (Adam optimizer).
-- `n_filt0`, `k0`, `k1`, `n_fc` - network size: initial filter count, initial/block kernel sizes, and the size of the optional FC bottleneck (set `n_fc = 0` to remove it).
-- `dropout_rate` (default `0.3`) - dropout applied just before the output layer.
-- `block_dropout_rate` (default `0.0`, off) - channel-wise dropout inside every residual/deconv block; see the in-file comment before enabling.
-
-### Output
-
-Each run writes `<model-name>.pt` (weights) and `<model-name>.hdf5` (image normalization stats + the hyperparameters above, needed to reconstruct the model later) to `--network-dir`, plus loss/accuracy curves and correlation plots to `<output-dir>/diagnostics/` and per-epoch comparison images/hdf5 snapshots to `<output-dir>/images/` on the final training epoch.
-
-## Building training datasets
-
-`WriteDatasetsToCsv_HiResTests.py` scans a directory of FIRE-2 simulation outputs and writes a training-annotations CSV in the format above:
+### Outputs
 
 ```
-python WriteDatasetsToCsv_HiResTests.py --sim-dir /path/to/fire-2 --output-dir /path/to/output
+NetworkWeights/
+  <run-name>.pt       trained weights
+  <run-name>.hdf5     everything needed to rebuild and use the network: image normalization
+                      (image_stats), label scaling (label_stats), input_shape, output_head,
+                      and the full text of both parameter files
+DiagnosticOutputs/
+  images/             final-epoch prediction vs. truth for every training, validation and
+                      test sample (.hdf5, plus a comparison .png for validation and test)
+  diagnostics/        loss and accuracy curves, prediction/truth correlation plots, and
+                      <run-name>_LossesAndAccuracies.hdf5
 ```
 
-Run with `--help` for the full flag list (`--output-name`, `--use-denoised-spectra`, `--use-time-averaged-annotations`); the galaxy/snapshot/inclination/position-angle lists to scan are set as in-file variables near the bottom of the script rather than CLI flags.
+Predictions and labels in every saved output are in physical units (Msun, km/s or Msun/yr).
 
-To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, use `fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1, save_images=False)` from `fits_to_conngafit.py` - see `fits_to_conngafit_template.py` for example usage (edited directly, no CLI).
+## Networks
 
-## Inference
+| Module | Description |
+|---|---|
+| `unet3d_resblock.py` | The residual U-Net used by `train_model_unet.py` |
+| `unet3d_dilated_resnet.py` | A dilated residual network with no downsampling, with the same interface |
+| `unet3d_ddpm.py` | A conditional diffusion model that samples maps |
+| `unet_blocks.py`, `unet_diagnostics.py` | Shared building blocks, and helpers for parameter counts and latent images |
 
-`use_model.run_inferences(network_type, image_output_prefix, image_list, model_path=None, params=None, save_latent_images=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `network_type='unet18'` is implemented. `model_path` overrides the built-in default checkpoint path; `params=[n_filt0, k0, k1, n_fc]` overrides the default architecture hyperparameters.
+Every network has a `summary()` method that prints its stages, shapes and parameter counts. [`examples/model_summaries.ipynb`](examples/model_summaries.ipynb) builds each one and checks its summary against a real forward pass.
 
-Two ready-to-run scripts wrap this with `argparse`:
+## Observed data and inference
 
+`fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
+
+`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes. They don't yet support networks trained by `train_model_unet.py`.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pre-commit install   # run ruff on every commit
+pytest               # run the tests
 ```
-python inference_template.py --image-list path/to/list.csv --output-prefix path/to/output_ --model-path path/to/checkpoint
-python inference_test_validation_set.py --sample-suffix finalSnapNoM12m --model-path path/to/checkpoint
-```
 
-Run either with `--help` for the full flag list. `inference_test_validation_set.py` runs inference on a sample's validation-annotations CSV specifically, to spot-check predictions against known labels.
+The tests build every network, check their output shapes and summaries, and train `train_model_unet.py` end to end on synthetic VOF outputs, checking that the saved checkpoint rebuilds the network and reproduces its saved predictions.
+
+`main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/` for new code.
 
 ## Citation and license
 
-If you use CoNNGaFit in your research, please cite it using [`CITATION.cff`](CITATION.cff)
-(GitHub's "Cite this repository" button). CoNNGaFit is released under the [MIT License](LICENSE).
-
-## Contributing
-
-`main` is protected: changes are merged through pull requests, and the tests
-(`.github/workflows/tests.yml`) must pass on Python 3.11 and 3.12 first. Work on a
-branch, add tests in `tests/` for new code, and run `pytest` locally before opening a PR.
-Code is linted and formatted with [ruff](https://docs.astral.sh/ruff/); run `pre-commit install` once after
-cloning so it runs automatically on every commit.
+If you use CoNNGaFit in your research, please cite it using [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository" button). CoNNGaFit is released under the [MIT License](LICENSE).
