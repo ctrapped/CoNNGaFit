@@ -51,8 +51,12 @@ target-version = "py311"
 select = [
     "E4", "E7", "E9", "F", "B", "I",
     "T20",  # flag print() calls: use the module logger instead (see logging_setup.py)
+    "N",  # PEP 8 naming: snake_case functions/variables, CapWords classes, UPPER_CASE constants
 ]
-ignore = ["B905"]  # zip(strict=) is noisy for loops over shape-matched tensors
+ignore = [
+    "B905",  # zip(strict=) is noisy for loops over shape-matched tensors
+    "N812",  # allow the standard `import torch.nn.functional as F`
+]
 
 [tool.ruff.lint.per-file-ignores]
 "*.ipynb" = ["T20"]  # notebooks show results by printing them
