@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from unet_blocks import ConvMapHead, DeconvBlock, HalfResConvHead, ResidualBlock, Stem, Upsample, _match_spatial
-from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+from unet_diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +366,7 @@ class NeuralNetwork(nn.Module):
             sample; (nSpec, nX, nY) must equal the model's input_shape. A channel dim of
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations at each
-            encoder/decoder stage to latentImageOutput (see SaveSummedSpectralChannels in unet_diagnostics.py) -
+            encoder/decoder stage to LATENT_IMAGE_OUTPUT (see save_summed_spectral_channels in unet_diagnostics.py) -
             useful for visually debugging what the network is learning, not needed for normal
             training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
@@ -389,7 +389,7 @@ class NeuralNetwork(nn.Module):
             x = self.layer_stem(x)
         step = 0
         if saveLatentImages:
-            SaveSummedSpectralChannels(x, step, self.saveItr)
+            save_summed_spectral_channels(x, step, self.saveItr)
             step += 1
 
         # Encoder: run every stage, keep all but the last as skip connections
@@ -397,7 +397,7 @@ class NeuralNetwork(nn.Module):
         for i, stage in enumerate(self.encoder):
             x = stage(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x, step, self.saveItr)
+                save_summed_spectral_channels(x, step, self.saveItr)
                 step += 1
             if i < len(self.encoder) - 1:
                 skips.append(self.featureForwarding(x))
@@ -411,7 +411,7 @@ class NeuralNetwork(nn.Module):
             x = torch.cat([x, skip], dim=1)
             x = dc(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x, step, self.saveItr)
+                save_summed_spectral_channels(x, step, self.saveItr)
                 step += 1
 
         if self.head_type == "conv_halfres":
@@ -422,7 +422,7 @@ class NeuralNetwork(nn.Module):
             x = torch.cat([x, skip], dim=1)
             x = self.dc_layer_half(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x, step, self.saveItr)
+                save_summed_spectral_channels(x, step, self.saveItr)
                 step += 1
             outputs = self.halfres_head(x, bottleneck, self.output_shape)
             self.saveItr += 1

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
-from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+from unet_diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +299,8 @@ class NeuralNetwork(nn.Module):
             sample; (nSpec, nX, nY) must equal the model's input_shape. A channel dim of
             size 1 is inserted before the 3-d convolutions.
         saveLatentImages: if True, dump PNGs of the spectrally-summed activations after the
-            encoder and after each Process block to latentImageOutput (see
-            SaveSummedSpectralChannels in unet_diagnostics.py) - useful for visually debugging what the network
+            encoder and after each Process block to LATENT_IMAGE_OUTPUT (see
+            save_summed_spectral_channels in unet_diagnostics.py) - useful for visually debugging what the network
             is learning, not needed for normal training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
             - the flattened predicted output map. If predict_variance=True, a (mean, logvar)
@@ -319,20 +319,20 @@ class NeuralNetwork(nn.Module):
         x = self.layer_encode(x)
         step = 0
         if saveLatentImages:
-            SaveSummedSpectralChannels(x, step, self.saveItr)
+            save_summed_spectral_channels(x, step, self.saveItr)
             step += 1
 
         # Process: sequence of dilated residual blocks, shape/channels fixed throughout
         for block in self.process:
             x = block(x)
             if saveLatentImages:
-                SaveSummedSpectralChannels(x, step, self.saveItr)
+                save_summed_spectral_channels(x, step, self.saveItr)
                 step += 1
 
         # Decode
         x = self.layer_decode(x)
         if saveLatentImages:
-            SaveSummedSpectralChannels(x, step, self.saveItr)
+            save_summed_spectral_channels(x, step, self.saveItr)
             step += 1
 
         # Head
