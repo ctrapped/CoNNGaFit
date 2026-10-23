@@ -7,7 +7,7 @@ import torch
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import CoNNGaFitImageInferenceDataset
-from plotting_functions import CreateBasicPlots, LoadNames, MakeImage
+from plotting_functions import create_basic_plots, load_names, make_image
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
     # Get names of images
-    inferenceNames = LoadNames(imageList)
+    inferenceNames = load_names(imageList)
 
     # Make inference for each image loaded
     for i, inputs in enumerate(dataloader):
@@ -109,7 +109,7 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
         imageOutput = imageOutput_prefix + inferenceNames[i] + imageOutput_suffix
         plotOutput = imageOutput_prefix + inferenceNames[i] + plotOutput_suffix
 
-        MakeImage(pred.cpu().detach().numpy(), imageOutput, targetShape=targetShape)  # Generate Projection Map
-        CreateBasicPlots(pred.cpu().detach().numpy(), plotOutput, targetShape)  # Generate Radial Plots
+        make_image(pred.cpu().detach().numpy(), imageOutput, target_shape=targetShape)  # Generate Projection Map
+        create_basic_plots(pred.cpu().detach().numpy(), plotOutput, targetShape)  # Generate Radial Plots
 
     logger.info("Done!")

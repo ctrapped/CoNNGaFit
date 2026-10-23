@@ -19,7 +19,7 @@ import tomllib
 import h5py
 from matplotlib import pyplot as plt
 
-from plotting_functions import MakeCompImage, MakeCompImage_1d, MakeCorrelationPlot, SaveHDF5, SaveHDF5_1d
+from plotting_functions import make_comp_image, make_comp_image_1d, make_correlation_plot, save_hdf5, save_hdf5_1d
 
 ####Trains the Unet read from unet3d_resblock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
@@ -341,8 +341,8 @@ logger.info("Data loaded")
 
 
 if radialBins is not None:  # Labels are radial curves, so plot and save them as curves rather than maps
-    MakeCompImage = MakeCompImage_1d
-    SaveHDF5 = SaveHDF5_1d
+    make_comp_image = make_comp_image_1d
+    save_hdf5 = save_hdf5_1d
 
 
 #### Save final-epoch outputs ####
@@ -355,18 +355,18 @@ def save_batch_outputs(X, y, pred, idx, names, outputBase, epoch, compImages=Tru
     for tt in range(len(idx)):
         outputName = outputBase + "_" + names[int(idx[tt])] + "_Epoch" + str(epoch)
         if compImages:
-            MakeCompImage(
+            make_comp_image(
                 npPred,
                 npY,
                 npX,
                 outputName + ".png",
                 tt,
-                Sim2PhysicalUnits=1,
-                paramLabel=paramLabel,
-                unitLabel=unitLabel,
-                binOp=binOp,
+                sim_to_physical_units=1,
+                param_label=paramLabel,
+                unit_label=unitLabel,
+                bin_op=binOp,
             )  # Labels are already in physical units
-        SaveHDF5(npY, npPred, outputName + ".hdf5", tt)
+        save_hdf5(npY, npPred, outputName + ".hdf5", tt)
 
 
 #### Define Training Loop ####
@@ -451,7 +451,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     logger.info("Validation: accuracy %.1f%%, avg loss %8f", accuracy, validation_loss)
 
     if final and radialBins is None:
-        MakeCorrelationPlot(
+        make_correlation_plot(
             np.concatenate(allPred),
             np.concatenate(allY),
             sum(len(a) for a in allPred),
@@ -509,7 +509,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     logger.info("Test: accuracy %.1f%%, avg loss %8f", accuracy, test_loss)
 
     if final and radialBins is None:
-        MakeCorrelationPlot(
+        make_correlation_plot(
             np.concatenate(allPred),
             np.concatenate(allY),
             sum(len(a) for a in allPred),

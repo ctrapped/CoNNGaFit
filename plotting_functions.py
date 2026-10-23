@@ -7,22 +7,22 @@ import scipy.stats as stats
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 
-Sim2PhysicalUnits_MassFlux = (
+SIM_TO_PHYSICAL_UNITS_MASS_FLUX = (
     (2 / np.pi) * 1 / (3.086 * np.power(10.0, 16.0)) * (3.154 * np.power(10.0, 7.0)) * np.power(10, 10)
 )  # 1/pixel_res * kpc2km * s2yr * unit mass to solar masses
 
 
 #### Plotting Functions ####
-def MakeCompImage(
+def make_comp_image(
     data_pred,
     data_input,
     data_image,
     output,
-    Nsnap,
-    Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,
-    paramLabel="Radial Mass Flux",
-    unitLabel=r"[M$_{\odot}$ yr$^{-1}$]",
-    binOp="sum",
+    index,
+    sim_to_physical_units=SIM_TO_PHYSICAL_UNITS_MASS_FLUX,
+    param_label="Radial Mass Flux",
+    unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
+    bin_op="sum",
 ):
     """Save a 4-panel diagnostic figure (input map, prediction map, radially-binned
     input/prediction curves, and the summed input datacube) for one snapshot in a batch.
@@ -33,93 +33,99 @@ def MakeCompImage(
     data_image: (nBatch, nSpec, nX, nY) input datacube batch, summed over the spectral axis
         for the bottom-right panel.
     output: path to save the PNG to.
-    Nsnap: index of the sample within the batch to plot.
-    Sim2PhysicalUnits: scalar multiplied into the data before plotting, to convert from
-        simulation units to physical units (see Sim2PhysicalUnits_MassFlux above).
-    paramLabel/unitLabel: axis/colorbar labels for the parameter being plotted.
-    binOp: statistic passed to scipy.stats.binned_statistic_dd for the radial profile
+    index: index of the sample within the batch to plot.
+    sim_to_physical_units: scalar multiplied into the data before plotting, to convert from
+        simulation units to physical units (see SIM_TO_PHYSICAL_UNITS_MASS_FLUX above).
+    param_label/unit_label: axis/colorbar labels for the parameter being plotted.
+    bin_op: statistic passed to scipy.stats.binned_statistic_dd for the radial profile
         ("sum" for mass flux, "mean" for velocity/inclination, etc.).
     """
     try:
         image_pred = np.zeros((np.shape(data_pred)[1]))
-        image_pred[:] = data_pred[Nsnap, :]
+        image_pred[:] = data_pred[index, :]
 
         image_input = np.zeros((np.shape(data_input)[1]))
-        image_input[:] = data_input[Nsnap, :]
+        image_input[:] = data_input[index, :]
 
         npix = int(np.round(np.sqrt(np.size(image_pred))))
         image_pred = np.reshape(image_pred, [npix, npix])
         image_input = np.reshape(image_input, [npix, npix])
     except ValueError:  # data_pred/data_input were already (nBatch,1,npix,npix) rather than flattened
-        image_pred = data_pred[Nsnap, 0, :, :]
-        image_input = data_input[Nsnap, 0, :, :]
+        image_pred = data_pred[index, 0, :, :]
+        image_input = data_input[index, 0, :, :]
         npix = int(np.round(np.sqrt(np.size(image_pred))))
 
     plt.figure()
 
     plt.subplot(2, 2, 4)
-    imageToPlot = np.sum(data_image[Nsnap, :, :, :], axis=0)
-    imageToPlot += np.abs(np.min(imageToPlot)) + 1
-    plt.imshow(imageToPlot, norm=LogNorm(), cmap="inferno")
+    image_to_plot = np.sum(data_image[index, :, :, :], axis=0)
+    image_to_plot += np.abs(np.min(image_to_plot)) + 1
+    plt.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
 
     plt.subplot(2, 2, 3)
-    centerIndex = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
+    center_index = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
     indices = np.indices(np.shape(image_pred))
-    rmag = np.sqrt(np.power(indices[0, :, :] - centerIndex[0], 2) + np.power(indices[1, :, :] - centerIndex[1], 2))
+    rmag = np.sqrt(np.power(indices[0, :, :] - center_index[0], 2) + np.power(indices[1, :, :] - center_index[1], 2))
 
-    nBins = 20
+    n_bins = 20
 
-    binRange = [0, np.max(rmag)]
+    bin_range = [0, np.max(rmag)]
     binned_data_pred, binedge, binnum = stats.binned_statistic_dd(
-        rmag.flatten(), image_pred.flatten(), binOp, nBins, range=[binRange]
+        rmag.flatten(), image_pred.flatten(), bin_op, n_bins, range=[bin_range]
     )
     binned_data_input, binedge, binnum = stats.binned_statistic_dd(
-        rmag.flatten(), image_input.flatten(), binOp, nBins, range=[binRange]
+        rmag.flatten(), image_input.flatten(), bin_op, n_bins, range=[bin_range]
     )
-    maxPlot = np.max(
+    max_plot = np.max(
         [-np.min(binned_data_pred), -np.min(binned_data_input), np.max(binned_data_pred), np.max(binned_data_input)]
     )
-    plt.plot(np.linspace(0, np.max(rmag), nBins), binned_data_input * Sim2PhysicalUnits, "k", lw=2)
-    plt.plot(np.linspace(0, np.max(rmag), nBins), binned_data_pred * Sim2PhysicalUnits, "r--", lw=2)
+    plt.plot(np.linspace(0, np.max(rmag), n_bins), binned_data_input * sim_to_physical_units, "k", lw=2)
+    plt.plot(np.linspace(0, np.max(rmag), n_bins), binned_data_pred * sim_to_physical_units, "r--", lw=2)
     plt.legend(["Input", "Prediction"])
-    plt.plot(np.linspace(0, np.max(rmag), nBins), binned_data_pred * 0, "k--", lw=1)
+    plt.plot(np.linspace(0, np.max(rmag), n_bins), binned_data_pred * 0, "k--", lw=1)
     plt.xlabel("Radius")
-    plt.ylabel(paramLabel + " " + unitLabel)
-    plt.ylim([-maxPlot * 1.05 * Sim2PhysicalUnits, maxPlot * 1.05 * Sim2PhysicalUnits])
+    plt.ylabel(param_label + " " + unit_label)
+    plt.ylim([-max_plot * 1.05 * sim_to_physical_units, max_plot * 1.05 * sim_to_physical_units])
 
     vmax = np.max([-np.min(image_pred), np.max(image_pred), -np.min(image_input), np.max(image_input)])
     vmin = -vmax
     plt.subplot(2, 2, 1)
     plt.imshow(
-        image_input * Sim2PhysicalUnits, cmap="seismic", vmin=vmin * Sim2PhysicalUnits, vmax=vmax * Sim2PhysicalUnits
+        image_input * sim_to_physical_units,
+        cmap="seismic",
+        vmin=vmin * sim_to_physical_units,
+        vmax=vmax * sim_to_physical_units,
     )
-    plt.title(paramLabel + " Input")
+    plt.title(param_label + " Input")
     # plt.colorbar();
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
     plt.subplot(2, 2, 2)
     plt.imshow(
-        image_pred * Sim2PhysicalUnits, cmap="seismic", vmin=vmin * Sim2PhysicalUnits, vmax=vmax * Sim2PhysicalUnits
+        image_pred * sim_to_physical_units,
+        cmap="seismic",
+        vmin=vmin * sim_to_physical_units,
+        vmax=vmax * sim_to_physical_units,
     )
-    plt.colorbar(label=unitLabel)
+    plt.colorbar(label=unit_label)
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
-    plt.title(paramLabel + " Prediction")
+    plt.title(param_label + " Prediction")
     plt.savefig(output)
     plt.close()
 
 
-def MakeImage(
+def make_image(
     data,
     output,
     vmin=None,
     vmax=None,
-    targetShape=None,
-    Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,
-    paramLabel="Radial Mass Flux",
-    unitLabel=r"[M$_{\odot}$ yr$^{-1}$]",
+    target_shape=None,
+    sim_to_physical_units=SIM_TO_PHYSICAL_UNITS_MASS_FLUX,
+    param_label="Radial Mass Flux",
+    unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
 ):
     """Reshape a single flattened prediction into a 2-d map, save it as a PNG (with a
     physical-units colorbar) and an accompanying hdf5 file.
@@ -130,18 +136,18 @@ def MakeImage(
     output: path prefix; writes output+"projectionMap.png"/".hdf5".
     vmin/vmax: fixed color limits; if either is None, both default to symmetric limits
         derived from the data's own min/max.
-    targetShape: (nY, nX) shape to reshape the flat data into; pass this explicitly as a
+    target_shape: (nY, nX) shape to reshape the flat data into; pass this explicitly as a
         keyword when calling (not positionally - the 3rd positional argument is vmin, not
-        targetShape).
+        target_shape).
     """
     image = np.zeros((np.shape(data)[1]))
     image[:] = data[:]
 
-    if targetShape is None:
+    if target_shape is None:
         npix = int(np.round(np.sqrt(np.size(image))))
-        targetShape = [npix, npix]
+        target_shape = [npix, npix]
 
-    image = np.reshape(image, targetShape)  # make into 2d image
+    image = np.reshape(image, target_shape)  # make into 2d image
 
     plt.figure()
 
@@ -150,8 +156,13 @@ def MakeImage(
         vmin = -vmax
 
     # Plot in units of Solar Masses per year
-    plt.imshow(image * Sim2PhysicalUnits, cmap="seismic", vmin=vmin * Sim2PhysicalUnits, vmax=vmax * Sim2PhysicalUnits)
-    plt.colorbar(label=paramLabel + " " + unitLabel)
+    plt.imshow(
+        image * sim_to_physical_units,
+        cmap="seismic",
+        vmin=vmin * sim_to_physical_units,
+        vmax=vmax * sim_to_physical_units,
+    )
+    plt.colorbar(label=param_label + " " + unit_label)
     plt.savefig(output + "projectionMap.png")
     plt.close()
 
@@ -161,57 +172,59 @@ def MakeImage(
     hf.close()
 
 
-def CreateBasicPlots(
+def create_basic_plots(
     data,
     output,
-    targetShape=None,
-    nBins=20,
-    Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,
-    paramLabel="Radial Mass Flux",
-    unitLabel=r"[M$_{\odot}$ yr$^{-1}$]",
+    target_shape=None,
+    n_bins=20,
+    sim_to_physical_units=SIM_TO_PHYSICAL_UNITS_MASS_FLUX,
+    param_label="Radial Mass Flux",
+    unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
 ):
     """Reshape a single flattened prediction into a 2-d map, azimuthally bin it into a
     radial profile by galactocentric pixel radius, and save the profile as a PNG + hdf5.
 
-    data: 1-d array of length npix*npix for one sample (see MakeImage above for the shape
+    data: 1-d array of length npix*npix for one sample (see make_image above for the shape
         convention).
     output: path prefix; writes output+"radialPlot.png"/".hdf5".
-    targetShape: (nY, nX) shape to reshape data into; defaults to a square inferred from
+    target_shape: (nY, nX) shape to reshape data into; defaults to a square inferred from
         len(data).
-    nBins: number of radial bins to sum the map into.
+    n_bins: number of radial bins to sum the map into.
     """
     image = np.zeros((np.shape(data)[1]))
     image[:] = data[:]
-    if targetShape is None:
+    if target_shape is None:
         npix = int(np.round(np.sqrt(np.size(image))))
-        targetShape = [npix, npix]
+        target_shape = [npix, npix]
 
-    npix = targetShape[0]
-    image = np.reshape(image, targetShape)  # make into 2d image
+    npix = target_shape[0]
+    image = np.reshape(image, target_shape)  # make into 2d image
 
     ## Calculate galactocentric radius of each pixel
-    centerIndex = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
+    center_index = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
     indices = np.indices(np.shape(image))
-    rmag = 2 * np.sqrt(np.power(indices[0, :, :] - centerIndex[0], 2) + np.power(indices[1, :, :] - centerIndex[1], 2))
+    rmag = 2 * np.sqrt(
+        np.power(indices[0, :, :] - center_index[0], 2) + np.power(indices[1, :, :] - center_index[1], 2)
+    )
 
     ##Calculate total mass flux as function of radius
-    binRange = [0, np.max(rmag)]
+    bin_range = [0, np.max(rmag)]
     binned_data, binedge, binnum = stats.binned_statistic_dd(
-        rmag.flatten(), image.flatten(), "sum", nBins, range=[binRange]
+        rmag.flatten(), image.flatten(), "sum", n_bins, range=[bin_range]
     )
 
     # Default to symmetric y-limits
-    vmax = np.max([-np.min(binned_data * Sim2PhysicalUnits), np.max(binned_data * Sim2PhysicalUnits)]) * 1.05
+    vmax = np.max([-np.min(binned_data * sim_to_physical_units), np.max(binned_data * sim_to_physical_units)]) * 1.05
     vmin = -vmax
 
     # Plot in units of Solar Masses per year
     plt.figure()
     plt.plot(
-        np.linspace(0, np.max(rmag), nBins), binned_data * Sim2PhysicalUnits, "k", lw=2.5
+        np.linspace(0, np.max(rmag), n_bins), binned_data * sim_to_physical_units, "k", lw=2.5
     )  # plot azimuthal average
-    plt.plot(np.linspace(0, np.max(rmag), nBins), binned_data * 0, "k--", lw=1.5)  # plot zero line
+    plt.plot(np.linspace(0, np.max(rmag), n_bins), binned_data * 0, "k--", lw=1.5)  # plot zero line
     plt.xlabel("Radius [kpc]")
-    plt.ylabel(paramLabel + " " + unitLabel)
+    plt.ylabel(param_label + " " + unit_label)
     plt.ylim([vmin, vmax])
     plt.savefig(output + "radialPlot.png")
     plt.close()
@@ -219,61 +232,61 @@ def CreateBasicPlots(
     # Save hdf5 for generating figures
     hf = h5py.File(output + "radialPlot.hdf5", "w")
     hf.create_dataset("binned_data", data=binned_data)
-    hf.create_dataset("rPlot", data=np.linspace(0, np.max(rmag), nBins))
+    hf.create_dataset("rPlot", data=np.linspace(0, np.max(rmag), n_bins))
 
     hf.close()
 
 
-def RV2coeff(dataList):
+def rv2_coeff(data_list):
     """Compute the pairwise RV coefficient matrix (a multivariate generalization of squared
     correlation, in [0, 1]) between a list of 2-d arrays of the same shape - used by
-    MakeCorrelationPlot below to score 2-d map similarity between prediction and truth.
-    Returns a (len(dataList), len(dataList)) matrix C where C[i,j] is the RV coefficient
-    between dataList[i] and dataList[j].
+    make_correlation_plot below to score 2-d map similarity between prediction and truth.
+    Returns a (len(data_list), len(data_list)) matrix c where c[i,j] is the RV coefficient
+    between data_list[i] and data_list[j].
     """
     # First compute the scalar product matrices for each data set X
-    scalArrList = []
+    scal_arr_list = []
 
-    for arr in dataList:
-        scalArr = np.dot(arr, np.transpose(arr))
-        diego = np.diag(np.diag(scalArr))
-        scalArrMod = scalArr - diego
-        scalArrList.append(scalArrMod)
+    for arr in data_list:
+        scal_arr = np.dot(arr, np.transpose(arr))
+        diego = np.diag(np.diag(scal_arr))
+        scal_arr_mod = scal_arr - diego
+        scal_arr_list.append(scal_arr_mod)
 
-    # Now compute the 'between study cosine matrix' C
-    C = np.zeros((len(dataList), len(dataList)), float)
+    # Now compute the 'between study cosine matrix' c
+    c = np.zeros((len(data_list), len(data_list)), float)
 
-    for index in np.ndindex(C.shape):
-        nom = np.trace(np.dot(np.transpose(scalArrList[index[0]]), scalArrList[index[1]]))
-        denom1 = np.trace(np.dot(np.transpose(scalArrList[index[0]]), scalArrList[index[0]]))
-        denom2 = np.trace(np.dot(np.transpose(scalArrList[index[1]]), scalArrList[index[1]]))
-        Rv = nom / np.sqrt(denom1 * denom2)
-        C[index[0], index[1]] = Rv
+    for index in np.ndindex(c.shape):
+        nom = np.trace(np.dot(np.transpose(scal_arr_list[index[0]]), scal_arr_list[index[1]]))
+        denom1 = np.trace(np.dot(np.transpose(scal_arr_list[index[0]]), scal_arr_list[index[0]]))
+        denom2 = np.trace(np.dot(np.transpose(scal_arr_list[index[1]]), scal_arr_list[index[1]]))
+        rv = nom / np.sqrt(denom1 * denom2)
+        c[index[0], index[1]] = rv
 
-    return C
+    return c
 
 
-def MakeCorrelationPlot(pred_image, input_image, Nsnaps, output):
+def make_correlation_plot(pred_image, input_image, n_snaps, output):
     """Score prediction-vs-truth agreement across a batch of snapshots and save a histogram
     of two correlation metrics, plus the raw per-snapshot values to an hdf5 file.
 
-    pred_image / input_image: (Nsnaps, model_size) flattened prediction/label maps.
-    Nsnaps: number of snapshots (rows) to score.
+    pred_image / input_image: (n_snaps, model_size) flattened prediction/label maps.
+    n_snaps: number of snapshots (rows) to score.
     output: path prefix; writes output+".png"/".pdf"/".hdf5".
 
     For each snapshot, reshapes to a 2-d npix x npix map and computes:
-      corr2d - the RV coefficient (see RV2coeff) between the full 2-d prediction and truth maps.
+      corr2d - the RV coefficient (see rv2_coeff) between the full 2-d prediction and truth maps.
       corr1d - the Pearson correlation between the two maps' radially-binned 1-d profiles.
     """
-    tickSize = 14
-    labelSize = 16
-    legendSize = 14
+    tick_size = 14
+    label_size = 16
+    legend_size = 14
 
     npix = 40
 
-    corr1d = np.zeros((Nsnaps))
-    corr2d = np.zeros((Nsnaps))
-    for i in range(0, Nsnaps):
+    corr1d = np.zeros((n_snaps))
+    corr2d = np.zeros((n_snaps))
+    for i in range(0, n_snaps):
         pred_snap = pred_image[i, :]
         input_snap = input_image[i, :]
 
@@ -281,38 +294,40 @@ def MakeCorrelationPlot(pred_image, input_image, Nsnaps, output):
         pred_snap = np.reshape(pred_snap, [npix, npix])
         input_snap = np.reshape(input_snap, [npix, npix])
 
-        rv2_mat = RV2coeff([input_snap, pred_snap])
+        rv2_mat = rv2_coeff([input_snap, pred_snap])
         corr2d[i] = rv2_mat[0, 1]
 
-        centerIndex = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
+        center_index = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
         indices = np.indices(np.shape(pred_snap))
-        rmag = np.sqrt(np.power(indices[0, :, :] - centerIndex[0], 2) + np.power(indices[1, :, :] - centerIndex[1], 2))
+        rmag = np.sqrt(
+            np.power(indices[0, :, :] - center_index[0], 2) + np.power(indices[1, :, :] - center_index[1], 2)
+        )
 
-        nBins = npix
-        binRange = [0, np.max(rmag)]
+        n_bins = npix
+        bin_range = [0, np.max(rmag)]
         binned_pred, binedge, binnum = stats.binned_statistic_dd(
-            rmag.flatten(), pred_snap.flatten(), "sum", nBins, range=[binRange]
+            rmag.flatten(), pred_snap.flatten(), "sum", n_bins, range=[bin_range]
         )
         binned_input, binedge, binnum = stats.binned_statistic_dd(
-            rmag.flatten(), input_snap.flatten(), "sum", nBins, range=[binRange]
+            rmag.flatten(), input_snap.flatten(), "sum", n_bins, range=[bin_range]
         )
 
-        correlationMatrix1d = np.corrcoef(binned_pred, binned_input)
-        corr1d[i] = correlationMatrix1d[1][0]
+        correlation_matrix_1d = np.corrcoef(binned_pred, binned_input)
+        corr1d[i] = correlation_matrix_1d[1][0]
 
     plt.figure()
-    nBins = 20
+    n_bins = 20
     alpha = 0.7
-    plt.hist(corr1d, bins=nBins, range=[-1, 1], histtype="step", color="k", label="1d Corr.", alpha=alpha, linewidth=2)
-    plt.hist(corr2d, bins=nBins, range=[-1, 1], histtype="step", color="r", label="2D Corr.", alpha=alpha, linewidth=2)
+    plt.hist(corr1d, bins=n_bins, range=[-1, 1], histtype="step", color="k", label="1d Corr.", alpha=alpha, linewidth=2)
+    plt.hist(corr2d, bins=n_bins, range=[-1, 1], histtype="step", color="r", label="2D Corr.", alpha=alpha, linewidth=2)
 
     plt.xlim([-1, 1])
 
-    plt.legend(fontsize=legendSize, loc="upper left")
-    plt.ylabel("Snapshots", fontsize=labelSize)
-    plt.xlabel("Correlation", fontsize=labelSize)
-    plt.xticks(fontsize=tickSize)
-    plt.yticks(fontsize=tickSize)
+    plt.legend(fontsize=legend_size, loc="upper left")
+    plt.ylabel("Snapshots", fontsize=label_size)
+    plt.xlabel("Correlation", fontsize=label_size)
+    plt.xticks(fontsize=tick_size)
+    plt.yticks(fontsize=tick_size)
     plt.tight_layout()
     plt.savefig(output + ".png", bbox_inches="tight")
     plt.savefig(output + ".pdf", bbox_inches="tight")
@@ -325,48 +340,48 @@ def MakeCorrelationPlot(pred_image, input_image, Nsnaps, output):
     hf.close()
 
 
-def SaveHDF5(inputData, predData, output, Nsnap):
+def save_hdf5(input_data, pred_data, output, index):
     """Reshape one snapshot's flattened prediction (and optionally its label) into a 2-d
     map and save both to an hdf5 file for later re-plotting.
 
-    inputData: (nBatch, model_size) flattened label maps, or None to skip saving the label
+    input_data: (nBatch, model_size) flattened label maps, or None to skip saving the label
         (e.g. when running inference with no ground truth available).
-    predData: (nBatch, model_size) flattened prediction maps.
+    pred_data: (nBatch, model_size) flattened prediction maps.
     output: full path to the hdf5 file to write (datasets 'input' and/or 'prediction').
-    Nsnap: index of the sample within the batch to save.
+    index: index of the sample within the batch to save.
     """
-    predImage = np.zeros((np.shape(predData)[1]))
-    predImage[:] = predData[Nsnap, :]
-    npix = int(np.round(np.sqrt(np.size(predImage))))
-    predImage = np.reshape(predImage, [npix, npix])
+    pred_image = np.zeros((np.shape(pred_data)[1]))
+    pred_image[:] = pred_data[index, :]
+    npix = int(np.round(np.sqrt(np.size(pred_image))))
+    pred_image = np.reshape(pred_image, [npix, npix])
 
     hf = h5py.File(output, "w")
-    if inputData is not None:
-        inputImage = np.zeros((np.shape(inputData)[1]))
-        inputImage[:] = inputData[Nsnap, :]
-        npix = int(np.round(np.sqrt(np.size(inputImage))))
-        inputImage = np.reshape(inputImage, [npix, npix])
-        hf.create_dataset("input", data=inputImage)
-    hf.create_dataset("prediction", data=predImage)
+    if input_data is not None:
+        input_image = np.zeros((np.shape(input_data)[1]))
+        input_image[:] = input_data[index, :]
+        npix = int(np.round(np.sqrt(np.size(input_image))))
+        input_image = np.reshape(input_image, [npix, npix])
+        hf.create_dataset("input", data=input_image)
+    hf.create_dataset("prediction", data=pred_image)
     hf.close()
 
 
-def LoadNames(inputDir):
+def load_names(input_dir):
     """Extract a short, distinct name for each row of a CoNNGaFit annotations CSV, by taking
     the basename (without extension) of the image path in each line.
 
-    inputDir: path to an annotations CSV (as produced for training/validation/testing, or an
+    input_dir: path to an annotations CSV (as produced for training/validation/testing, or an
         inference image list) - only the leading image-path portion of each line is used.
     Returns: a 0-indexed list of names, one per line/row, in file order - i.e. names[0]
         corresponds to the CSV's first data row. Callers must index this list starting at 0,
         not 1.
     """
-    fid = open(inputDir, "r")
+    fid = open(input_dir, "r")
     names = []
     for line in fid:
         x = line.split("/")
-        Nsplit = np.size(x)
-        y = (x[Nsplit - 1]).split(".")  # get filename in directory
+        n_split = np.size(x)
+        y = (x[n_split - 1]).split(".")  # get filename in directory
         if "_md" in line and "_md" not in y[0]:
             names.append(y[0] + "_md")
         else:
@@ -377,30 +392,30 @@ def LoadNames(inputDir):
     return names
 
 
-def MakeCompImage_1d(
+def make_comp_image_1d(
     data_pred,
     data_input,
     data_image,
     output,
-    Nsnap,
-    Sim2PhysicalUnits=Sim2PhysicalUnits_MassFlux,
-    paramLabel="Radial Mass Flux",
-    unitLabel=r"[M$_{\odot}$ yr$^{-1}$]",
-    binOp="sum",
+    index,
+    sim_to_physical_units=SIM_TO_PHYSICAL_UNITS_MASS_FLUX,
+    param_label="Radial Mass Flux",
+    unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
+    bin_op="sum",
 ):
-    """1-d analog of MakeCompImage: save a 2-panel figure (summed input datacube, and the
+    """1-d analog of make_comp_image: save a 2-panel figure (summed input datacube, and the
     input/prediction radial curves already stored in data_pred/data_input) for one snapshot.
 
     data_pred / data_input: (nBatch, nRadialBins) already-radially-binned prediction/label
-        curves (unlike MakeCompImage, these are not reshaped into a 2-d map here).
+        curves (unlike make_comp_image, these are not reshaped into a 2-d map here).
     data_image: (nBatch, nSpec, nX, nY) input datacube batch.
-    output/Nsnap/Sim2PhysicalUnits/paramLabel/unitLabel: see MakeCompImage above.
+    output/index/sim_to_physical_units/param_label/unit_label: see make_comp_image above.
     """
     image_pred = np.zeros((np.shape(data_pred)[1]))
-    image_pred[:] = data_pred[Nsnap, :]
+    image_pred[:] = data_pred[index, :]
 
     image_input = np.zeros((np.shape(data_input)[1]))
-    image_input[:] = data_input[Nsnap, :]
+    image_input[:] = data_input[index, :]
 
     # npix = int(np.round(np.sqrt(np.size(image_pred))))
     # image_pred = np.reshape(image_pred,[npix,npix])
@@ -409,43 +424,43 @@ def MakeCompImage_1d(
     plt.figure()
 
     plt.subplot(122)
-    imageToPlot = np.sum(data_image[Nsnap, :, :, :], axis=0)
-    imageToPlot += np.abs(np.min(imageToPlot)) + 1
-    plt.imshow(imageToPlot, norm=LogNorm(), cmap="inferno")
+    image_to_plot = np.sum(data_image[index, :, :, :], axis=0)
+    image_to_plot += np.abs(np.min(image_to_plot)) + 1
+    plt.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
 
     plt.subplot(121)
 
-    rmag = np.linspace(0, 30, np.size(data_pred[Nsnap, :]))
+    rmag = np.linspace(0, 30, np.size(data_pred[index, :]))
 
-    maxPlot = np.max(
+    max_plot = np.max(
         [
-            -np.min(np.array(data_pred[Nsnap, :])),
-            -np.min(np.array(data_input[Nsnap, :])),
-            np.max(np.array(data_pred[Nsnap, :])),
-            np.max(np.array(data_input[Nsnap, :])),
+            -np.min(np.array(data_pred[index, :])),
+            -np.min(np.array(data_input[index, :])),
+            np.max(np.array(data_pred[index, :])),
+            np.max(np.array(data_input[index, :])),
         ]
     )
-    plt.plot(rmag, np.array(data_input[Nsnap, :]) * Sim2PhysicalUnits, "k", lw=2)
-    plt.plot(rmag, np.array(data_pred[Nsnap, :]) * Sim2PhysicalUnits, "r--", lw=2)
+    plt.plot(rmag, np.array(data_input[index, :]) * sim_to_physical_units, "k", lw=2)
+    plt.plot(rmag, np.array(data_pred[index, :]) * sim_to_physical_units, "r--", lw=2)
     plt.plot(rmag, rmag * 0, "k--", lw=1)
     plt.legend(["Input", "Prediction"])
     plt.xlabel("Radius")
-    plt.ylabel(paramLabel + " " + unitLabel)
-    plt.ylim([-maxPlot * 1.05 * Sim2PhysicalUnits, maxPlot * 1.05 * Sim2PhysicalUnits])
+    plt.ylabel(param_label + " " + unit_label)
+    plt.ylim([-max_plot * 1.05 * sim_to_physical_units, max_plot * 1.05 * sim_to_physical_units])
 
     plt.savefig(output)
     plt.close()
 
 
-def SaveHDF5_1d(inputData, predData, output, Nsnap):
-    """1-d analog of SaveHDF5: save one snapshot's already-1-d input/prediction radial
-    curves to an hdf5 file. Note Nsnap is currently unused - the full inputData/predData
+def save_hdf5_1d(input_data, pred_data, output, index):
+    """1-d analog of save_hdf5: save one snapshot's already-1-d input/prediction radial
+    curves to an hdf5 file. Note index is currently unused - the full input_data/pred_data
     arrays are saved as-is rather than being indexed down to a single snapshot; pass
     already-sliced 1-d arrays for a single sample.
     """
     hf = h5py.File(output, "w")
-    hf.create_dataset("input", data=inputData)
-    hf.create_dataset("prediction", data=predData)
+    hf.create_dataset("input", data=input_data)
+    hf.create_dataset("prediction", data=pred_data)
     hf.close()
