@@ -1,6 +1,7 @@
 import argparse
 import os
 
+from logging_setup import add_logging_arguments, configure_logging
 from use_model import RunInferences
 
 ####Runs inference with a previously trained 'unet18' network on the validation set for a
@@ -42,10 +43,12 @@ def parse_args():
         default=None,
         help="Path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint to load. Default: the network-type's built-in default checkpoint.",
     )
+    add_logging_arguments(parser)
     return parser.parse_args()
 
 
 args = parse_args()
+configure_logging(verbose=args.verbose, quiet=args.quiet)
 
 sampleSuffix = args.sample_suffix
 validationSetFilename = (

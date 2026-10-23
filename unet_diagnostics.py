@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
 from matplotlib import pyplot as plt
+
+logger = logging.getLogger(__name__)
 
 # Diagnostics for the CoNNGaFit 3-d networks:
 #   - latent images: PNG dumps of intermediate activations, useful for visually checking what each
@@ -18,7 +22,7 @@ def SaveAllSpectralChannels(x, nStep):
     element. Diagnostic only.
     """
     npX = x.cpu().float().detach().numpy()
-    print(np.shape(x))
+    logger.debug("Saving latent images for activations of shape %s", tuple(x.shape))
     for i in range(0, np.shape(npX)[1]):
         for j in range(0, np.shape(npX)[2]):
             plt.figure()
@@ -34,7 +38,7 @@ def SaveSummedSpectralChannels(x, nStep, saveItr):
     "sum_step<nStep>_filter<i>_gal<saveItr>.png" for the first batch element. saveItr is
     the caller's forward() call counter (NeuralNetwork.saveItr). Diagnostic only.
     """
-    print(np.shape(x))
+    logger.debug("Saving latent images for activations of shape %s", tuple(x.shape))
     npX = x.cpu().float().detach().numpy()
     toPlot = np.sum(npX, axis=2)
     for i in range(0, np.shape(npX)[1]):

@@ -1,3 +1,4 @@
+import logging
 import os
 
 import h5py
@@ -8,9 +9,10 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 from conngafit_datasets import CoNNGaFitImageInferenceDataset
 from plotting_functions import CreateBasicPlots, LoadNames, MakeImage
 
+logger = logging.getLogger(__name__)
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = 'cpu'
-print(f"Using {device} device")
 
 Sim2PhysicalUnits_MassFlux = (
     (2 / np.pi) * 1 / (3.086 * np.power(10.0, 16.0)) * (3.154 * np.power(10.0, 7.0)) * np.power(10, 10)
@@ -43,6 +45,7 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
     saveLatentImages: if True, dump intermediate activation images during the forward pass
         (see NeuralNetwork.forward's saveLatentImages argument) - useful for debugging only.
     """
+    logger.info("Using %s device", device)
 
     #####Set variables based on desired network type
 
@@ -109,4 +112,4 @@ def RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, pa
         MakeImage(pred.cpu().detach().numpy(), imageOutput, targetShape=targetShape)  # Generate Projection Map
         CreateBasicPlots(pred.cpu().detach().numpy(), plotOutput, targetShape)  # Generate Radial Plots
 
-    print("Done!")
+    logger.info("Done!")

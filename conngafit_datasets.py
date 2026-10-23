@@ -1,9 +1,12 @@
 import glob
+import logging
 import os
 import re
 
 import h5py
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 #### Dataset classes for training (VOF images with annotations) and inference (datacubes only)
 
@@ -233,8 +236,12 @@ class CoNNGaFitImageDataset:
             filename = os.path.splitext(os.path.basename(path))[0]
             for rotations, flip in self.augmentations:
                 self.names.append(filename + augmentation_suffix(rotations, flip))
-        print(
-            f"Found {len(self.img_paths)} images in {len(sources)} folders, {len(self.names)} samples with augmentation {augment}"
+        logger.info(
+            "Found %d images in %d folders, %d samples with augmentation %s",
+            len(self.img_paths),
+            len(sources),
+            len(self.names),
+            augment,
         )
 
         if radial_bins is not None:

@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -5,6 +7,8 @@ from torch import nn
 
 from unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
 from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+
+logger = logging.getLogger(__name__)
 
 # 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes following
 # architecture in Stachenfeld et al. 2021, (https://arxiv.org/abs/2112.15275).
@@ -219,7 +223,7 @@ class NeuralNetwork(nn.Module):
                 f"output_size={output_size} does not match output_shape {self.output_shape} for head='conv'"
             )
         self.output_size = int(output_size) if output_size is not None else map_size
-        print("output size=", self.output_size)
+        logger.debug("output size = %d", self.output_size)
         self.nFC = nFC
         self.saveItr = 0  # forward() call counter; numbers the latent-image filenames
 

@@ -1,9 +1,13 @@
+import logging
+
 import numpy as np
 import torch
 from torch import nn
 
 from unet_blocks import ConvMapHead, DeconvBlock, HalfResConvHead, ResidualBlock, Stem, Upsample, _match_spatial
 from unet_diagnostics import SaveSummedSpectralChannels, count_params, layer_param_lines
+
+logger = logging.getLogger(__name__)
 
 # 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
 # arbitrary size and predicts a flattened output map. See NeuralNetwork for the full
@@ -206,7 +210,7 @@ class NeuralNetwork(nn.Module):
         self.output_size = int(output_size) if output_size is not None else map_size
         # fail fast if this input can't be halved n_stages-1 times after the stem
         self.stem_out_shape = _check_stage_compatibility(input_shape, n_stages)
-        print("output size=", self.output_size)
+        logger.debug("output size = %d", self.output_size)
         self.nFC = nFC
         self.saveItr = 0  # forward() call counter; numbers the latent-image filenames
 

@@ -1,7 +1,11 @@
+import logging
+
 import h5py
 import numpy as np
 from astropy.io import fits
 from matplotlib import pyplot as plt
+
+logger = logging.getLogger(__name__)
 
 # from torchvision.io import read_image
 deg2arcsec = 60 * 60
@@ -23,10 +27,10 @@ deg2arcsec = 60 * 60
 def FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, saveImages=False):
     hdul = fits.open(imageDir)
     originalPixelRes = np.abs(hdul[0].header["CDELT1"] * deg2arcsec)
-    print("pixel res = ", hdul[0].header["CDELT1"] * deg2arcsec)
+    logger.info("pixel res = %g arcsec", hdul[0].header["CDELT1"] * deg2arcsec)
     rawdata = hdul[0].data
 
-    print("Shape of raw data", np.shape(rawdata))
+    logger.debug("Shape of raw data: %s", np.shape(rawdata))
 
     if saveImages:
         plt.imshow(np.sum(rawdata, axis=1)[0, :, :])
@@ -42,35 +46,32 @@ def FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, sa
     nBin = int(np.round(np.shape(rawdata)[3] / targetNpix))
 
     newdata = rawdata[0, :, :, :]
-    print("shape of newdata=", np.shape(newdata))
+    logger.debug("Shape of newdata: %s", np.shape(newdata))
     all_but_first = tuple([1, 2])
 
     nSpec, nPix, tmp = np.shape(newdata)
 
     dx = int(np.round((targetNpix - nPix / nBin) / 2))
     ds = int(np.round((targetNspec - nSpec) / 2))
-    print("ds=", ds)
-    print("targetNspec=", targetNspec)
+    logger.debug("ds = %d, targetNspec = %d", ds, targetNspec)
 
     pixOffset0 = 0
-    print("dx=", dx)
+    logger.debug("dx = %d", dx)
 
     if dx < 0:
         # dx*=-1
         pixOffset0 = int(np.round(-dx / 2))
 
     nTrunc = targetNspec - 2 * ds
-    print("nspec=", nSpec)
-    print("ntrunc=", nTrunc)
+    logger.debug("nspec = %d, ntrunc = %d", nSpec, nTrunc)
     offset = nSpec - nTrunc
-    print("offset=", offset)
+    logger.debug("offset = %d", offset)
 
     pixOffset = 0
     if int(nPix / nBin) + dx > targetNpix:
         pixOffset = int(np.round((targetNpix - int(nPix / nBin) - np.abs(dx)) / 2))
 
-    print("pixOffset=", pixOffset)
-    print("pixOffset0=", pixOffset0)
+    logger.debug("pixOffset = %d, pixOffset0 = %d", pixOffset, pixOffset0)
 
     for i in range(pixOffset0, int(nPix / nBin) + pixOffset):
         for j in range(pixOffset0, int(nPix / nBin) + pixOffset):
@@ -102,6 +103,6 @@ def FITS_to_CoNNGaFit(imageDir, output, targetNpix, targetNspec, distance=-1, sa
     hf.create_dataset("pixelRes_kpc", data=originalPixelRes * nBin / 60 / 60 * np.pi / 180 * distance)
     hf.close()
 
-    print("nBin=", nBin)
-    print("newPixelRes=", originalPixelRes * nBin, " arcsec")
-    print("newPixelRes=", originalPixelRes * nBin / 60 / 60 * np.pi / 180 * distance, " kpc")
+    logger.info("nBin = %d", nBin)
+    logger.info("newPixelRes = %g arcsec", originalPixelRes * nBin)
+    logger.info("newPixelRes = %g kpc", originalPixelRes * nBin / 60 / 60 * np.pi / 180 * distance)

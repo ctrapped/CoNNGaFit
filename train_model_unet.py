@@ -1,3 +1,4 @@
+import logging
 import os
 
 import matplotlib
@@ -8,6 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import TARGETS, CoNNGaFitImageDataset, inclination_folders
+from logging_setup import add_logging_arguments, configure_logging
 from unet3d_resblock import NeuralNetwork
 
 matplotlib.use("Agg")
@@ -159,14 +161,17 @@ def parse_args():
         help="Mini-batch size for validation/testing. Default: a reasonable division of the "
         "validation set into ~10 batches (floored at 1).",
     )
+    add_logging_arguments(parser)
     return parser.parse_args()
 
 
+logger = logging.getLogger(__name__)
 args = parse_args()
+configure_logging(verbose=args.verbose, quiet=args.quiet)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = 'cpu'
-print(f"Using {device} device")
+logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
 hyperparams, hyperparamsText = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS)
@@ -247,7 +252,7 @@ if batchSizeDefault is None:
 else:
     batchSize = batchSizeDefault
     batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
-    print("Batches per training set = ", batchesPerTrainingSet)
+    logger.info("Batches per training set = %d", batchesPerTrainingSet)
 
 #### Image normalization, from every training image (augmentation doesn't change their mean/spread) ####
 # Each cube's mean and variance are combined exactly (Chan et al.'s parallel algorithm), one cube in memory at a time
@@ -261,7 +266,7 @@ for i in range(len(training_data.img_paths)):
     nPixels += n
 trainingStdv = np.sqrt(sumSquaredDeviations / nPixels)
 del cube
-print(f"Image normalization: mean = {trainingMean:.4g}, stdv = {trainingStdv:.4g}")
+logger.info("Image normalization: mean = %.4g, stdv = %.4g", trainingMean, trainingStdv)
 
 #### Label scaling, from every training label (augmentation doesn't change their range) ####
 # Labels are scaled to (label - labelOffset) / labelScale for training; predictions and labels are
@@ -277,7 +282,7 @@ if labelScaling != "none":
     if not labelScale > 0:
         raise ValueError(f"label_scaling = {labelScaling!r} needs training labels that aren't all {np.max(allLabels)}")
     del allLabels
-    print(f"Label scaling ({labelScaling}): offset = {labelOffset:.4g}, scale = {labelScale:.4g}")
+    logger.info("Label scaling (%s): offset = %.4g, scale = %.4g", labelScaling, labelOffset, labelScale)
 
 
 def scale_labels(label):
@@ -332,7 +337,7 @@ else:
     batchSize = testBatchSize
 validation_dataloader = DataLoader(WithIndices(validation_data), batch_size=batchSize)
 
-print("Data loaded...")
+logger.info("Data loaded")
 
 
 if radialBins is not None:  # Labels are radial curves, so plot and save them as curves rather than maps
@@ -391,7 +396,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
 
         if batch % 100 == 0:
             current = batch * len(X)
-            print(f"loss: {loss.item():>7f} [{current:>5d}/{size:>5d}]")
+            logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
 
     return epoch_loss / num_batches
 
@@ -443,7 +448,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 
     accuracy = correct / total * 100
     validation_loss /= num_batches
-    print(f"Validation Error: \n Accuracy: {(accuracy):>0.1f}%, Avg loss: {validation_loss:>8f} \n")
+    logger.info("Validation: accuracy %.1f%%, avg loss %8f", accuracy, validation_loss)
 
     if final and radialBins is None:
         MakeCorrelationPlot(
@@ -501,7 +506,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
     accuracy = correct / total * 100
     test_loss /= num_batches
-    print(f"Test Error: \n Accuracy: {(accuracy):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    logger.info("Test: accuracy %.1f%%, avg loss %8f", accuracy, test_loss)
 
     if final and radialBins is None:
         MakeCorrelationPlot(
@@ -530,9 +535,7 @@ model = NeuralNetwork(
     head=outputHead,
     output_size=radialBins,
 ).to(device)
-print("Defining model...")
-print(model)
-print("Loading names...")
+model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
 validationNames = validation_data.names
 trainingNames = training_data.names
 
@@ -558,7 +561,7 @@ else:
 
 #### Perform Training Loop ####
 for t in range(epochs):
-    print(f"Epoch {t + 1}\n-------------------------------")
+    logger.info("Epoch %d/%d", t + 1, epochs)
     trainingLoss[t] = train_loop(train_dataloader, model, loss_fn, optimizer, t)
     if batchSizeDefault is None:
         validationLoss[t], validationAccuracy[t], specificAccuracy[:, t] = validation_loop(
@@ -614,11 +617,11 @@ test_dataloader = DataLoader(WithIndices(test_data), batch_size=batchSize)
 testingNames = test_data.names
 
 final_test_loss, final_test_accuracy, final_test_specific_accuracy = test_loop(test_dataloader, model, loss_fn, t)
-print("Testing Set Loss=", final_test_loss)
-print("Testing Set Accuracy=", final_test_accuracy)
-print("Testing Set Specific Accuracies=")
+logger.info("Testing set loss = %g", final_test_loss)
+logger.info("Testing set accuracy = %g", final_test_accuracy)
+logger.info("Testing set specific accuracies:")
 for accuracy in final_test_specific_accuracy:
-    print(accuracy)
+    logger.info("  %s", accuracy)
 
 
 #### Make Basic Diagnostic Outputs ####
