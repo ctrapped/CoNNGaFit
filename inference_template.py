@@ -1,10 +1,10 @@
 import argparse
 
 from logging_setup import add_logging_arguments, configure_logging
-from use_model import RunInferences
+from use_model import run_inferences
 
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
-####input datacubes. See use_model.RunInferences for the full parameter description.
+####input datacubes. See use_model.run_inferences for the full parameter description.
 #
 ####Run as: python inference_template.py [options]
 ####  Run with --help to see all options.
@@ -39,4 +39,4 @@ def parse_args():
 args = parse_args()
 configure_logging(verbose=args.verbose, quiet=args.quiet)
 
-RunInferences(args.network_type, args.output_prefix, args.image_list, modelPath=args.model_path)
+run_inferences(args.network_type, args.output_prefix, args.image_list, model_path=args.model_path)

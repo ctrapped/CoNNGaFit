@@ -2,7 +2,7 @@ import argparse
 import os
 
 from logging_setup import add_logging_arguments, configure_logging
-from use_model import RunInferences
+from use_model import run_inferences
 
 ####Runs inference with a previously trained 'unet18' network on the validation set for a
 ####given sample, so predictions can be spot-checked against the known validation labels.
@@ -50,10 +50,10 @@ def parse_args():
 args = parse_args()
 configure_logging(verbose=args.verbose, quiet=args.quiet)
 
-sampleSuffix = args.sample_suffix
-validationSetFilename = (
-    args.validation_csv or "validation_annotations_MassFlux_All_Inclinations_" + sampleSuffix + ".csv"
+sample_suffix = args.sample_suffix
+validation_set_filename = (
+    args.validation_csv or "validation_annotations_MassFlux_All_Inclinations_" + sample_suffix + ".csv"
 )
-validationDir = os.path.join(args.data_dir, "annotation_datasets", validationSetFilename)
+validation_dir = os.path.join(args.data_dir, "annotation_datasets", validation_set_filename)
 
-RunInferences(args.network_type, args.output_dir, validationDir, modelPath=args.model_path, saveLatentImages=True)
+run_inferences(args.network_type, args.output_dir, validation_dir, model_path=args.model_path, save_latent_images=True)

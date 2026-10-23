@@ -124,7 +124,7 @@ To convert an observed FITS datacube into a CoNNGaFit-compatible `.hdf5` input, 
 
 ## Inference
 
-`use_model.RunInferences(networkType, imageOutput_prefix, imageList, modelPath=None, params=None, saveLatentImages=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `networkType='unet18'` is implemented. `modelPath` overrides the built-in default checkpoint path; `params=[nFilt0, k0, k1, nFC]` overrides the default architecture hyperparameters.
+`use_model.run_inferences(network_type, image_output_prefix, image_list, model_path=None, params=None, save_latent_images=False)` loads a trained checkpoint and runs it over a CSV list of input datacubes (same one-path-per-line format as training, labels ignored if present). Currently only `network_type='unet18'` is implemented. `model_path` overrides the built-in default checkpoint path; `params=[n_filt0, k0, k1, n_fc]` overrides the default architecture hyperparameters.
 
 Two ready-to-run scripts wrap this with `argparse`:
 

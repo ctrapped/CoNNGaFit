@@ -379,7 +379,7 @@ class NeuralNetwork(nn.Module):
         """Put every Dropout/Dropout2d/Dropout3d submodule into train mode while leaving BatchNorm3d
         (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
         sample, but BatchNorm3d in train mode would normalize against a single-sample batch
-        at inference (RunInferences in use_model.py runs batch_size=1)."""
+        at inference (run_inferences in use_model.py runs batch_size=1)."""
         for m in self.modules():
             if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
                 m.train()

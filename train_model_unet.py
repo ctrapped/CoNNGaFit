@@ -174,36 +174,36 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
-hyperparams, hyperparamsText = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS)
+hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS)
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
-nFC = hyperparams["n_fc"]
-nFilt0 = hyperparams["n_filt0"]
+n_fc = hyperparams["n_fc"]
+n_filt0 = hyperparams["n_filt0"]
 k0 = hyperparams["k0"]
 k1 = hyperparams["k1"]
 dropout_rate = hyperparams["dropout_rate"]
 block_dropout_rate = hyperparams["block_dropout_rate"]
-outputHead = hyperparams["output_head"]
-labelScaling = hyperparams["label_scaling"]
-if labelScaling not in ("none", "symmetric", "one-sided"):
+output_head = hyperparams["output_head"]
+label_scaling = hyperparams["label_scaling"]
+if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
-        f'{args.hyperparams}: label_scaling = {labelScaling!r} should be "none", "symmetric" or "one-sided"'
+        f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
     )
 #############################
 
 
 ####   DATASETS   ####
-datasets, datasetsText = load_parameter_file(args.datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS)
+datasets, datasets_text = load_parameter_file(args.datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS)
 target = datasets["target"]
 if target not in TARGETS:
     raise ValueError(f"{args.datasets}: unknown target {target!r}; choose from {sorted(TARGETS)}")
-trainingSources = dataset_sources(datasets["training"], "training", args.datasets, datasets.get("base_dir"))
-validationSources = dataset_sources(datasets["validation"], "validation", args.datasets, datasets.get("base_dir"))
-testingSources = dataset_sources(datasets["testing"], "testing", args.datasets, datasets.get("base_dir"))
-augmentTraining = None if datasets["augment"] == "none" else datasets["augment"]  # TOML has no None
-radialBins = datasets["radial_bins"] or None  # 0 means train on maps
-radialProjection = datasets["radial_projection"]
+training_sources = dataset_sources(datasets["training"], "training", args.datasets, datasets.get("base_dir"))
+validation_sources = dataset_sources(datasets["validation"], "validation", args.datasets, datasets.get("base_dir"))
+testing_sources = dataset_sources(datasets["testing"], "testing", args.datasets, datasets.get("base_dir"))
+augment_training = None if datasets["augment"] == "none" else datasets["augment"]  # TOML has no None
+radial_bins = datasets["radial_bins"] or None  # 0 means train on maps
+radial_projection = datasets["radial_projection"]
 inclinations = datasets["inclinations"]  # "all" or a list, for every set
 inclination_folders(inclinations, args.datasets)  # Check it here, so an error names this file
 suffix = datasets.get("suffix", "")  # VOF's outputSuffix in the filenames, for every set
@@ -211,8 +211,8 @@ if not isinstance(suffix, str):
     raise ValueError(f"{args.datasets}: suffix = {suffix!r} should be a string")
 #############################
 
-paramLabel, unitLabel, binOp = TARGET_SETTINGS[target]
-runName = args.run_name or target
+param_label, unit_label, bin_op = TARGET_SETTINGS[target]
+run_name = args.run_name or target
 
 
 ####  Set input/output directories ####
@@ -220,91 +220,93 @@ os.makedirs(args.network_dir, exist_ok=True)
 os.makedirs(os.path.join(args.output_dir, "images"), exist_ok=True)
 os.makedirs(os.path.join(args.output_dir, "diagnostics"), exist_ok=True)
 
-imageOutput_training = os.path.join(args.output_dir, "images", runName + "_training")
-imageOutput_validation = os.path.join(args.output_dir, "images", runName + "_validation")
-imageOutput_finalTest = os.path.join(args.output_dir, "images", runName + "_test")
+image_output_training = os.path.join(args.output_dir, "images", run_name + "_training")
+image_output_validation = os.path.join(args.output_dir, "images", run_name + "_validation")
+image_output_final_test = os.path.join(args.output_dir, "images", run_name + "_test")
 
-diagnosticOutput = os.path.join(args.output_dir, "diagnostics", runName)
-modelOutputPath = os.path.join(args.network_dir, runName)
+diagnostic_output = os.path.join(args.output_dir, "diagnostics", run_name)
+model_output_path = os.path.join(args.network_dir, run_name)
 
 
 #### Load and Normalize Data ####
 training_data = CoNNGaFitImageDataset(
-    trainingSources,
+    training_sources,
     target,
-    augment=augmentTraining,
-    radial_bins=radialBins,
-    radial_projection=radialProjection,
+    augment=augment_training,
+    radial_bins=radial_bins,
+    radial_projection=radial_projection,
     inclinations=inclinations,
     suffix=suffix,
 )
 
 if args.batch_size is not None:
-    batchSizeDefault = None if args.batch_size == 0 else args.batch_size  # --batch-size 0 means full-batch
+    batch_size_default = None if args.batch_size == 0 else args.batch_size  # --batch-size 0 means full-batch
 else:
-    batchSizeDefault = max(2, len(training_data) // 10)  # Reasonable division of the training set into ~10
+    batch_size_default = max(2, len(training_data) // 10)  # Reasonable division of the training set into ~10
     # batches per epoch; floored at 2 (BatchNorm3d needs more than 1 sample per batch while
     # training). Override with --batch-size (0 for full-batch training).
 
-batchesPerTrainingSet = 1
-if batchSizeDefault is None:
-    batchSize = len(training_data)
+batches_per_training_set = 1
+if batch_size_default is None:
+    batch_size = len(training_data)
 else:
-    batchSize = batchSizeDefault
-    batchesPerTrainingSet = np.ceil(len(training_data) / batchSize)
-    logger.info("Batches per training set = %d", batchesPerTrainingSet)
+    batch_size = batch_size_default
+    batches_per_training_set = np.ceil(len(training_data) / batch_size)
+    logger.info("Batches per training set = %d", batches_per_training_set)
 
 #### Image normalization, from every training image (augmentation doesn't change their mean/spread) ####
 # Each cube's mean and variance are combined exactly (Chan et al.'s parallel algorithm), one cube in memory at a time
-nPixels, trainingMean, sumSquaredDeviations = 0, 0.0, 0.0
+n_pixels, training_mean, sum_squared_deviations = 0, 0.0, 0.0
 for i in range(len(training_data.img_paths)):
     cube = training_data.image(i)
     n, mean = cube.size, cube.mean(dtype=np.float64)
-    delta = mean - trainingMean
-    sumSquaredDeviations += cube.var(dtype=np.float64) * n + delta**2 * nPixels * n / (nPixels + n)
-    trainingMean += delta * n / (nPixels + n)
-    nPixels += n
-trainingStdv = np.sqrt(sumSquaredDeviations / nPixels)
+    delta = mean - training_mean
+    sum_squared_deviations += cube.var(dtype=np.float64) * n + delta**2 * n_pixels * n / (n_pixels + n)
+    training_mean += delta * n / (n_pixels + n)
+    n_pixels += n
+training_stdv = np.sqrt(sum_squared_deviations / n_pixels)
 del cube
-logger.info("Image normalization: mean = %.4g, stdv = %.4g", trainingMean, trainingStdv)
+logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
 
 #### Label scaling, from every training label (augmentation doesn't change their range) ####
-# Labels are scaled to (label - labelOffset) / labelScale for training; predictions and labels are
+# Labels are scaled to (label - label_offset) / label_scale for training; predictions and labels are
 # scaled back to physical units for every saved output and plot
-labelOffset, labelScale = 0.0, 1.0
-if labelScaling != "none":
-    allLabels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
-    if labelScaling == "symmetric":  # e.g. mass flux: divide by max(|label|), to [-1, 1]
-        labelScale = np.max(np.abs(allLabels))
+label_offset, label_scale = 0.0, 1.0
+if label_scaling != "none":
+    all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
+    if label_scaling == "symmetric":  # e.g. mass flux: divide by max(|label|), to [-1, 1]
+        label_scale = np.max(np.abs(all_labels))
     else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
-        labelOffset = (np.max(allLabels) + np.min(allLabels)) / 2
-        labelScale = (np.max(allLabels) - np.min(allLabels)) / 2
-    if not labelScale > 0:
-        raise ValueError(f"label_scaling = {labelScaling!r} needs training labels that aren't all {np.max(allLabels)}")
-    del allLabels
-    logger.info("Label scaling (%s): offset = %.4g, scale = %.4g", labelScaling, labelOffset, labelScale)
+        label_offset = (np.max(all_labels) + np.min(all_labels)) / 2
+        label_scale = (np.max(all_labels) - np.min(all_labels)) / 2
+    if not label_scale > 0:
+        raise ValueError(
+            f"label_scaling = {label_scaling!r} needs training labels that aren't all {np.max(all_labels)}"
+        )
+    del all_labels
+    logger.info("Label scaling (%s): offset = %.4g, scale = %.4g", label_scaling, label_offset, label_scale)
 
 
 def scale_labels(label):
-    return (label - labelOffset) / labelScale
+    return (label - label_offset) / label_scale
 
 
 def to_physical(a):
     """Scale labels or predictions back to physical units."""
-    return a * labelScale + labelOffset
+    return a * label_scale + label_offset
 
 
-training_data.transform = Compose([ToTensor(), Normalize(trainingMean, trainingStdv)])
+training_data.transform = Compose([ToTensor(), Normalize(training_mean, training_stdv)])
 training_data.target_transform = scale_labels
 
 validation_data = CoNNGaFitImageDataset(
-    validationSources,
+    validation_sources,
     target,
-    radial_bins=radialBins,
-    radial_projection=radialProjection,
+    radial_bins=radial_bins,
+    radial_projection=radial_projection,
     inclinations=inclinations,
     suffix=suffix,
-    transform=Compose([ToTensor(), Normalize(trainingMean, trainingStdv)]),
+    transform=Compose([ToTensor(), Normalize(training_mean, training_stdv)]),
     target_transform=scale_labels,
 )
 
@@ -322,51 +324,51 @@ class WithIndices(Dataset):
         return (*self.dataset[idx], idx)
 
 
-train_dataloader = DataLoader(WithIndices(training_data), batch_size=batchSize, shuffle=True)  # Reshuffled every epoch
+train_dataloader = DataLoader(WithIndices(training_data), batch_size=batch_size, shuffle=True)  # Reshuffled every epoch
 
 if args.test_batch_size is not None:
-    testBatchSize = args.test_batch_size
+    test_batch_size = args.test_batch_size
 else:
-    testBatchSize = max(1, len(validation_data) // 10)  # Reasonable division of the validation/test
-    # sets into ~10 batches; floored at 1 (unlike batchSizeDefault, batch size 1 is safe here
+    test_batch_size = max(1, len(validation_data) // 10)  # Reasonable division of the validation/test
+    # sets into ~10 batches; floored at 1 (unlike batch_size_default, batch size 1 is safe here
     # since validation/testing run with model.eval(), which uses BatchNorm's running stats
     # rather than computing per-batch statistics). Override with --test-batch-size.
-if batchSizeDefault is None:
-    batchSize = len(validation_data)
+if batch_size_default is None:
+    batch_size = len(validation_data)
 else:
-    batchSize = testBatchSize
-validation_dataloader = DataLoader(WithIndices(validation_data), batch_size=batchSize)
+    batch_size = test_batch_size
+validation_dataloader = DataLoader(WithIndices(validation_data), batch_size=batch_size)
 
 logger.info("Data loaded")
 
 
-if radialBins is not None:  # Labels are radial curves, so plot and save them as curves rather than maps
+if radial_bins is not None:  # Labels are radial curves, so plot and save them as curves rather than maps
     make_comp_image = make_comp_image_1d
     save_hdf5 = save_hdf5_1d
 
 
 #### Save final-epoch outputs ####
-def save_batch_outputs(X, y, pred, idx, names, outputBase, epoch, compImages=True):
+def save_batch_outputs(x, y, pred, idx, names, output_base, epoch, comp_images=True):
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
     image via its dataset index (idx), so names stay correct with shuffled or multiple batches."""
-    npX = X.cpu().float().detach().numpy()
-    npY = to_physical(y.cpu().float().detach().numpy())
-    npPred = to_physical(pred.cpu().detach().numpy())
+    np_x = x.cpu().float().detach().numpy()
+    np_y = to_physical(y.cpu().float().detach().numpy())
+    np_pred = to_physical(pred.cpu().detach().numpy())
     for tt in range(len(idx)):
-        outputName = outputBase + "_" + names[int(idx[tt])] + "_Epoch" + str(epoch)
-        if compImages:
+        output_name = output_base + "_" + names[int(idx[tt])] + "_Epoch" + str(epoch)
+        if comp_images:
             make_comp_image(
-                npPred,
-                npY,
-                npX,
-                outputName + ".png",
+                np_pred,
+                np_y,
+                np_x,
+                output_name + ".png",
                 tt,
                 sim_to_physical_units=1,
-                param_label=paramLabel,
-                unit_label=unitLabel,
-                bin_op=binOp,
+                param_label=param_label,
+                unit_label=unit_label,
+                bin_op=bin_op,
             )  # Labels are already in physical units
-        save_hdf5(npY, npPred, outputName + ".hdf5", tt)
+        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt)
 
 
 #### Define Training Loop ####
@@ -379,15 +381,15 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
     size = len(dataloader.dataset)
     epoch_loss = 0.0
     num_batches = len(dataloader)
-    for batch, (X, y, idx) in enumerate(dataloader):
-        X = X.to(device)
+    for batch, (x, y, idx) in enumerate(dataloader):
+        x = x.to(device)
         y = y.to(device)
 
-        pred = model(X.float())
+        pred = model(x.float())
         loss = loss_fn(pred, y.float())
         epoch_loss += loss.item()
         if epoch >= epochs - 1:
-            save_batch_outputs(X, y, pred, idx, trainingNames, imageOutput_training, epoch, compImages=False)
+            save_batch_outputs(x, y, pred, idx, training_names, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -395,7 +397,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         optimizer.step()
 
         if batch % 100 == 0:
-            current = batch * len(X)
+            current = batch * len(x)
             logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
 
     return epoch_loss / num_batches
@@ -415,47 +417,47 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     validation_loss, correct = 0, 0
     total = 0
     final = epoch >= epochs - 1
-    allPred, allY = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
+    all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
 
     with torch.no_grad():
-        for X, y, idx in dataloader:
-            X = X.to(device)
+        for x, y, idx in dataloader:
+            x = x.to(device)
             y = y.to(device)
 
-            pred = model(X.float())
+            pred = model(x.float())
             validation_loss += loss_fn(pred, y.float()).item()
 
-            npPred = pred.cpu().float().detach().numpy()
-            npY = y.cpu().float().detach().numpy()
+            np_pred = pred.cpu().float().detach().numpy()
+            np_y = y.cpu().float().detach().numpy()
 
             #### Roughly estimate accuracy of network. Not a great metric but okay for tracking general peformance ####
-            deviation = np.std(npY)
-            correct += np.size(np.where(((npPred > npY - deviation) & (npPred < npY + deviation)))[0])
-            total += np.size(npY)
+            deviation = np.std(np_y)
+            correct += np.size(np.where(((np_pred > np_y - deviation) & (np_pred < np_y + deviation)))[0])
+            total += np.size(np_y)
 
-            Nsnaps, Npix = np.shape(npY)
-            specific_accuracy = np.zeros((Nsnaps))
-            for i in range(0, Nsnaps):
-                correctForSnap = np.size(
-                    np.where(((npPred[i, :] > npY[i, :] - deviation) & (npPred[i, :] < npY[i, :] + deviation)))[0]
+            n_snaps, n_pix = np.shape(np_y)
+            specific_accuracy = np.zeros((n_snaps))
+            for i in range(0, n_snaps):
+                correct_for_snap = np.size(
+                    np.where(((np_pred[i, :] > np_y[i, :] - deviation) & (np_pred[i, :] < np_y[i, :] + deviation)))[0]
                 )
-                specific_accuracy[i] = correctForSnap / np.size(npY[i, :]) * 100
+                specific_accuracy[i] = correct_for_snap / np.size(np_y[i, :]) * 100
 
             if final:
-                save_batch_outputs(X, y, pred, idx, validationNames, imageOutput_validation, epoch)
-                allPred.append(to_physical(npPred))
-                allY.append(to_physical(npY))
+                save_batch_outputs(x, y, pred, idx, validation_names, image_output_validation, epoch)
+                all_pred.append(to_physical(np_pred))
+                all_y.append(to_physical(np_y))
 
     accuracy = correct / total * 100
     validation_loss /= num_batches
     logger.info("Validation: accuracy %.1f%%, avg loss %8f", accuracy, validation_loss)
 
-    if final and radialBins is None:
+    if final and radial_bins is None:
         make_correlation_plot(
-            np.concatenate(allPred),
-            np.concatenate(allY),
-            sum(len(a) for a in allPred),
-            diagnosticOutput + "_ValidationCorrelationPlot_Epoch" + str(epoch),
+            np.concatenate(all_pred),
+            np.concatenate(all_y),
+            sum(len(a) for a in all_pred),
+            diagnostic_output + "_ValidationCorrelationPlot_Epoch" + str(epoch),
         )
 
     model.train()
@@ -465,7 +467,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
     """Evaluate the model on the held-out test set. Same rough accuracy metric and final-epoch
-    diagnostic outputs as validation_loop above, written under imageOutput_finalTest instead.
+    diagnostic outputs as validation_loop above, written under image_output_final_test instead.
     Returns (test_loss, accuracy, specific_accuracy).
     """
     model.eval()
@@ -473,47 +475,47 @@ def test_loop(dataloader, model, loss_fn, epoch):
     test_loss, correct = 0, 0
     total = 0
     final = epoch >= epochs - 1
-    allPred, allY = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
+    all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
 
     with torch.no_grad():
-        for X, y, idx in dataloader:
-            X = X.to(device)
+        for x, y, idx in dataloader:
+            x = x.to(device)
             y = y.to(device)
-            pred = model(X.float())
+            pred = model(x.float())
             test_loss += loss_fn(pred, y.float()).item()
 
-            npPred = pred.cpu().float().detach().numpy()
-            npY = y.cpu().float().detach().numpy()
+            np_pred = pred.cpu().float().detach().numpy()
+            np_y = y.cpu().float().detach().numpy()
 
             #### Roughly estimate accuracy of network. Not a great metric but okay for tracking general peformance ####
-            deviation = np.std(npY)
-            correct += np.size(np.where(((npPred > npY - deviation) & (npPred < npY + deviation)))[0])
+            deviation = np.std(np_y)
+            correct += np.size(np.where(((np_pred > np_y - deviation) & (np_pred < np_y + deviation)))[0])
 
-            total += np.size(npY)
+            total += np.size(np_y)
 
-            Nsnaps, Npix = np.shape(npY)
-            specific_accuracy = np.zeros((Nsnaps))
-            for i in range(0, Nsnaps):
-                correctForSnap = np.size(
-                    np.where(((npPred[i, :] > npY[i, :] - deviation) & (npPred[i, :] < npY[i, :] + deviation)))[0]
+            n_snaps, n_pix = np.shape(np_y)
+            specific_accuracy = np.zeros((n_snaps))
+            for i in range(0, n_snaps):
+                correct_for_snap = np.size(
+                    np.where(((np_pred[i, :] > np_y[i, :] - deviation) & (np_pred[i, :] < np_y[i, :] + deviation)))[0]
                 )
-                specific_accuracy[i] = correctForSnap / np.size(npY[i, :]) * 100
+                specific_accuracy[i] = correct_for_snap / np.size(np_y[i, :]) * 100
 
             if final:
-                save_batch_outputs(X, y, pred, idx, testingNames, imageOutput_finalTest, epoch)
-                allPred.append(to_physical(npPred))
-                allY.append(to_physical(npY))
+                save_batch_outputs(x, y, pred, idx, testing_names, image_output_final_test, epoch)
+                all_pred.append(to_physical(np_pred))
+                all_y.append(to_physical(np_y))
 
     accuracy = correct / total * 100
     test_loss /= num_batches
     logger.info("Test: accuracy %.1f%%, avg loss %8f", accuracy, test_loss)
 
-    if final and radialBins is None:
+    if final and radial_bins is None:
         make_correlation_plot(
-            np.concatenate(allPred),
-            np.concatenate(allY),
-            sum(len(a) for a in allPred),
-            diagnosticOutput + "_TestCorrelationPlot_Epoch" + str(epoch),
+            np.concatenate(all_pred),
+            np.concatenate(all_y),
+            sum(len(a) for a in all_pred),
+            diagnostic_output + "_TestCorrelationPlot_Epoch" + str(epoch),
         )
 
     model.train()
@@ -521,23 +523,23 @@ def test_loop(dataloader, model, loss_fn, epoch):
 
 
 #### Define the Model ####
-inputShape = tuple(
+input_shape = tuple(
     training_data[0][0].shape
 )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
 model = NeuralNetwork(
-    inputShape,
-    nFilt0,
+    input_shape,
+    n_filt0,
     (k0, k0, k0),
     (k1, k1, k1),
-    nFC,
+    n_fc,
     fc_dropout_rate=dropout_rate,
     block_dropout_rate=block_dropout_rate,
-    head=outputHead,
-    output_size=radialBins,
+    head=output_head,
+    output_size=radial_bins,
 ).to(device)
 model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
-validationNames = validation_data.names
-trainingNames = training_data.names
+validation_names = validation_data.names
+training_names = training_data.names
 
 #### Define Loss Function and Optimizer ####
 loss_fn = nn.MSELoss()
@@ -546,75 +548,75 @@ optimizer = torch.optim.Adam(
 )  # Steepest gradient descent, can use different optimizers
 
 #### Initialize losses and specific accuracies ####
-trainingLoss = np.zeros((epochs))
-validationLoss = np.zeros((epochs))
-validationAccuracy = np.zeros((epochs))
+training_losses = np.zeros((epochs))
+validation_losses = np.zeros((epochs))
+validation_accuracies = np.zeros((epochs))
 
-if batchSizeDefault is not None:
-    # specificAccuracy is only ever filled in per-sample when batchSizeDefault is None (see the
+if batch_size_default is not None:
+    # specific_accuracies is only ever filled in per-sample when batch_size_default is None (see the
     # main training loop below), so it stays unused in batch mode - sized to 0 rows rather than
-    # referencing testBatchSize here.
-    specificAccuracy = np.zeros((0, epochs))
+    # referencing test_batch_size here.
+    specific_accuracies = np.zeros((0, epochs))
 else:
-    specificAccuracy = np.zeros((len(validation_data), epochs))
+    specific_accuracies = np.zeros((len(validation_data), epochs))
 
 
 #### Perform Training Loop ####
 for t in range(epochs):
     logger.info("Epoch %d/%d", t + 1, epochs)
-    trainingLoss[t] = train_loop(train_dataloader, model, loss_fn, optimizer, t)
-    if batchSizeDefault is None:
-        validationLoss[t], validationAccuracy[t], specificAccuracy[:, t] = validation_loop(
+    training_losses[t] = train_loop(train_dataloader, model, loss_fn, optimizer, t)
+    if batch_size_default is None:
+        validation_losses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
             validation_dataloader, model, loss_fn, t
         )
     else:
-        validationLoss[t], validationAccuracy[t], tmp = validation_loop(validation_dataloader, model, loss_fn, t)
+        validation_losses[t], validation_accuracies[t], tmp = validation_loop(validation_dataloader, model, loss_fn, t)
 
 
 # Save the Trained Model
-torch.save(model.state_dict(), modelOutputPath + ".pt")
+torch.save(model.state_dict(), model_output_path + ".pt")
 
 # Save the normalization information for loading data
-hf_norm = h5py.File(modelOutputPath + ".hdf5", "w")
-hf_norm.create_dataset("imageStats", data=np.array([trainingMean, trainingStdv]))
-hf_norm.create_dataset("labelScaling", data=labelScaling)
+hf_norm = h5py.File(model_output_path + ".hdf5", "w")
+hf_norm.create_dataset("imageStats", data=np.array([training_mean, training_stdv]))
+hf_norm.create_dataset("labelScaling", data=label_scaling)
 hf_norm.create_dataset(
-    "labelStats", data=np.array([labelOffset, labelScale])
-)  # physical label = scaled label * labelScale + labelOffset
+    "labelStats", data=np.array([label_offset, label_scale])
+)  # physical label = scaled label * label_scale + label_offset
 hf_norm.create_dataset("learningRate", data=learning_rate)
-hf_norm.create_dataset("nFC", data=nFC)
+hf_norm.create_dataset("nFC", data=n_fc)
 hf_norm.create_dataset("weight_decay", data=weight_decay)
-hf_norm.create_dataset("nFilt0", data=nFilt0)
+hf_norm.create_dataset("nFilt0", data=n_filt0)
 hf_norm.create_dataset("dropout_rate", data=dropout_rate)
 hf_norm.create_dataset("block_dropout_rate", data=block_dropout_rate)
-hf_norm.create_dataset("runName", data=runName)
-hf_norm.create_dataset("inputShape", data=inputShape)  # Needed to rebuild the network for inference
+hf_norm.create_dataset("runName", data=run_name)
+hf_norm.create_dataset("inputShape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
-hf_norm.create_dataset("outputHead", data=outputHead)
-if radialBins is not None:
-    hf_norm.create_dataset("radialBins", data=radialBins)
-    hf_norm.create_dataset("radialProjection", data=radialProjection)
+hf_norm.create_dataset("outputHead", data=output_head)
+if radial_bins is not None:
+    hf_norm.create_dataset("radialBins", data=radial_bins)
+    hf_norm.create_dataset("radialProjection", data=radial_projection)
 # The full parameter files, so every trained model records exactly what it was trained with
-hf_norm.create_dataset("hyperparamsFile", data=hyperparamsText)
-hf_norm.create_dataset("datasetsFile", data=datasetsText)
+hf_norm.create_dataset("hyperparamsFile", data=hyperparams_text)
+hf_norm.create_dataset("datasetsFile", data=datasets_text)
 hf_norm.close()
 
 
 # Testing Data
 
 test_data = CoNNGaFitImageDataset(
-    testingSources,
+    testing_sources,
     target,
-    radial_bins=radialBins,
-    radial_projection=radialProjection,
+    radial_bins=radial_bins,
+    radial_projection=radial_projection,
     inclinations=inclinations,
     suffix=suffix,
-    transform=Compose([ToTensor(), Normalize(trainingMean, trainingStdv)]),
+    transform=Compose([ToTensor(), Normalize(training_mean, training_stdv)]),
     target_transform=scale_labels,
 )
 
-test_dataloader = DataLoader(WithIndices(test_data), batch_size=batchSize)
-testingNames = test_data.names
+test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
+testing_names = test_data.names
 
 final_test_loss, final_test_accuracy, final_test_specific_accuracy = test_loop(test_dataloader, model, loss_fn, t)
 logger.info("Testing set loss = %g", final_test_loss)
@@ -626,47 +628,47 @@ for accuracy in final_test_specific_accuracy:
 
 #### Make Basic Diagnostic Outputs ####
 fig1 = plt.figure()
-plt.plot(np.log10(trainingLoss))
+plt.plot(np.log10(training_losses))
 plt.title("Training Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Log(Loss)")
-plt.savefig(diagnosticOutput + "_trainingLoss.png")
+plt.savefig(diagnostic_output + "_trainingLoss.png")
 
 fig2 = plt.figure()
-plt.plot(np.log10(validationLoss))
+plt.plot(np.log10(validation_losses))
 plt.title("Valdiation Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Log(Loss)")
 
-plt.savefig(diagnosticOutput + "_validationLoss.png")
+plt.savefig(diagnostic_output + "_validationLoss.png")
 
 fig3 = plt.figure()
-plt.plot(validationAccuracy)
+plt.plot(validation_accuracies)
 plt.title("Valdiation Accuracy")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy [%]")
 plt.ylim([60, 101])
-plt.savefig(diagnosticOutput + "_ValdiationAccuracy.png")
+plt.savefig(diagnostic_output + "_ValdiationAccuracy.png")
 
 
 fig4 = plt.figure()
-for i in range(0, np.shape(specificAccuracy)[0]):
-    plt.plot(specificAccuracy[i, :], lw=0.5)
+for i in range(0, np.shape(specific_accuracies)[0]):
+    plt.plot(specific_accuracies[i, :], lw=0.5)
 plt.title("Valdiation Accuracy for each Snapshot")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy [%]")
 plt.ylim([60, 101])
-plt.savefig(diagnosticOutput + "_ValdiationAccuracyPerSnapshot.png")
+plt.savefig(diagnostic_output + "_ValdiationAccuracyPerSnapshot.png")
 
 
-hf_diagnostic = h5py.File(diagnosticOutput + "_LossesAndAccuracies.hdf5", "w")
-hf_diagnostic.create_dataset("trainingLoss", data=trainingLoss)
-hf_diagnostic.create_dataset("validationLoss", data=validationLoss)
-hf_diagnostic.create_dataset("validationAccuracy", data=validationAccuracy)
-hf_diagnostic.create_dataset("specificAccuracy", data=specificAccuracy)
-hf_diagnostic.create_dataset("trainingNames", data=trainingNames)
-hf_diagnostic.create_dataset("validationNames", data=validationNames)
-hf_diagnostic.create_dataset("testingNames", data=testingNames)
+hf_diagnostic = h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w")
+hf_diagnostic.create_dataset("trainingLoss", data=training_losses)
+hf_diagnostic.create_dataset("validationLoss", data=validation_losses)
+hf_diagnostic.create_dataset("validationAccuracy", data=validation_accuracies)
+hf_diagnostic.create_dataset("specificAccuracy", data=specific_accuracies)
+hf_diagnostic.create_dataset("trainingNames", data=training_names)
+hf_diagnostic.create_dataset("validationNames", data=validation_names)
+hf_diagnostic.create_dataset("testingNames", data=testing_names)
 hf_diagnostic.create_dataset("testingLoss", data=final_test_loss)
 hf_diagnostic.create_dataset("testingAccuracy", data=final_test_accuracy)
 hf_diagnostic.create_dataset("testingSpecificAccuracy", data=final_test_specific_accuracy)
