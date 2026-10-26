@@ -10,9 +10,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-import torch
 
-from unet3d_resblock import NeuralNetwork
+from use_model import load_model, predict
 
 REPO = Path(__file__).resolve().parents[1]
 TRAIN_SCRIPT = REPO / "train_model_unet.py"
@@ -114,26 +113,6 @@ def trained(request, vof_root):
     return name, head, radial_bins, run_dir
 
 
-def load_checkpoint(run_dir, name):
-    """Rebuild the trained network from its .hdf5 metadata and .pt weights; returns (model, metadata)."""
-    with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
-        meta = {key: hf[key][()] for key in hf}
-    hyperparams = tomllib.loads(meta["hyperparams_text"].decode())
-    radial_bins = int(meta["radial_bins"]) if "radial_bins" in meta else None
-    k0, k1 = hyperparams["k0"], hyperparams["k1"]
-    model = NeuralNetwork(
-        tuple(int(n) for n in meta["input_shape"]),
-        hyperparams["n_filt0"],
-        (k0,) * 3,
-        (k1,) * 3,
-        hyperparams["n_fc"],
-        head=meta["output_head"].decode(),
-        output_size=radial_bins,
-    )
-    model.load_state_dict(torch.load(run_dir / "nets" / f"{name}.pt", map_location="cpu", weights_only=True))
-    return model.eval(), meta
-
-
 def test_training_writes_checkpoint_and_diagnostics(trained):
     name, head, radial_bins, run_dir = trained
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
@@ -155,28 +134,19 @@ def test_checkpoint_reproduces_saved_test_predictions(trained):
     name, _, radial_bins, run_dir = trained
     if radial_bins:
         pytest.skip("radial-curve snapshots save the whole batch rather than one sample")
-    model, meta = load_checkpoint(run_dir, name)
-    mean, stdv = meta["image_stats"]
-    offset, scale = meta["label_stats"]
-    for path in sorted((run_dir / "vof").glob("m12d/*/*.hdf5")):
-        with h5py.File(path, "r") as hf:
-            cube = torch.from_numpy(hf["spectra"][()].transpose(2, 0, 1))  # (nSpec, nX, nY), as ToTensor gives
-        with torch.no_grad():
-            pred = model(((cube - mean) / stdv).float()[None]).numpy() * scale + offset
-        saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{path.stem}_Epoch*.hdf5"))
+    model, metadata = load_model(str(run_dir / "nets" / name))
+    paths = sorted(str(p) for p in (run_dir / "vof").glob("m12d/*/*.hdf5"))
+    for image_name, pred in predict(model, metadata, paths):
+        saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{image_name}_Epoch*.hdf5"))
         with h5py.File(saved, "r") as hf:
-            np.testing.assert_allclose(
-                pred.reshape(hf["prediction"].shape), hf["prediction"][()], rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL
-            )
+            np.testing.assert_allclose(pred, hf["prediction"][()], rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
 
 
-@pytest.mark.xfail(strict=True, reason="use_model.py still targets the pre-refactor network and dataset API")
 def test_inference_script_runs_on_trained_checkpoint(trained):
     name, _, radial_bins, run_dir = trained
-    if radial_bins:
-        pytest.skip("inference plots are maps")
+    paths = sorted((run_dir / "vof").glob("m12d/*/*.hdf5"))
     image_list = run_dir / "images.csv"
-    image_list.write_text("\n".join(str(p) for p in sorted((run_dir / "vof").glob("m12d/*/*.hdf5"))) + "\n")
+    image_list.write_text("\n".join(str(p) for p in paths) + "\n")
     result = subprocess.run(
         [
             sys.executable,
@@ -194,4 +164,7 @@ def test_inference_script_runs_on_trained_checkpoint(trained):
         timeout=TIMEOUT_S,
     )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]  # script exits cleanly
-    assert list(run_dir.glob("inference_*"))  # and writes its prediction outputs
+    output = "radialPlot" if radial_bins else "projectionMap"
+    for path in paths:  # a plot and an hdf5 of every prediction
+        for extension in (".png", ".hdf5"):
+            assert (run_dir / f"inference_{path.stem}_{output}{extension}").is_file()

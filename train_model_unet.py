@@ -8,7 +8,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from conngafit_datasets import TARGETS, CoNNGaFitImageDataset, inclination_folders
+from conngafit_datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
 from logging_setup import add_logging_arguments, configure_logging
 from unet3d_resblock import NeuralNetwork
 
@@ -25,7 +25,7 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Hyperparameters and datasets (including the target annotation) are read from two parameter files,
-####configs/hyperparams.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS below
+####configs/hyperparams.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
 #
 ####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
 ####  Run with --help to see all options. The two parameter files and --run-name are normally the
@@ -37,18 +37,6 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 ####Updated 10/21/2026
 
-
-####   PER-TARGET SETTINGS   ####
-# target -> (plot label, plot units, how pixels are combined when binning plots)
-TARGET_SETTINGS = {
-    "mass": ("Mass", r"[M$_{\odot}$]", "sum"),
-    "radial_velocity": ("Rad. Vel.", r"[km s$^{-1}$]", "mean"),
-    "cylindrical_radial_velocity": ("Cyl. Rad. Vel.", r"[km s$^{-1}$]", "mean"),
-    "rotational_velocity": ("Rot. Vel.", r"[km s$^{-1}$]", "mean"),
-    "radial_mass_flux": ("Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
-    "cylindrical_radial_mass_flux": ("Cyl. Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
-}
-#############################
 
 ####   PARAMETER FILES   ####
 # Keys every parameter file must have (see configs/*.toml for what each one does)

@@ -117,7 +117,7 @@ Every network has a `summary()` method that prints its stages, shapes and parame
 
 `fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
 
-`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes. They don't yet support networks trained by `train_model_unet.py`.
+`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes.
 
 ## Development
 

@@ -12,3 +12,4 @@ All notable changes to this project are documented here. The format follows
 - ruff linting/formatting configuration and pre-commit hooks.
 - `pyproject.toml` with dependencies and a `[dev]` extra.
 - Pull request and issue templates, `LICENSE` (MIT), `CITATION.cff` and this changelog.
+- Updated use_model.py to be able to run inferences with updated repo structure.

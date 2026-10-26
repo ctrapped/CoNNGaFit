@@ -108,6 +108,15 @@ TARGETS = {
     "radial_mass_flux": ["mass_annotation", "radial_velocity_annotation"],
     "cylindrical_radial_mass_flux": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
 }
+# target -> (plot label, plot units, how pixels are combined when binning plots)
+TARGET_SETTINGS = {
+    "mass": ("Mass", r"[M$_{\odot}$]", "sum"),
+    "radial_velocity": ("Rad. Vel.", r"[km s$^{-1}$]", "mean"),
+    "cylindrical_radial_velocity": ("Cyl. Rad. Vel.", r"[km s$^{-1}$]", "mean"),
+    "rotational_velocity": ("Rot. Vel.", r"[km s$^{-1}$]", "mean"),
+    "radial_mass_flux": ("Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+    "cylindrical_radial_mass_flux": ("Cyl. Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+}
 # Targets converted from Msun km/s to a mass flux in Msun/yr (see label_map)
 MASS_FLUX_TARGETS = {"radial_mass_flux", "cylindrical_radial_mass_flux"}
 
