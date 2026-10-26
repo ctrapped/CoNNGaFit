@@ -85,7 +85,7 @@ def save_radial_curve(curve, radii, output, param_label, unit_label):
     plt.axhline(0, color="k", ls="--", lw=1.5)
     plt.xlabel("Radial bin" if radii is None else "Radius [kpc]")
     plt.ylabel(param_label + " " + unit_label)
-    plt.legend(["Prediction","Zero line"])
+    plt.legend(["Prediction", "Zero line"])
     plt.savefig(output + "radialPlot.png", bbox_inches="tight")  # "tight" keeps the y-axis label in the figure
     plt.close()
 
