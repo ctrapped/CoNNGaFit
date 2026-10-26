@@ -1,4 +1,4 @@
-"""Demo: run a trained CoNNGaFit network on new datacubes, here the demo's test galaxy, with no training.
+"""Demo: run a trained CoNNGaFit network on new datacubes. This runs the demo's test galaxy, with no training.
 
 Uses the pre-trained demo network in examples/demo_model/ and runs in a few seconds. From the repository root:
 
