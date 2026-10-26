@@ -336,15 +336,17 @@ if radial_bins is not None:  # Labels are radial curves, so plot and save them a
 
 
 #### Save final-epoch outputs ####
-def save_batch_outputs(x, y, pred, idx, names, output_base, epoch, comp_images=True):
+def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images=True):
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
     image via its dataset index (idx), so names stay correct with shuffled or multiple batches."""
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
     np_pred = to_physical(pred.cpu().detach().numpy())
     for tt in range(len(idx)):
-        output_name = output_base + "_" + names[int(idx[tt])] + "_Epoch" + str(epoch)
+        output_name = output_base + "_" + dataset.names[int(idx[tt])] + "_Epoch" + str(epoch)
         if comp_images:
+            # Radial curves are plotted against the radius of each ring, from the image's field of view
+            radii = {"radii": dataset.radii(int(idx[tt]))} if radial_bins is not None else {}
             make_comp_image(
                 np_pred,
                 np_y,
@@ -355,6 +357,7 @@ def save_batch_outputs(x, y, pred, idx, names, output_base, epoch, comp_images=T
                 param_label=param_label,
                 unit_label=unit_label,
                 bin_op=bin_op,
+                **radii,
             )  # Labels are already in physical units
         save_hdf5(np_y, np_pred, output_name + ".hdf5", tt)
 
@@ -377,7 +380,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         loss = loss_fn(pred, y.float())
         epoch_loss += loss.item()
         if epoch >= epochs - 1:
-            save_batch_outputs(x, y, pred, idx, training_names, image_output_training, epoch, comp_images=False)
+            save_batch_outputs(x, y, pred, idx, training_data, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -432,7 +435,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
                 specific_accuracy[i] = correct_for_snap / np.size(np_y[i, :]) * 100
 
             if final:
-                save_batch_outputs(x, y, pred, idx, validation_names, image_output_validation, epoch)
+                save_batch_outputs(x, y, pred, idx, validation_data, image_output_validation, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
@@ -490,7 +493,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
                 specific_accuracy[i] = correct_for_snap / np.size(np_y[i, :]) * 100
 
             if final:
-                save_batch_outputs(x, y, pred, idx, testing_names, image_output_final_test, epoch)
+                save_batch_outputs(x, y, pred, idx, test_data, image_output_final_test, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 

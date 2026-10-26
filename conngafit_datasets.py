@@ -161,6 +161,12 @@ def radial_profile(hf, target, n_bins):
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
 
 
+def ring_radii(fov_kpc, n_bins):
+    """Centers (kpc) of radial_profile's n_bins rings, for an image fov_kpc across."""
+    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
+    return (edges[:-1] + edges[1:]) / 2
+
+
 #### Augmentation ####
 # Augmentations, as (number of 90-degree rotations, left-right flip). VOF puts the galaxy's major
 # axis along x; "major_axis" keeps it there, while "all" (every rotation/flip of a square image)
@@ -282,6 +288,11 @@ class CoNNGaFitImageDataset:
         """The flattened label of image file_idx before augmentation and target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).flatten().astype("float")
+
+    def radii(self, idx):
+        """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""
+        with h5py.File(self.curve_paths[idx // len(self.augmentations)], "r") as hf:
+            return ring_radii(hf.attrs["fov_kpc"], self.radial_bins)
 
     def __getitem__(self, idx):
         file_idx, aug_idx = divmod(idx, len(self.augmentations))

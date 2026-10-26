@@ -8,7 +8,7 @@ import torch
 from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset
+from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
 from plotting_functions import make_image
 from unet3d_resblock import NeuralNetwork
 
@@ -74,8 +74,7 @@ def ring_radii_kpc(path, n_bins):
             fov_kpc = hf["pixel_res_kpc"][()] * hf["spectra"].shape[1]
         else:
             return None
-    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
-    return (edges[:-1] + edges[1:]) / 2
+    return ring_radii(fov_kpc, n_bins)
 
 
 def save_radial_curve(curve, radii, output, param_label, unit_label):
