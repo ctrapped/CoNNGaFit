@@ -34,6 +34,14 @@ Trains a small network on VOF observations of six synthetic disk galaxies, each 
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves at four position angles, and the training and validation loss curves](examples/demo.png)
 
+To run a trained network on new datacubes without training, run
+
+```bash
+python examples/demo_inference.py
+```
+
+which runs the pre-trained demo network in [`examples/demo_model`](examples/demo_model) on the test galaxy in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve to `examples/demo_output/inference/`. Pass `--model-path examples/demo_output/NetworkWeights/demo` to use the network you trained with `demo.py` instead.
+
 [`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
 
 ## Training

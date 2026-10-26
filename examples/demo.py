@@ -13,6 +13,7 @@ from the datacube's spectra.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -37,7 +38,6 @@ DATASETS = {
     "inclinations": [45],
     "radial_bins": 10,
     "radial_projection": "sky",
-    "base_dir": str(DATA_DIR),
 }
 SPLITS = {
     "training": ["vflat120", "vflat160", "vflat240", "vflat280"],
@@ -71,7 +71,8 @@ def write_configs(output, epochs):
     hyperparams_file = output / "hyperparams.toml"
     hyperparams_file.write_text("\n".join(toml_lines(hyperparams)) + "\n")
 
-    lines = toml_lines(DATASETS)
+    # Relative to the datasets file, so the copy saved in the checkpoint doesn't hold this computer's paths
+    lines = toml_lines({**DATASETS, "base_dir": os.path.relpath(DATA_DIR, output)})
     for split, galaxies in SPLITS.items():
         lines += [f"[{split}]"] + [f'"{galaxy}" = {SNAPSHOT}' for galaxy in galaxies]
     datasets_file = output / "datasets.toml"
