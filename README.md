@@ -30,7 +30,7 @@ To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.o
 python examples/demo.py
 ```
 
-Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png`:
+Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen. It needs no simulation data, takes about a minute on a laptop CPU, and writes `examples/demo_output/demo.png`:
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves at four position angles, and the training and validation loss curves](examples/demo.png)
 

@@ -1,6 +1,6 @@
 """Demo: train a small CoNNGaFit network on synthetic VOF observations, then predict a galaxy it hasn't seen.
 
-Needs no simulation data and runs in a few minutes on a laptop CPU. From the repository root:
+Needs no simulation data and runs in about a minute on a laptop CPU. From the repository root:
 
     python examples/demo.py                 # writes examples/demo_output/demo.png
     python examples/demo.py --epochs 10 --output DIR
@@ -45,7 +45,7 @@ SPLITS = {
     "testing": ["vflat220"],
 }
 SNAPSHOT = 600
-# configs/hyperparams_rc.toml, made small enough to train in a few minutes on a CPU
+# configs/hyperparams_rc.toml, made small enough to train in about a minute on a CPU
 HYPERPARAM_OVERRIDES = {
     "n_filt0": 4,
     "k0": 5,
@@ -55,7 +55,7 @@ HYPERPARAM_OVERRIDES = {
     "learning_rate": 1e-3,
     "label_scaling": "one-sided",
 }
-DEFAULT_EPOCHS = 150
+DEFAULT_EPOCHS = 50
 DETECTION = 1e20  # cm^-2: about 5 sigma for VOF's demo noise (3e18 cm^-2 in each of 48 channels)
 
 
