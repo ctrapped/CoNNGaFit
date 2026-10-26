@@ -430,7 +430,7 @@ def make_comp_image_1d(
     im = ax_image.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
     ax_image.xaxis.set_ticks([])
     ax_image.yaxis.set_ticks([])
-    fig.colorbar(im, ax=ax_image, label="Input summed over channels (normalized)")
+    fig.colorbar(im, ax=ax_image, label="Moment 0 Map of Normalized Input")
 
     plt.sca(ax_curve)
     ax_curve.set_box_aspect(1)  # square, the same size as the image
