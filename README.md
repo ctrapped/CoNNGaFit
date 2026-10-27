@@ -149,7 +149,7 @@ pytest               # run every test (about 2.5 minutes)
 pytest -m "not slow" # skip the demo-accuracy tests (about 1 minute)
 ```
 
-The tests build every network, check their output shapes and summaries, and train `train_model_unet.py` end to end on synthetic VOF outputs, checking that the saved checkpoint rebuilds the network and reproduces its saved predictions.
+The network tests build every network and check their output shapes and summaries.`tests/test_demo.py` (marked `slow`; CI runs it on pull requests) trains the demo on all its data and checks losses fall and inference is somewhat accurate for rotation curves only.
 
 `main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/` for new code.
 

@@ -17,8 +17,16 @@ All notable changes to this project are documented here. The format follows
   rotation curve of one it hasn't seen, in about a minute on a CPU. Its figure is in the README.
 - `examples/demo_inference.py`: runs the committed, pre-trained demo network (`examples/demo_model/`)
   on the demo's test galaxy with `use_model.run_inferences`, in a few seconds.
+- `seed` hyperparameter: seeds Python, NumPy and PyTorch before training and is saved in the checkpoint,
+  so runs with the same seed, data and settings on the same machine give the same network.
+- `tests/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo
+  image, writes a valid checkpoint, and predicts outputs of the expected size when reloaded.
+- `tests/test_demo.py` (marked `slow`): trains the demo on all its data and checks the losses
+  fall and the test galaxy's rotation curve is predicted to within 10 km/s, for the new and committed
+  networks. CI runs it on pull requests; `pytest -m "not slow"` skips it locally.
 
 ### Changed
+- **Breaking:** hyperparameter files need a `seed` key (`seed = 0` in `configs/`).
 - **Breaking:** `use_model.py` runs networks trained by `train_model_unet.py`, rebuilding them from
   their checkpoint; `run_inferences` and the inference scripts no longer take a network type.
 - Validation accuracy counts predictions within 0.1 standard deviations of the training labels,

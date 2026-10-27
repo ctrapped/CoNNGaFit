@@ -1,4 +1,8 @@
-"""Shared fixtures for the network tests: small, CPU-sized models and input cubes."""
+"""Shared fixtures: small, CPU-sized models and input cubes for the network tests, and a script runner for the
+end-to-end tests."""
+
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -9,6 +13,7 @@ import unet3d_resblock
 INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
 SEED = 0
+SCRIPT_TIMEOUT_S = 600
 
 # Constructor arguments shared by every network, plus per-network arguments that keep it small
 COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8)
@@ -47,3 +52,22 @@ def make_cube():
         return torch.randn(BATCH_SIZE, *input_shape)
 
     return make
+
+
+@pytest.fixture(scope="session")
+def run_script():
+    """Run a Python script in a subprocess, as from the command line; fails the test with the end of its output
+    if it exits with an error."""
+
+    def run(script, *args, cwd=None):
+        result = subprocess.run(
+            [sys.executable, str(script), *(str(a) for a in args)],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=SCRIPT_TIMEOUT_S,
+        )
+        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+        return result
+
+    return run

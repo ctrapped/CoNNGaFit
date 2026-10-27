@@ -20,9 +20,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
 
-from demo import DATA_DIR, DATASETS, SPLITS  # noqa: E402 - after the sys.path line above; examples/demo.py
-
 from conngafit_datasets import radial_profile  # noqa: E402
+from demo import DATA_DIR, DATASETS, SPLITS  # noqa: E402 - after the sys.path line above; examples/demo.py
 from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import run_inferences  # noqa: E402
 
