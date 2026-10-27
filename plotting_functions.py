@@ -402,6 +402,7 @@ def make_comp_image_1d(
     param_label="Radial Mass Flux",
     unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
     bin_op="sum",
+    radii=None,
 ):
     """1-d analog of make_comp_image: save a 2-panel figure (summed input datacube, and the
     input/prediction radial curves already stored in data_pred/data_input) for one snapshot.
@@ -410,6 +411,7 @@ def make_comp_image_1d(
         curves (unlike make_comp_image, these are not reshaped into a 2-d map here).
     data_image: (nBatch, nSpec, nX, nY) input datacube batch.
     output/index/sim_to_physical_units/param_label/unit_label: see make_comp_image above.
+    radii: the curves' ring centers in kpc (see ring_radii in conngafit_datasets.py); if None, plot against bin number.
     """
     image_pred = np.zeros((np.shape(data_pred)[1]))
     image_pred[:] = data_pred[index, :]
@@ -421,18 +423,19 @@ def make_comp_image_1d(
     # image_pred = np.reshape(image_pred,[npix,npix])
     # image_input = np.reshape(image_input,[npix,npix])
 
-    plt.figure()
+    fig, (ax_curve, ax_image) = plt.subplots(1, 2, figsize=(10, 4.5), constrained_layout=True)
 
-    plt.subplot(122)
     image_to_plot = np.sum(data_image[index, :, :, :], axis=0)
-    image_to_plot += np.abs(np.min(image_to_plot)) + 1
-    plt.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
-    plt.gca().axes.xaxis.set_ticks([])
-    plt.gca().axes.yaxis.set_ticks([])
+    image_to_plot += np.abs(np.min(image_to_plot)) + 1  # offset to positive values, for the log scale
+    im = ax_image.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
+    ax_image.xaxis.set_ticks([])
+    ax_image.yaxis.set_ticks([])
+    fig.colorbar(im, ax=ax_image, label="Moment 0 Map of Normalized Input")
 
-    plt.subplot(121)
+    plt.sca(ax_curve)
+    ax_curve.set_box_aspect(1)  # square, the same size as the image
 
-    rmag = np.linspace(0, 30, np.size(data_pred[index, :]))
+    rmag = np.arange(np.size(data_pred[index, :])) if radii is None else radii
 
     max_plot = np.max(
         [
@@ -446,7 +449,7 @@ def make_comp_image_1d(
     plt.plot(rmag, np.array(data_pred[index, :]) * sim_to_physical_units, "r--", lw=2)
     plt.plot(rmag, rmag * 0, "k--", lw=1)
     plt.legend(["Input", "Prediction"])
-    plt.xlabel("Radius")
+    plt.xlabel("Radial bin" if radii is None else "Radius [kpc]")
     plt.ylabel(param_label + " " + unit_label)
     plt.ylim([-max_plot * 1.05 * sim_to_physical_units, max_plot * 1.05 * sim_to_physical_units])
 

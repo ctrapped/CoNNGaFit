@@ -38,7 +38,8 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest
+        # Pull requests (and manual runs) also run the slow demo-accuracy tests; pushes skip them
+        run: pytest ${{ github.event_name == 'push' && '-m "not slow"' || '' }}
 
   lint:
     runs-on: ubuntu-latest

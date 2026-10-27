@@ -24,6 +24,26 @@ pip install -e ".[dev]"     # + development tools (pytest, ruff, pre-commit)
 
 To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)). Instructions for the Quartz cluster at IU are in [`Tutorials/Quartz`](Tutorials/Quartz/README.md).
 
+## Demo
+
+```bash
+python examples/demo.py
+```
+
+Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen. It needs no simulation data, takes about a minute on a laptop CPU, and writes `examples/demo_output/demo.png`:
+
+![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves at four position angles, and the training and validation loss curves](examples/demo.png)
+
+To run a trained network on new datacubes without training, run
+
+```bash
+python examples/demo_inference.py
+```
+
+which runs the pre-trained demo network in [`examples/demo_model`](examples/demo_model) on the test galaxy in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve to `examples/demo_output/inference/`. Pass `--model-path examples/demo_output/NetworkWeights/demo` to use the network you trained with `demo.py` instead.
+
+[`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
+
 ## Training
 
 ```bash
@@ -69,6 +89,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `n_fc` | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
 | `dropout_rate`, `block_dropout_rate` | Dropout before the output layer, and channel-wise dropout inside every block (off by default) |
 | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]) |
+| `seed` | Random seed for weight initialization, dropout and batch order; the same seed, data and settings on the same machine give the same network |
 
 `configs/hyperparams_rc.toml` is a starting point for rotational velocity.
 
@@ -117,17 +138,18 @@ Every network has a `summary()` method that prints its stages, shapes and parame
 
 `fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
 
-`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes. They don't yet support networks trained by `train_model_unet.py`.
+`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pre-commit install   # run ruff on every commit
-pytest               # run the tests
+pytest               # run every test (about 2.5 minutes)
+pytest -m "not slow" # skip the demo-accuracy tests (about 1 minute)
 ```
 
-The tests build every network, check their output shapes and summaries, and train `train_model_unet.py` end to end on synthetic VOF outputs, checking that the saved checkpoint rebuilds the network and reproduces its saved predictions.
+The network tests build every network and check their output shapes and summaries.`tests/test_demo.py` (marked `slow`; CI runs it on pull requests) trains the demo on all its data and checks losses fall and inference is somewhat accurate for rotation curves only.
 
 `main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/` for new code.
 

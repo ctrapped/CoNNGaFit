@@ -1,7 +1,7 @@
 import argparse
 
 from logging_setup import add_logging_arguments, configure_logging
-from use_model import run_inferences
+from use_model import read_image_list, run_inferences
 
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
 ####input datacubes. See use_model.run_inferences for the full parameter description.
@@ -15,12 +15,9 @@ def parse_args():
         description="Run inference with a previously trained CoNNGaFit network on a list of input datacubes."
     )
     parser.add_argument(
-        "--network-type", default="unet18", help="Which trained network configuration to use. Default: %(default)s"
-    )
-    parser.add_argument(
         "--image-list",
         default="CoNNGaFitData/observations/inferencesToRun.csv",
-        help="Path to a CSV listing the input datacubes to run inference on. Default: %(default)s",
+        help="Text or CSV file listing the datacubes to run inference on, one path per line (the first field of each CSV row). Default: %(default)s",
     )
     parser.add_argument(
         "--output-prefix",
@@ -29,8 +26,8 @@ def parse_args():
     )
     parser.add_argument(
         "--model-path",
-        default=None,
-        help="Path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint to load. Default: the network-type's built-in default checkpoint.",
+        required=True,
+        help="Path to a checkpoint written by train_model_unet.py, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
     )
     add_logging_arguments(parser)
     return parser.parse_args()
@@ -39,4 +36,4 @@ def parse_args():
 args = parse_args()
 configure_logging(verbose=args.verbose, quiet=args.quiet)
 
-run_inferences(args.network_type, args.output_prefix, args.image_list, model_path=args.model_path)
+run_inferences(args.model_path, read_image_list(args.image_list), args.output_prefix)

@@ -2,9 +2,9 @@ import argparse
 import os
 
 from logging_setup import add_logging_arguments, configure_logging
-from use_model import run_inferences
+from use_model import read_image_list, run_inferences
 
-####Runs inference with a previously trained 'unet18' network on the validation set for a
+####Runs inference with a network trained by train_model_unet.py on the validation set for a
 ####given sample, so predictions can be spot-checked against the known validation labels.
 #
 ####Run as: python inference_test_validation_set.py [options]
@@ -13,7 +13,7 @@ from use_model import run_inferences
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run inference with a previously trained 'unet18' network on the validation set, to spot-check predictions against known labels."
+        description="Run inference with a network trained by train_model_unet.py on the validation set, to spot-check predictions against known labels."
     )
     parser.add_argument(
         "--sample-suffix",
@@ -36,12 +36,9 @@ def parse_args():
         help="Directory to place outputs in. Default: %(default)s",
     )
     parser.add_argument(
-        "--network-type", default="unet18", help="Which trained network configuration to use. Default: %(default)s"
-    )
-    parser.add_argument(
         "--model-path",
-        default=None,
-        help="Path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint to load. Default: the network-type's built-in default checkpoint.",
+        required=True,
+        help="Path to a checkpoint written by train_model_unet.py, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
     )
     add_logging_arguments(parser)
     return parser.parse_args()
@@ -56,4 +53,4 @@ validation_set_filename = (
 )
 validation_dir = os.path.join(args.data_dir, "annotation_datasets", validation_set_filename)
 
-run_inferences(args.network_type, args.output_dir, validation_dir, model_path=args.model_path, save_latent_images=True)
+run_inferences(args.model_path, read_image_list(validation_dir), args.output_dir, save_latent_images=True)

@@ -36,3 +36,9 @@ outputs/
 *.out
 *.err
 slurm-*.out
+
+# The demo's data is small and committed (see examples/make_demo_data.py); its outputs aren't
+!examples/demo_data/**/*.hdf5
+examples/demo_output/
+!examples/demo_model/demo.pt
+!examples/demo_model/demo.hdf5

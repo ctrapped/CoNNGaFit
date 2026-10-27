@@ -1,117 +1,132 @@
 import logging
 import os
+import tomllib
 
 import h5py
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from conngafit_datasets import CoNNGaFitImageInferenceDataset
-from plotting_functions import create_basic_plots, load_names, make_image
+from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
+from plotting_functions import make_image
+from unet3d_resblock import NeuralNetwork
 
 logger = logging.getLogger(__name__)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# device = 'cpu'
 
-SIM_TO_PHYSICAL_UNITS_MASS_FLUX = (
-    (2 / np.pi) * 1 / (3.086 * np.power(10.0, 16.0)) * (3.154 * np.power(10.0, 7.0)) * np.power(10, 10)
-)  # 1/pixel_res * kpc2km * s2yr * unit mass to solar masses
-
-####Functions to calculate inferences on HI spectral datacubes from a previously trained CoNNGaFit network. Generates a projection map and a radial plot for the fitted parameter of interest.
-####For use, you need the trained network and the images to run the inferences on with a corresponding .csv file listing their location.
-####Call run_inferences, providing the network type you wish to use, the output directory, and the .csv file containing the input images. See inference_template.py for an example
+####Functions to run a network trained by train_model_unet.py on HI spectral datacubes: VOF outputs, or
+####real observations converted with fits_to_conngafit.py. See inference_template.py for an example.
 ####
 ####Written By Cameron Trapp (ctrapped@gmail.com)
-####Updated 11/21/2023
 
 
-def run_inferences(
-    network_type, image_output_prefix, image_list, model_path=None, params=None, save_latent_images=False
-):
-    """Load a previously trained CoNNGaFit network and run it on a list of input datacubes,
-    writing a projection-map PNG/hdf5 and a radial-profile PNG/hdf5 per input image.
+def load_model(model_path):
+    """Rebuild a network from train_model_unet.py's <model_path>.hdf5 and load <model_path>.pt.
+    Returns (model in eval mode, dict of the checkpoint's metadata)."""
+    with h5py.File(model_path + ".hdf5", "r") as hf:
+        if "hyperparams_text" not in hf:
+            raise ValueError(f"{model_path}.hdf5 wasn't written by train_model_unet.py (no hyperparams_text)")
+        metadata = {key: hf[key][()] for key in hf}
+    for key, value in metadata.items():  # h5py reads strings back as bytes
+        if isinstance(value, bytes):
+            metadata[key] = value.decode()
+    hyperparams = tomllib.loads(metadata["hyperparams_text"])
+    k0, k1 = hyperparams["k0"], hyperparams["k1"]
+    radial_bins = int(metadata["radial_bins"]) if "radial_bins" in metadata else None
+    model = NeuralNetwork(
+        tuple(int(n) for n in metadata["input_shape"]),
+        hyperparams["n_filt0"],
+        (k0, k0, k0),
+        (k1, k1, k1),
+        hyperparams["n_fc"],
+        fc_dropout_rate=hyperparams["dropout_rate"],
+        block_dropout_rate=hyperparams["block_dropout_rate"],
+        head=metadata["output_head"],
+        output_size=radial_bins,
+    ).to(device)
+    model.load_state_dict(torch.load(model_path + ".pt", map_location=device, weights_only=True))
+    return model.eval(), metadata
 
-    network_type: which trained network configuration to use. Currently only 'unet18' is
-        implemented; any other value raises ValueError.
-    image_output_prefix: directory/filename prefix prepended to every output file written.
-    image_list: path to a CSV listing the input datacubes to run inference on (see
-        CoNNGaFitImageInferenceDataset in conngafit_datasets.py for the expected format).
-    model_path: path (without the trailing .pt/.hdf5 extension) to the trained model checkpoint
-        to load, overriding the network_type's hardcoded default checkpoint below. Pass None to
-        use the default checkpoint for the chosen network_type.
-    params: [n_filt0, k0, k1, n_fc] architecture params to build the network with, overriding the
-        network_type's hardcoded defaults below (e.g. to load a checkpoint that was trained
-        with different hyperparameters than the current default). Pass None to use the
-        default params for the chosen network_type.
-    save_latent_images: if True, dump intermediate activation images during the forward pass
-        (see NeuralNetwork.forward's save_latent_images argument) - useful for debugging only.
-    """
-    logger.info("Using %s device", device)
 
-    #####Set variables based on desired network type
-
-    if network_type == "unet18":  ####U-Net
-        target_shape = [40, 40]  # output dimensions
-        from NetworkModels.AlternativeNetworks.Unet3d_HiResTest import NeuralNetwork
-
-        model_output_path = model_path or os.path.join(
-            "TrainedNetworks", "hiResTests", "MassFlux_Unet18_FullSpec_finalSnapNoM12m.pt"
-        )  # Address of desired model
-
-        if params is None:
-            n_filt0 = 6  # Number of filters
-            k0 = 9  # Initial kernel size
-            k1 = 3  # Kernel Size
-            n_fc = 1500  # Nodes in FC layer
-            params = [n_filt0, k0, k1, n_fc]
-
-        model = NeuralNetwork(
-            params[0], (params[1], params[1], params[1]), (params[2], params[2], params[2]), params[3]
-        ).to(device)
-    else:
-        raise ValueError(f"Unrecognized network_type '{network_type}' - only 'unet18' is currently implemented.")
-
-    model.load_state_dict(torch.load(model_output_path))
-    model.eval()
-
-    image_output_suffix = "_massFlux_FacePlot_" + network_type + "_TR_Comp_"
-    plot_output_suffix = "_massFlux_RadialPlot_" + network_type + "_TR_Comp_"
-
-    try:  # Get normalization (saved under the 'image_stats' dataset by the training scripts)
-        hf_model = h5py.File(model_output_path + ".hdf5", "r")
-        image_stats = np.array(hf_model["image_stats"])
-        image_mean = image_stats[0]
-        image_stdv = image_stats[1]
-    except (OSError, KeyError):  # Default to per image normalization if training values not available for some reason
-        dataset0 = CoNNGaFitImageInferenceDataset(annotations_file=image_list, root_dir=".", transform=ToTensor())
-
-        loader0 = torch.utils.data.DataLoader(dataset0, batch_size=1, shuffle=False)
-        data0 = next(iter(loader0))
-        image_mean = data0[0].mean()
-        image_stdv = data0[0].std()
-        del loader0
-        del data0
-        del dataset0
-
-    # Load spectral datacubes to run data on
+def predict(model, metadata, image_paths, save_latent_images=False):
+    """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve."""
+    image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
+    label_offset, label_scale = metadata["label_stats"]
     dataset = CoNNGaFitImageInferenceDataset(
-        annotations_file=image_list, root_dir=".", transform=Compose([ToTensor(), Normalize(image_mean, image_stdv)])
+        image_paths, transform=Compose([ToTensor(), Normalize(image_mean, image_stdv)])
     )
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    n_y, n_x = (int(n) for n in metadata["input_shape"][1:])
+    with torch.no_grad():
+        for name, image in zip(dataset.names, dataset):
+            pred = model(image[None].float().to(device), save_latent_images).cpu().numpy()[0]
+            pred = pred * label_scale + label_offset  # Back to physical units
+            yield name, (pred if "radial_bins" in metadata else pred.reshape(n_y, n_x))
 
-    # Get names of images
-    inference_names = load_names(image_list)
 
-    # Make inference for each image loaded
-    for i, inputs in enumerate(dataloader):
-        x = inputs.to(device)
-        pred = model(x.float(), save_latent_images)
+def ring_radii_kpc(path, n_bins):
+    """Ring centers in kpc for path's radial curve (see radial_profile), or None if path doesn't record its size."""
+    with h5py.File(path, "r") as hf:
+        if "fov_kpc" in hf.attrs:  # VOF outputs
+            fov_kpc = hf.attrs["fov_kpc"]
+        elif "pixel_res_kpc" in hf:  # fits_to_conngafit.py outputs
+            fov_kpc = hf["pixel_res_kpc"][()] * hf["spectra"].shape[1]
+        else:
+            return None
+    return ring_radii(fov_kpc, n_bins)
 
-        image_output = image_output_prefix + inference_names[i] + image_output_suffix
-        plot_output = image_output_prefix + inference_names[i] + plot_output_suffix
 
-        make_image(pred.cpu().detach().numpy(), image_output, target_shape=target_shape)  # Generate Projection Map
-        create_basic_plots(pred.cpu().detach().numpy(), plot_output, target_shape)  # Generate Radial Plots
+def save_radial_curve(curve, radii, output, param_label, unit_label):
+    """Save a predicted radial curve to output + "radialPlot.png" and output + "radialPlot.hdf5"."""
+    x = np.arange(len(curve)) if radii is None else radii
+    plt.figure()
+    plt.plot(x, curve, "k", lw=2.5)
+    plt.axhline(0, color="k", ls="--", lw=1.5)
+    plt.xlabel("Radial bin" if radii is None else "Radius [kpc]")
+    plt.ylabel(param_label + " " + unit_label)
+    plt.legend(["Prediction", "Zero line"])
+    plt.savefig(output + "radialPlot.png", bbox_inches="tight")  # "tight" keeps the y-axis label in the figure
+    plt.close()
+
+    with h5py.File(output + "radialPlot.hdf5", "w") as hf:
+        hf.create_dataset("prediction", data=curve)
+        if radii is not None:
+            hf.create_dataset("r_plot", data=radii)
+
+
+def run_inferences(model_path, image_paths, output_prefix, save_latent_images=False):
+    """Run the network at model_path (no .pt/.hdf5 extension) on each datacube in image_paths, saving a PNG and an
+    hdf5 of each prediction under output_prefix: <name>_projectionMap for maps, <name>_radialPlot for radial curves."""
+    logger.info("Using %s device", device)
+    model, metadata = load_model(model_path)
+    target = metadata["target"]
+    param_label, unit_label, _ = TARGET_SETTINGS[target]
+    logger.info("Loaded %s (%s, %s head)", model_path, target, metadata["output_head"])
+
+    image_paths = list(image_paths)
+    os.makedirs(os.path.dirname(output_prefix) or ".", exist_ok=True)
+    for path, (name, pred) in zip(image_paths, predict(model, metadata, image_paths, save_latent_images)):
+        output = output_prefix + name + "_"
+        if pred.ndim == 1:
+            radii = ring_radii_kpc(path, len(pred))
+            save_radial_curve(pred, radii, output, param_label, unit_label)
+        else:
+            # make_image takes the flattened map; predictions are already in physical units
+            make_image(
+                pred.reshape(1, -1),
+                output,
+                target_shape=pred.shape,
+                sim_to_physical_units=1,
+                param_label=param_label,
+                unit_label=unit_label,
+            )
+        logger.info("Saved %s", output)
 
     logger.info("Done!")
+
+
+def read_image_list(path):
+    """Datacube paths from a text/CSV file: the first comma-separated field of each non-blank line."""
+    with open(path) as f:
+        return [line.split(",")[0].strip() for line in f if line.strip()]

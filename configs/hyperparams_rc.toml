@@ -33,3 +33,7 @@ output_head = "conv_halfres"
 #   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. mass flux)
 #   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
 label_scaling = "none"
+
+# Random seed for weight initialization, dropout and the order of training batches. Runs with the same
+# seed, data and hyperparameters on the same machine give the same network.
+seed = 0

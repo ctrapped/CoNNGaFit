@@ -108,6 +108,15 @@ TARGETS = {
     "radial_mass_flux": ["mass_annotation", "radial_velocity_annotation"],
     "cylindrical_radial_mass_flux": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
 }
+# target -> (plot label, plot units, how pixels are combined when binning plots)
+TARGET_SETTINGS = {
+    "mass": ("Mass", r"[M$_{\odot}$]", "sum"),
+    "radial_velocity": ("Rad. Vel.", r"[km s$^{-1}$]", "mean"),
+    "cylindrical_radial_velocity": ("Cyl. Rad. Vel.", r"[km s$^{-1}$]", "mean"),
+    "rotational_velocity": ("Rot. Vel.", r"[km s$^{-1}$]", "mean"),
+    "radial_mass_flux": ("Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+    "cylindrical_radial_mass_flux": ("Cyl. Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+}
 # Targets converted from Msun km/s to a mass flux in Msun/yr (see label_map)
 MASS_FLUX_TARGETS = {"radial_mass_flux", "cylindrical_radial_mass_flux"}
 
@@ -150,6 +159,12 @@ def radial_profile(hf, target, n_bins):
         ring_kpc = edges[1] - edges[0]
         return momentum / (ring_kpc * KM_PER_KPC) * S_PER_YR
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
+
+
+def ring_radii(fov_kpc, n_bins):
+    """Centers (kpc) of radial_profile's n_bins rings, for an image fov_kpc across."""
+    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
+    return (edges[:-1] + edges[1:]) / 2
 
 
 #### Augmentation ####
@@ -273,6 +288,11 @@ class CoNNGaFitImageDataset:
         """The flattened label of image file_idx before augmentation and target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).flatten().astype("float")
+
+    def radii(self, idx):
+        """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""
+        with h5py.File(self.curve_paths[idx // len(self.augmentations)], "r") as hf:
+            return ring_radii(hf.attrs["fov_kpc"], self.radial_bins)
 
     def __getitem__(self, idx):
         file_idx, aug_idx = divmod(idx, len(self.augmentations))
