@@ -145,7 +145,8 @@ Every network has a `summary()` method that prints its stages, shapes and parame
 ```bash
 pip install -e ".[dev]"
 pre-commit install   # run ruff on every commit
-pytest               # run the tests
+pytest               # run every test (about 2.5 minutes)
+pytest -m "not slow" # skip the demo-accuracy tests (about 1 minute)
 ```
 
 The tests build every network, check their output shapes and summaries, and train `train_model_unet.py` end to end on synthetic VOF outputs, checking that the saved checkpoint rebuilds the network and reproduces its saved predictions.
