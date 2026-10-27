@@ -89,6 +89,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `n_fc` | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
 | `dropout_rate`, `block_dropout_rate` | Dropout before the output layer, and channel-wise dropout inside every block (off by default) |
 | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]) |
+| `seed` | Random seed for weight initialization, dropout and batch order; the same seed, data and settings on the same machine give the same network |
 
 `configs/hyperparams_rc.toml` is a starting point for rotational velocity.
 

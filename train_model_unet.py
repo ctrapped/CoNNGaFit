@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 
 import matplotlib
 import numpy as np
@@ -52,6 +53,7 @@ HYPERPARAM_KEYS = {
     "block_dropout_rate",
     "output_head",
     "label_scaling",
+    "seed",
 }
 DATASET_KEYS = {
     "target",
@@ -178,6 +180,11 @@ if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
         f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
     )
+seed = hyperparams["seed"]
+# Weight initialization, dropout and the order training batches are drawn in all come from these generators
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)  # Seeds the CPU and every GPU
 #############################
 
 
@@ -557,6 +564,7 @@ torch.save(model.state_dict(), model_output_path + ".pt")
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
 hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
 hf_norm.create_dataset("label_scaling", data=label_scaling)
+hf_norm.create_dataset("seed", data=seed)
 hf_norm.create_dataset(
     "label_stats", data=np.array([label_offset, label_scale])
 )  # physical label = scaled label * label_scale + label_offset
