@@ -142,9 +142,11 @@ def make_image(
     sim_to_physical_units=SIM_TO_PHYSICAL_UNITS_MASS_FLUX,
     param_label="Radial Mass Flux",
     unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
+    uncertainty=None,
 ):
     """Reshape a single flattened prediction into a 2-d map, save it as a PNG (with a
-    physical-units colorbar) and an accompanying hdf5 file.
+    physical-units colorbar) and an accompanying hdf5 file. With uncertainty, the predicted
+    1-sigma map is plotted beside the prediction and saved too.
 
     data: 1-d array of length npix*npix (a single sample's flattened prediction) - note the
         (1, N) shape convention (data[1] indexing) mirrors the batched functions above but
@@ -155,6 +157,8 @@ def make_image(
     target_shape: (nY, nX) shape to reshape the flat data into; pass this explicitly as a
         keyword when calling (not positionally - the 3rd positional argument is vmin, not
         target_shape).
+    uncertainty: the predicted 1-sigma of each value, in the same units as data and of the
+        same size (any shape), or None (the default) for the prediction alone.
     """
     image = np.zeros((np.shape(data)[1]))
     image[:] = data[:]
@@ -165,13 +169,15 @@ def make_image(
 
     image = np.reshape(image, target_shape)  # make into 2d image
 
-    plt.figure()
+    n_cols = 1 if uncertainty is None else 2
+    plt.figure(figsize=(6.4 * n_cols, 4.8))  # matplotlib's default size per panel
 
     if vmax is None or vmin is None:
         vmax = np.max([-np.min(image), np.max(image)])  # default to symmetric limits
         vmin = -vmax
 
     # Plot in units of Solar Masses per year
+    plt.subplot(1, n_cols, 1)
     plt.imshow(
         image * sim_to_physical_units,
         cmap="seismic",
@@ -179,12 +185,20 @@ def make_image(
         vmax=vmax * sim_to_physical_units,
     )
     plt.colorbar(label=param_label + " " + unit_label)
+
+    if uncertainty is not None:
+        sigma_map = np.reshape(uncertainty, image.shape)
+        plt.subplot(1, n_cols, 2)
+        plt.imshow(sigma_map * sim_to_physical_units, cmap="viridis", vmin=0)  # sequential: sigma is >= 0
+        plt.colorbar(label=r"Predicted 1$\sigma$ " + unit_label)
     plt.savefig(output + "projectionMap.png")
     plt.close()
 
     # Save hdf5 for generating figures
     hf = h5py.File(output + "projectionMap.hdf5", "w")
     hf.create_dataset("image", data=image)
+    if uncertainty is not None:
+        hf.create_dataset("uncertainty", data=sigma_map)
     hf.close()
 
 
