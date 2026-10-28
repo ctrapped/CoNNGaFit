@@ -359,12 +359,17 @@ if radial_bins is not None:  # Labels are radial curves, so plot and save them a
 
 
 #### Save final-epoch outputs ####
-def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images=True):
+def save_batch_outputs(x, y, output, idx, dataset, output_base, epoch, comp_images=True):
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
-    image via its dataset index (idx), so names stay correct with shuffled or multiple batches."""
+    image via its dataset index (idx), so names stay correct with shuffled or multiple batches.
+    output is the network's output: the prediction, or (mean, logvar) if predict_variance, in which
+    case the predicted 1-sigma is saved and plotted too."""
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
-    np_pred = to_physical(pred.cpu().detach().numpy())
+    mean, logvar = output if predict_variance else (output, None)
+    np_pred = to_physical(mean.cpu().detach().numpy())
+    # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
+    np_sigma = np.exp(0.5 * logvar.cpu().detach().numpy()) * label_scale if predict_variance else None
     for tt in range(len(idx)):
         output_name = output_base + "_" + dataset.names[int(idx[tt])] + "_Epoch" + str(epoch)
         if comp_images:
@@ -380,9 +385,10 @@ def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images
                 param_label=param_label,
                 unit_label=unit_label,
                 bin_op=bin_op,
+                uncertainty=np_sigma,
                 **radii,
             )  # Labels are already in physical units
-        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt)
+        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt, uncertainty=np_sigma)
 
 
 #### Define Training Loop ####
@@ -405,7 +411,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         epoch_loss += loss.item()
         epoch_mse += mse_fn(pred, y.float()).item()
         if epoch >= epochs - 1:
-            save_batch_outputs(x, y, pred, idx, training_data, image_output_training, epoch, comp_images=False)
+            save_batch_outputs(x, y, output, idx, training_data, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -461,7 +467,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, pred, idx, validation_data, image_output_validation, epoch)
+                save_batch_outputs(x, y, output, idx, validation_data, image_output_validation, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
@@ -513,7 +519,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, pred, idx, test_data, image_output_final_test, epoch)
+                save_batch_outputs(x, y, output, idx, test_data, image_output_final_test, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 

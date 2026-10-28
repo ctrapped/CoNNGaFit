@@ -23,9 +23,11 @@ def make_comp_image(
     param_label="Radial Mass Flux",
     unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
     bin_op="sum",
+    uncertainty=None,
 ):
     """Save a 4-panel diagnostic figure (input map, prediction map, radially-binned
     input/prediction curves, and the summed input datacube) for one snapshot in a batch.
+    With uncertainty, a fifth panel shows the predicted 1-sigma map, next to the prediction.
 
     data_pred / data_input: (nBatch, model_size) flattened prediction/label maps, or
         (nBatch, 1, npix, npix) already-2-d maps - both shapes are handled (see the
@@ -39,6 +41,8 @@ def make_comp_image(
     param_label/unit_label: axis/colorbar labels for the parameter being plotted.
     bin_op: statistic passed to scipy.stats.binned_statistic_dd for the radial profile
         ("sum" for mass flux, "mean" for velocity/inclination, etc.).
+    uncertainty: the predicted 1-sigma of each value, in the same units and either layout as
+        data_pred, or None (the default) for the 4-panel figure.
     """
     try:
         image_pred = np.zeros((np.shape(data_pred)[1]))
@@ -55,16 +59,19 @@ def make_comp_image(
         image_input = data_input[index, 0, :, :]
         npix = int(np.round(np.sqrt(np.size(image_pred))))
 
-    plt.figure()
+    # Maps along the top row (input, prediction, and the 1-sigma map if given), curve and summed cube below
+    n_cols = 2 if uncertainty is None else 3
+    panel = {"input": 1, "prediction": 2, "sigma": 3, "curve": n_cols + 1, "cube": n_cols + 2}
+    plt.figure(figsize=(3.2 * n_cols, 4.8))  # matplotlib's default size for 2 columns
 
-    plt.subplot(2, 2, 4)
+    plt.subplot(2, n_cols, panel["cube"])
     image_to_plot = np.sum(data_image[index, :, :, :], axis=0)
     image_to_plot += np.abs(np.min(image_to_plot)) + 1
     plt.imshow(image_to_plot, norm=LogNorm(), cmap="inferno")
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
 
-    plt.subplot(2, 2, 3)
+    plt.subplot(2, n_cols, panel["curve"])
     center_index = [(npix - 1.0) / 2.0, (npix - 1.0) / 2.0]
     indices = np.indices(np.shape(image_pred))
     rmag = np.sqrt(np.power(indices[0, :, :] - center_index[0], 2) + np.power(indices[1, :, :] - center_index[1], 2))
@@ -91,7 +98,7 @@ def make_comp_image(
 
     vmax = np.max([-np.min(image_pred), np.max(image_pred), -np.min(image_input), np.max(image_input)])
     vmin = -vmax
-    plt.subplot(2, 2, 1)
+    plt.subplot(2, n_cols, panel["input"])
     plt.imshow(
         image_input * sim_to_physical_units,
         cmap="seismic",
@@ -102,7 +109,7 @@ def make_comp_image(
     # plt.colorbar();
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
-    plt.subplot(2, 2, 2)
+    plt.subplot(2, n_cols, panel["prediction"])
     plt.imshow(
         image_pred * sim_to_physical_units,
         cmap="seismic",
@@ -113,6 +120,15 @@ def make_comp_image(
     plt.gca().axes.xaxis.set_ticks([])
     plt.gca().axes.yaxis.set_ticks([])
     plt.title(param_label + " Prediction")
+
+    if uncertainty is not None:
+        plt.subplot(2, n_cols, panel["sigma"])
+        sigma_map = np.reshape(np.asarray(uncertainty)[index], np.shape(image_pred))
+        plt.imshow(sigma_map * sim_to_physical_units, cmap="viridis", vmin=0)  # sequential: sigma is >= 0
+        plt.colorbar(label=unit_label)
+        plt.gca().axes.xaxis.set_ticks([])
+        plt.gca().axes.yaxis.set_ticks([])
+        plt.title(r"Predicted 1$\sigma$")
     plt.savefig(output)
     plt.close()
 
@@ -340,15 +356,16 @@ def make_correlation_plot(pred_image, input_image, n_snaps, output):
     hf.close()
 
 
-def save_hdf5(input_data, pred_data, output, index):
-    """Reshape one snapshot's flattened prediction (and optionally its label) into a 2-d
-    map and save both to an hdf5 file for later re-plotting.
+def save_hdf5(input_data, pred_data, output, index, uncertainty=None):
+    """Reshape one snapshot's flattened prediction (and optionally its label and predicted
+    1-sigma) into 2-d maps and save them to an hdf5 file for later re-plotting.
 
     input_data: (nBatch, model_size) flattened label maps, or None to skip saving the label
         (e.g. when running inference with no ground truth available).
     pred_data: (nBatch, model_size) flattened prediction maps.
-    output: full path to the hdf5 file to write (datasets 'input' and/or 'prediction').
+    output: full path to the hdf5 file to write (datasets 'input', 'prediction' and 'uncertainty').
     index: index of the sample within the batch to save.
+    uncertainty: (nBatch, model_size) flattened predicted 1-sigma maps, or None (the default) to skip it.
     """
     pred_image = np.zeros((np.shape(pred_data)[1]))
     pred_image[:] = pred_data[index, :]
@@ -363,6 +380,8 @@ def save_hdf5(input_data, pred_data, output, index):
         input_image = np.reshape(input_image, [npix, npix])
         hf.create_dataset("input", data=input_image)
     hf.create_dataset("prediction", data=pred_image)
+    if uncertainty is not None:
+        hf.create_dataset("uncertainty", data=np.reshape(uncertainty[index, :], pred_image.shape))
     hf.close()
 
 
@@ -403,15 +422,18 @@ def make_comp_image_1d(
     unit_label=r"[M$_{\odot}$ yr$^{-1}$]",
     bin_op="sum",
     radii=None,
+    uncertainty=None,
 ):
     """1-d analog of make_comp_image: save a 2-panel figure (summed input datacube, and the
     input/prediction radial curves already stored in data_pred/data_input) for one snapshot.
+    With uncertainty, the prediction's +/-1 sigma is shaded around it.
 
     data_pred / data_input: (nBatch, nRadialBins) already-radially-binned prediction/label
         curves (unlike make_comp_image, these are not reshaped into a 2-d map here).
     data_image: (nBatch, nSpec, nX, nY) input datacube batch.
     output/index/sim_to_physical_units/param_label/unit_label: see make_comp_image above.
     radii: the curves' ring centers in kpc (see ring_radii in conngafit_datasets.py); if None, plot against bin number.
+    uncertainty: (nBatch, nRadialBins) predicted 1-sigma of each ring, in the same units as data_pred, or None.
     """
     image_pred = np.zeros((np.shape(data_pred)[1]))
     image_pred[:] = data_pred[index, :]
@@ -445,10 +467,17 @@ def make_comp_image_1d(
             np.max(np.array(data_input[index, :])),
         ]
     )
-    plt.plot(rmag, np.array(data_input[index, :]) * sim_to_physical_units, "k", lw=2)
-    plt.plot(rmag, np.array(data_pred[index, :]) * sim_to_physical_units, "r--", lw=2)
+    curve_pred = np.array(data_pred[index, :]) * sim_to_physical_units
+    plt.plot(rmag, np.array(data_input[index, :]) * sim_to_physical_units, "k", lw=2, label="Input")
+    plt.plot(rmag, curve_pred, "r--", lw=2, label="Prediction")
+    if uncertainty is not None:  # shade the predicted +/-1 sigma, and widen the y-range to fit it
+        sigma = np.array(uncertainty[index, :]) * sim_to_physical_units
+        plt.fill_between(
+            rmag, curve_pred - sigma, curve_pred + sigma, color="r", alpha=0.25, lw=0, label=r"$\pm1\sigma$"
+        )
+        max_plot = max(max_plot, np.max(np.abs(curve_pred) + sigma) / sim_to_physical_units)
     plt.plot(rmag, rmag * 0, "k--", lw=1)
-    plt.legend(["Input", "Prediction"])
+    plt.legend()
     plt.xlabel("Radial bin" if radii is None else "Radius [kpc]")
     plt.ylabel(param_label + " " + unit_label)
     plt.ylim([-max_plot * 1.05 * sim_to_physical_units, max_plot * 1.05 * sim_to_physical_units])
@@ -457,13 +486,15 @@ def make_comp_image_1d(
     plt.close()
 
 
-def save_hdf5_1d(input_data, pred_data, output, index):
+def save_hdf5_1d(input_data, pred_data, output, index, uncertainty=None):
     """1-d analog of save_hdf5: save one snapshot's already-1-d input/prediction radial
-    curves to an hdf5 file. Note index is currently unused - the full input_data/pred_data
-    arrays are saved as-is rather than being indexed down to a single snapshot; pass
-    already-sliced 1-d arrays for a single sample.
+    curves (and optionally their predicted 1-sigma) to an hdf5 file. Note index is currently
+    unused - the full input_data/pred_data/uncertainty arrays are saved as-is rather than being
+    indexed down to a single snapshot; pass already-sliced 1-d arrays for a single sample.
     """
     hf = h5py.File(output, "w")
     hf.create_dataset("input", data=input_data)
     hf.create_dataset("prediction", data=pred_data)
+    if uncertainty is not None:
+        hf.create_dataset("uncertainty", data=uncertainty)
     hf.close()
