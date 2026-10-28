@@ -1,0 +1,36 @@
+# Conditional diffusion model (DDPM) hyperparameters for train_model_unet.py.
+# Pass this file with --hyperparams. Every key below is required.
+
+network = "ddpm"  # The conditional diffusion model in unet3d_ddpm.py, see networks.py
+
+learning_rate = 1e-4
+weight_decay = 1e-3
+epochs = 4000 # Number of training epochs
+n_filt0 = 6   # Filters in the first encoder stage; doubles at each later stage
+k0 = 9        # Initial kernel size
+k1 = 3        # Kernel size for residual/deconv blocks
+block_dropout_rate = 0.0  # Channel-wise dropout inside every block
+
+# Diffusion: the denoiser learns to remove Gaussian noise added via the schedular to the label map
+# over n_timesteps steps
+n_timesteps = 1000
+schedule = "cosine"  # Noise schedule: "cosine" or "linear"
+
+# Each inference prediction is the mean and standard deviation of n_samples maps sampled from the
+# posterior. Meaning we infer predicted maps n_samples times from a random Gaussian noise map.
+# Each sample map is inferred by taking sampling_steps passes of the denoiser.
+# Note that sampling_steps can be less than n_timesteps to speed up inference at the cost of accuracy.
+sampling_steps = 1000
+n_samples = 30
+
+# Label scaling, computed once from every training label and saved with the model.
+# For DDPM scaling must be [-1,1] to match the Gaussian noise distribution.
+# Sampled maps are clipped to [-1, 1] unless "none":
+#   "none"      - train on labels in physical units
+#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. mass flux)
+#   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
+label_scaling = "symmetric"
+
+# Random seed for weight initialization, dropout, the order of training batches and the diffusion noise. Runs with
+# the same seed, data and hyperparameters on the same machine give the same network.
+seed = 0

@@ -1,5 +1,7 @@
-# Training hyperparameters for train_model_unet.py (tuned for radial_mass_flux)
+# ResBlock U-Net hyperparameters for train_model_unet.py (tuned for radial_mass_flux)
 # Pass a different file with --hyperparams. Every key below is required.
+
+network = "resblock"  # The residual U-Net in unet3d_resblock.py, see networks.py
 
 learning_rate = 1e-4
 weight_decay = 1e-3
