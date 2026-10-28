@@ -15,7 +15,7 @@ from unet_diagnostics import count_params, layer_param_lines
 # looking at the datacube. Sampling many maps per cube gives a posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
-#   GaussianDiffusion - noise schedule, training loss, and DDPM/DDIM sampling
+#   GaussianDiffusion - noise schedule, training loss, and DDPM sampling
 #
 # Like unet3d_resblock.NeuralNetwork, the denoiser is built for one (nSpec, nX, nY) cube size and (nX, nY) target map size.
 
@@ -464,9 +464,8 @@ class GaussianDiffusion(nn.Module):
 
     Training: pick t ~ U{0..T-1}, form y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps, and
     regress eps with MSE (Ho et al. 2020 'simple' loss).
-    Sampling: start from pure noise and step backwards with the learned eps. sample() uses the
-    DDIM update (Song et al. 2021): eta=1 with all T steps is exactly DDPM ancestral sampling;
-    fewer steps trade fidelity for speed.
+    Sampling: start from pure noise and step back through all T steps with the learned eps (DDPM
+    sampling, Ho et al. 2020).
 
     Parameters:
         denoiser: an eps-prediction network with input_shape and map_shape, e.g. DenoisingUNet3d. Maps are
@@ -522,13 +521,15 @@ class GaussianDiffusion(nn.Module):
         noise = torch.randn_like(y0)
         return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
 
+    # TODO: add DDIM sampling (Song et al. 2021): its update depends only on alpha_bar, so it can skip timesteps
+    # for faster sampling, and its eta sets the noise added at each step (eta = 1 with all T steps is DDPM; eta = 0 is
+    # deterministic given the starting noise). Expose its number of steps and eta as hyperparameters, and check the
+    # calibration of the posterior standard deviation for each setting.
     @torch.no_grad()
-    def sample(self, cube, n_samples=1, n_steps=None, eta=1.0, max_batch=None):
+    def sample(self, cube, n_samples=1, max_batch=None):
         """Draw posterior map samples for each cube.
 
         cube: (B, nSpec, nX, nY).
-        n_steps: reverse steps (default T).
-        eta: 1 = stochastic DDPM-like, 0 = deterministic DDIM.
         max_batch: cap on cubes per denoiser call to bound memory.
         Returns (n_samples, B, H, W), or (n_samples, B, H*W) if flat_labels, with (H, W) = map_shape.
         """
@@ -536,35 +537,32 @@ class GaussianDiffusion(nn.Module):
         shape = self.map_shape
         cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
         chunk = max_batch or cubes.shape[0]
-        out = torch.cat([self._reverse(c, shape, n_steps, eta) for c in cubes.split(chunk)])
+        out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
         out = out.view(n_samples, n_batch, *shape)
         return out.flatten(2) if self.flat_labels else out
 
-    def _reverse(self, cube, shape, n_steps, eta):
-        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes."""
-        n_steps = n_steps or self.n_timesteps
-        ts = torch.linspace(self.n_timesteps - 1, 0, n_steps, device=cube.device).round().long().unique_consecutive()
+    def _reverse(self, cube, shape):
+        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step
+        draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's estimate of y_0."""
         y = torch.randn(cube.shape[0], *shape, device=cube.device)
-        for i, t in enumerate(ts):
-            t_b = t.expand(cube.shape[0])
+        for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
-            ab_prev = self.alpha_bar[ts[i + 1]] if i + 1 < len(ts) else torch.ones_like(ab)
+            ab_prev = self.alpha_bar[t - 1] if t > 0 else torch.ones_like(ab)
+            alpha = ab / ab_prev
 
-            eps = self.denoiser(cube, y, t_b)
+            eps = self.denoiser(cube, y, torch.full((cube.shape[0],), t, device=cube.device))
             y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()  # current guess of the clean map
             if self.clip_range is not None:
                 y0 = y0.clamp(*self.clip_range)
-                eps = (y - ab.sqrt() * y0) / (1 - ab).sqrt()  # keep eps consistent with clipped y0
 
-            sigma = eta * ((1 - ab_prev) / (1 - ab) * (1 - ab / ab_prev)).sqrt()
-            noise = torch.randn_like(y) if i + 1 < len(ts) else torch.zeros_like(y)
-            y = ab_prev.sqrt() * y0 + (1 - ab_prev - sigma**2).clamp(min=0).sqrt() * eps + sigma * noise
+            mean = ab_prev.sqrt() * (1 - alpha) / (1 - ab) * y0 + alpha.sqrt() * (1 - ab_prev) / (1 - ab) * y
+            variance = (1 - ab_prev) / (1 - ab) * (1 - alpha)  # 0 at t = 0, so the last step adds no noise
+            y = mean + variance.sqrt() * torch.randn_like(y)
         return y
 
-    def predict_with_uncertainty(self, cube, n_samples=30, sampling_steps=None, **sample_kw):
-        """Posterior mean and standard deviation per pixel from n_samples draws, each taking sampling_steps reverse
-        steps (default T). sample_kw goes to sample()."""
-        samples = self.sample(cube, n_samples=n_samples, n_steps=sampling_steps, **sample_kw)
+    def predict_with_uncertainty(self, cube, n_samples=30, **sample_kw):
+        """Posterior mean and standard deviation per pixel from n_samples draws. sample_kw goes to sample()."""
+        samples = self.sample(cube, n_samples=n_samples, **sample_kw)
         return samples.mean(dim=0), samples.std(dim=0)
 
     def summary(self, print_fn=print, layers=True):
@@ -585,8 +583,7 @@ class GaussianDiffusion(nn.Module):
             f"{ab[-1].sqrt().item():.2e} at t={self.n_timesteps - 1}"
         )
         print_fn(
-            "training: MSE(eps_theta(cube, y_t, t), eps) with t ~ U{0..T-1};  "
-            "sampling: DDIM update (eta=1 with all T steps = DDPM)"
+            "training: MSE(eps_theta(cube, y_t, t), eps) with t ~ U{0..T-1};  sampling: DDPM ancestral, all T steps"
         )
         print_fn(
             f"map: (nBatch, {map_shape[0]}, {map_shape[1]})"
