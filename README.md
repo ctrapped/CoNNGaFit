@@ -151,11 +151,12 @@ pip install -e ".[dev]"
 pre-commit install   # run ruff on every commit
 pytest               # run every test (about 4 minutes)
 pytest -m "not slow" # skip the demo-accuracy tests (about 2 minutes)
+pytest tests/unit    # only the unit tests (a few seconds)
 ```
 
-The network tests build every network and check their output shapes and summaries. `tests/test_demo.py` (marked `slow`; CI runs it on pull requests) trains the demo on all its data and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
+`tests/unit/` are simple unit tests. `tests/integration/test_pipeline.py` smoke tests each network. `tests/integration/test_demo.py` (marked `slow`; CI runs it on pull requests) trains the demo on all its data and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
 
-`main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/` for new code.
+`main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/unit/` or `tests/integration/` for new code.
 
 ## Citation and license
 

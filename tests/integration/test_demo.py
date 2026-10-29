@@ -37,16 +37,13 @@ def true_curve(path):
         return radial_profile(hf, demo.DATASETS["target"], demo.DATASETS["radial_bins"])
 
 
-def rms_errors(predictions):
-    """RMS difference in km/s between each predicted and true rotation curve, keyed by image name."""
+def check_test_galaxy(predictions, uncertainties):
+    """Assert the predicted rotation curves (keyed by image name) are accurate at every position angle, and that their
+    predicted 1-sigma uncertainties cover the true curves about as often as they should, without being uselessly wide."""
     truths = {path.stem: true_curve(path) for path in TEST_IMAGES}
-    return {name: float(np.sqrt(np.mean((curve - truths[name]) ** 2))) for name, curve in predictions.items()}
+    rms = {name: float(np.sqrt(np.mean((predictions[name] - truths[name]) ** 2))) for name in predictions}
+    assert max(rms.values()) < MAX_RMS_KMS, rms
 
-
-def check_calibration(predictions, uncertainties):
-    """Assert the predicted 1-sigma uncertainties (keyed by image name, like the predicted curves) cover the true
-    rotation curves about as often as they should, without being uselessly wide."""
-    truths = {path.stem: true_curve(path) for path in TEST_IMAGES}
     sigmas = np.concatenate([uncertainties[name] for name in predictions])
     errors = np.concatenate([np.abs(predictions[name] - truths[name]) for name in predictions])
     assert np.mean(errors < sigmas) >= MIN_WITHIN_1_SIGMA, np.mean(errors < sigmas)  # not overconfident
@@ -97,10 +94,6 @@ def committed_outputs(tmp_path_factory, run_script):
     return predictions, uncertainties
 
 
-def test_demo_writes_figure(demo_run):
-    assert (demo_run / "demo.png").is_file()
-
-
 def test_training_loss_decreases(losses):
     assert np.isfinite(losses["training_losses"]).all()  # no NaN/inf Gaussian NLL at any epoch
     mse = losses["training_mses"]
@@ -115,21 +108,10 @@ def test_validation_loss_decreases(losses):
     assert mse[0] / mse.min() >= MIN_VALIDATION_LOSS_DROP  # and it generalizes to an unseen galaxy
 
 
-def test_trained_network_predicts_test_galaxy(trained_outputs):
-    predictions, _ = trained_outputs
-    errors = rms_errors(predictions)
-    assert max(errors.values()) < MAX_RMS_KMS, errors
-
-
-def test_trained_network_is_calibrated(trained_outputs):
-    check_calibration(*trained_outputs)
+def test_trained_network_predicts_test_galaxy(demo_run, trained_outputs):
+    assert (demo_run / "demo.png").is_file()  # the demo also plots its results
+    check_test_galaxy(*trained_outputs)
 
 
 def test_committed_network_predicts_test_galaxy(committed_outputs):
-    predictions, _ = committed_outputs
-    errors = rms_errors(predictions)
-    assert max(errors.values()) < MAX_RMS_KMS, errors
-
-
-def test_committed_network_is_calibrated(committed_outputs):
-    check_calibration(*committed_outputs)
+    check_test_galaxy(*committed_outputs)

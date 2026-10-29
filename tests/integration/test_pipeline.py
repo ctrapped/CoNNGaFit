@@ -1,7 +1,7 @@
-"""Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net, with and
-without predict_variance, trains on a single VOF image for two epochs, writes a valid checkpoint, and predicts outputs
-(and, with predict_variance, their 1-sigma uncertainties) of the expected size, both when training ends and when the
-checkpoint is reloaded by use_model.py and inference_template.py."""
+"""Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net trains on a
+single VOF image for two epochs, writes a valid checkpoint, and predicts outputs (and, with predict_variance, their
+1-sigma uncertainties) of the expected size, both when training ends and when the checkpoint is reloaded by
+use_model.py. inference_template.py runs the committed demo network."""
 
 import json
 import shutil
@@ -12,11 +12,12 @@ import h5py
 import numpy as np
 import pytest
 
-from use_model import load_model, predict
+from use_model import load_model, predict, run_inferences
 
 REPO = Path(__file__).resolve().parents[2]
 TRAIN_SCRIPT = REPO / "train_model_unet.py"
 INFERENCE_SCRIPT = REPO / "inference_template.py"
+DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
 DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
 
 # One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,
@@ -33,11 +34,15 @@ SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling=
 RADIAL_BINS = 10
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
 
-# (run name, output head, radial bins, predict_variance): a map from every head, plus a radial curve from the fc
-# head, each with and without predict_variance (every head predicts its log-variance differently)
-OUTPUTS = [("fc", "fc", 0), ("conv", "conv", 0), ("conv_halfres", "conv_halfres", 0), ("fc_radial", "fc", RADIAL_BINS)]
-RUNS = [(name, head, bins, False) for name, head, bins in OUTPUTS] + [
-    (f"{name}_variance", head, bins, True) for name, head, bins in OUTPUTS
+# (run name, output head, radial bins, predict_variance): a map from every head and a radial curve from the fc head,
+# each with predict_variance, plus the default head without it. Without predict_variance only the training loss and
+# saved outputs change, not the head, and the unit tests run every head without it.
+RUNS = [
+    ("fc", "fc", 0, True),
+    ("conv", "conv", 0, True),
+    ("conv_halfres", "conv_halfres", 0, True),
+    ("fc_radial", "fc", RADIAL_BINS, True),
+    ("conv_halfres_no_variance", "conv_halfres", 0, False),
 ]
 
 
@@ -125,16 +130,6 @@ def test_training_writes_valid_checkpoint(trained):
         assert np.isfinite(hf["final_test_mse"][()])  # and so is the final test MSE
 
 
-def test_saved_prediction_has_expected_size(trained):
-    name, _, radial_bins, predict_variance, run_dir = trained
-    prediction, uncertainty = saved_test_outputs(run_dir, name)
-    assert np.squeeze(prediction).shape == expected_shape(radial_bins)  # a whole map, or one value per ring
-    assert (uncertainty is not None) == predict_variance  # an uncertainty is saved only with predict_variance
-    if predict_variance:
-        assert uncertainty.shape == prediction.shape  # one 1-sigma per predicted value
-        assert np.isfinite(uncertainty).all() and (uncertainty > 0).all()  # each a positive, finite spread
-
-
 def test_checkpoint_reproduces_saved_prediction(trained):
     name, _, radial_bins, predict_variance, run_dir = trained
     model, metadata = load_model(str(run_dir / "nets" / name))
@@ -143,24 +138,17 @@ def test_checkpoint_reproduces_saved_prediction(trained):
     # and the same values the training script saved for this image
     saved_prediction, saved_uncertainty = saved_test_outputs(run_dir, name)
     np.testing.assert_allclose(prediction, np.squeeze(saved_prediction), rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
-    if predict_variance:  # the same 1-sigma too
-        assert std.shape == prediction.shape
+    assert (saved_uncertainty is not None) == predict_variance  # an uncertainty is saved only with predict_variance
+    if predict_variance:  # the same 1-sigma too, each a positive, finite spread
+        assert np.isfinite(saved_uncertainty).all() and (saved_uncertainty > 0).all()
         np.testing.assert_allclose(std, np.squeeze(saved_uncertainty), rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
     else:
         assert std is None  # a network without predict_variance has no uncertainty to give
 
 
-def test_inference_script_writes_expected_outputs(trained, run_script):
+def test_run_inferences_writes_expected_outputs(trained):
     name, _, radial_bins, predict_variance, run_dir = trained
-    image_list = run_dir / "images.csv"
-    image_list.write_text(f"{IMAGE}\n")
-    run_script(
-        INFERENCE_SCRIPT,
-        "--image-list", image_list,
-        "--output-prefix", run_dir / "inference_",
-        "--model-path", run_dir / "nets" / name,
-        cwd=run_dir,
-    )  # fmt: skip
+    run_inferences(str(run_dir / "nets" / name), [str(IMAGE)], str(run_dir / "inference_"))
     output, dataset = ("radialPlot", "prediction") if radial_bins else ("projectionMap", "image")
     output = run_dir / f"inference_{IMAGE.stem}_{output}"
     assert output.with_suffix(".png").is_file()  # a plot of the prediction
@@ -169,3 +157,16 @@ def test_inference_script_writes_expected_outputs(trained, run_script):
         assert ("uncertainty" in hf) == predict_variance  # with its 1-sigma only with predict_variance
         if predict_variance:
             assert hf["uncertainty"].shape == expected_shape(radial_bins)
+
+
+def test_inference_script_runs_committed_network(tmp_path, run_script):
+    image_list = tmp_path / "images.csv"
+    image_list.write_text(f"{IMAGE}\n")
+    run_script(
+        INFERENCE_SCRIPT,
+        "--image-list", image_list,
+        "--output-prefix", tmp_path / "inference_",
+        "--model-path", DEMO_MODEL,
+        cwd=tmp_path,
+    )  # fmt: skip
+    assert (tmp_path / f"inference_{IMAGE.stem}_radialPlot.hdf5").is_file()  # the demo network predicts radial curves
