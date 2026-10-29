@@ -26,6 +26,10 @@ All notable changes to this project are documented here. The format follows
   networks. CI runs it on pull requests; `pytest -m "not slow"` skips it locally.
 
 ### Changed
+- **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
+  `radial_momentum` and `cylindrical_radial_momentum` (formerly `radial_mass_flux` and
+  `cylindrical_radial_mass_flux`), plus the new `rotational_momentum`. Divide by a pixel or ring
+  width after inference to get a mass flux.
 - **Breaking:** hyperparameter files need a `seed` key (`seed = 0` in `configs/`).
 - **Breaking:** `use_model.py` runs networks trained by `train_model_unet.py`, rebuilding them from
   their checkpoint; `run_inferences` and the inference scripts no longer take a network type.

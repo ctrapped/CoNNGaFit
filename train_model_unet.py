@@ -269,7 +269,7 @@ logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, trai
 label_offset, label_scale = 0.0, 1.0
 all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
 if label_scaling != "none":
-    if label_scaling == "symmetric":  # e.g. mass flux: divide by max(|label|), to [-1, 1]
+    if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
         label_scale = np.max(np.abs(all_labels))
     else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
         label_offset = (np.max(all_labels) + np.min(all_labels)) / 2

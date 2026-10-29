@@ -96,17 +96,15 @@ def face_on_path(path):
 
 
 #### Labels ####
-KM_PER_KPC = 3.086e16
-S_PER_YR = 3.154e7
-
 # Training targets, and the VOF annotation maps each is made from (multiplied together)
 TARGETS = {
     "mass": ["mass_annotation"],
     "radial_velocity": ["radial_velocity_annotation"],
     "cylindrical_radial_velocity": ["cylindrical_radial_velocity_annotation"],
     "rotational_velocity": ["rotational_velocity_annotation"],
-    "radial_mass_flux": ["mass_annotation", "radial_velocity_annotation"],
-    "cylindrical_radial_mass_flux": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
+    "radial_momentum": ["mass_annotation", "radial_velocity_annotation"],
+    "cylindrical_radial_momentum": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
+    "rotational_momentum": ["mass_annotation", "rotational_velocity_annotation"],
 }
 # target -> (plot label, plot units, how pixels are combined when binning plots)
 TARGET_SETTINGS = {
@@ -114,30 +112,31 @@ TARGET_SETTINGS = {
     "radial_velocity": ("Rad. Vel.", r"[km s$^{-1}$]", "mean"),
     "cylindrical_radial_velocity": ("Cyl. Rad. Vel.", r"[km s$^{-1}$]", "mean"),
     "rotational_velocity": ("Rot. Vel.", r"[km s$^{-1}$]", "mean"),
-    "radial_mass_flux": ("Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
-    "cylindrical_radial_mass_flux": ("Cyl. Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+    "radial_momentum": ("Radial Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
+    "cylindrical_radial_momentum": ("Cyl. Radial Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
+    "rotational_momentum": ("Rot. Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
 }
-# Targets converted from Msun km/s to a mass flux in Msun/yr (see label_map)
-MASS_FLUX_TARGETS = {"radial_mass_flux", "cylindrical_radial_mass_flux"}
+# Momentum targets, mass * velocity [Msun km/s]: summed in radial curves, not mass-weighted like velocities
+MOMENTUM_TARGETS = {"radial_momentum", "cylindrical_radial_momentum", "rotational_momentum"}
 
 
 def label_map(hf, target):
-    """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun/yr (mass fluxes) per pixel."""
-    # e.g. radial mass flux = mass * radial velocity, per pixel
-    label = np.prod([hf[name][()] for name in TARGETS[target]], axis=0)
-    if target in MASS_FLUX_TARGETS:
-        # Mass flux through a shell one pixel wide: mass * velocity / pixel width [Msun/yr]
-        pixel_kpc = hf.attrs["fov_kpc"] / label.shape[1]
-        label = label / (pixel_kpc * KM_PER_KPC) * S_PER_YR
+    """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun km/s (momenta) per pixel."""
+    # e.g. radial momentum = mass * radial velocity, per pixel
+    target_maps = TARGETS[target]
+    if len(target_maps) > 1:
+        label = np.multiply(hf[target_maps[0]][...], hf[target_maps[1]][...])
+    else:
+        label = hf[target_maps[0]][...]
     return label
 
 
 def radial_profile(hf, target, n_bins):
     """Reduce an open VOF file's annotation maps to a radial curve of target, in n_bins equal-width rings.
 
-    Radius is measured in the image plane from the image center, out to the image edge. Mass is
-    the total in each ring [Msun], mass flux the flux through each ring [Msun/yr], and velocities
-    the mass-weighted mean [km/s], zero in rings with no mass.
+    Radius is measured in the image plane from the image center, out to the image edge. Mass and
+    momentum are the totals in each ring [Msun, Msun km/s], and velocities the mass-weighted mean
+    [km/s], zero in rings with no mass.
     """
     mass = hf["mass_annotation"][()]
     fov_kpc = hf.attrs["fov_kpc"]
@@ -154,10 +153,8 @@ def radial_profile(hf, target, n_bins):
     if target == "mass":
         return ring_mass
     momentum = ring_sum(mass * hf[TARGETS[target][-1]][()])  # Msun km/s
-    if target in MASS_FLUX_TARGETS:
-        # Flux through a shell one ring wide: mass * velocity / ring width [Msun/yr]
-        ring_kpc = edges[1] - edges[0]
-        return momentum / (ring_kpc * KM_PER_KPC) * S_PER_YR
+    if target in MOMENTUM_TARGETS:
+        return momentum
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
 
 
@@ -198,9 +195,9 @@ class CoNNGaFitImageDataset:
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
         {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600} (see
         find_vof_images); snapshot ranges are inclusive, and every position angle found is used.
-    target: which annotation to learn, a key of TARGETS (e.g. "radial_mass_flux",
+    target: which annotation to learn, a key of TARGETS (e.g. "radial_momentum",
         "rotational_velocity"). Labels are returned flattened, one value per image pixel, in
-        Msun (mass), km/s (velocities), or Msun/yr (mass fluxes).
+        Msun (mass), km/s (velocities), or Msun km/s (momenta).
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize for the image, label scaling for the label).
     augment: None (default), "major_axis", or "all" (see AUGMENTATIONS): include each image's
