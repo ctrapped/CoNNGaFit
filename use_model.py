@@ -62,17 +62,17 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
     )
     n_y, n_x = (int(n) for n in metadata["input_shape"][1:])
     shape = (-1,) if "radial_bins" in metadata else (n_y, n_x)
-    with torch.no_grad():
-        for name, image in zip(dataset.names, dataset):
+    for name, image in zip(dataset.names, dataset):
+        with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
             output = model(image[None].float().to(device), save_latent_images)
-            mean, logvar = output if model.predict_variance else (output, None)
-            pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
-            if not return_std:
-                yield name, pred
-                continue
-            # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
-            std = None if logvar is None else (np.exp(0.5 * logvar.cpu().numpy()[0]) * label_scale).reshape(shape)
-            yield name, pred, std
+        mean, logvar = output if model.predict_variance else (output, None)
+        pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
+        if not return_std:
+            yield name, pred
+            continue
+        # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
+        std = None if logvar is None else (np.exp(0.5 * logvar.cpu().numpy()[0]) * label_scale).reshape(shape)
+        yield name, pred, std
 
 
 def ring_radii_kpc(path, n_bins):
