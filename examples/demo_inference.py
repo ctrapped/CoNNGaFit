@@ -47,8 +47,10 @@ def main():
             truth = radial_profile(f, DATASETS["target"], DATASETS["radial_bins"])
         with h5py.File(args.output / f"{Path(path).stem}_radialPlot.hdf5") as f:
             prediction = f["prediction"][()]
+            sigma = f["uncertainty"][()] if "uncertainty" in f else None  # Networks trained with predict_variance
         rms = np.sqrt(np.mean((prediction - truth) ** 2))
-        print(f"{Path(path).stem}: RMS error {rms:.1f} km/s")  # noqa: T201
+        within = "" if sigma is None else f", {np.mean(np.abs(prediction - truth) < sigma):.0%} of rings within 1σ"
+        print(f"{Path(path).stem}: RMS error {rms:.1f} km/s{within}")  # noqa: T201
     print(f"Outputs: {args.output}")  # noqa: T201
 
 
