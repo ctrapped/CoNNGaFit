@@ -28,7 +28,7 @@ IMAGE = REPO / "examples" / "demo_data" / GALAXY / f"i{INCLINATION}" / IMAGE_NAM
 TARGET = "rotational_velocity"  # The demo images carry mass and rotational velocity annotations
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
-SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")
+SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided", mass_weight_power=0.5)
 RADIAL_BINS = 10
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
 

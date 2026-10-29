@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   rotation curve of one it hasn't seen, in about a minute on a CPU. Its figure is in the README.
 - `examples/demo_inference.py`: runs the committed, pre-trained demo network (`examples/demo_model/`)
   on the demo's test galaxy with `use_model.run_inferences`, in a few seconds.
+- `mass_weight_power` hyperparameter: weights each pixel's (or ring's) loss by mass to that power,
+  so velocity networks aren't dominated by faint halo gas. 0 (the default) is plain MSE;
+  `configs/hyperparams_rc.toml` uses 0.5.
 - `seed` hyperparameter: seeds Python, NumPy and PyTorch before training and is saved in the checkpoint,
   so runs with the same seed, data and settings on the same machine give the same network.
 - `tests/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo

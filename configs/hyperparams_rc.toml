@@ -34,6 +34,13 @@ output_head = "conv_halfres"
 #   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
 label_scaling = "none"
 
+# Weight each pixel's (or ring's) squared error by its mass ** mass_weight_power, normalized to mean 1
+# per image, so the loss isn't dominated by faint halo gas; meant for velocity targets.
+#   0   - unweighted MSE (default)
+#   0.5 - square root of mass, so the densest pixels don't dominate either
+#   1   - mass-weighted
+mass_weight_power = 0.5
+
 # Random seed for weight initialization, dropout and the order of training batches. Runs with the same
 # seed, data and hyperparameters on the same machine give the same network.
 seed = 0

@@ -259,6 +259,8 @@ class CoNNGaFitImageDataset:
             augment,
         )
 
+        self.masses = {}  # mass map or ring masses per file, for mass_weights
+
         if radial_bins is not None:
             # Where each image's radial curve comes from; check every face-on file exists up front
             if radial_projection == "face_on":
@@ -289,6 +291,23 @@ class CoNNGaFitImageDataset:
         """The flattened label of image file_idx before augmentation and target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).flatten().astype("float")
+
+    def mass_weights(self, idx, power):
+        """Sample idx's loss weights, mass ** power per pixel (or ring), flattened like its label, with mean 1."""
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        if file_idx not in self.masses:
+            if self.radial_bins is None:
+                with h5py.File(self.img_paths[file_idx], "r") as hf:
+                    self.masses[file_idx] = hf["mass_annotation"][()]
+            else:  # The mass in each ring, from the file the curve is measured on
+                with h5py.File(self.curve_paths[file_idx], "r") as hf:
+                    self.masses[file_idx] = radial_profile(hf, "mass", self.radial_bins)
+        weights = self.masses[file_idx] ** power
+        if self.radial_bins is None:
+            weights = augment_array(weights, *self.augmentations[aug_idx])  # Rotated/flipped like the label
+        weights = weights.flatten().astype("float")
+        # Mean 1, so every image counts equally however massive; an image with no mass is weighted uniformly
+        return weights / weights.mean() if weights.mean() > 0 else np.ones_like(weights)
 
     def radii(self, idx):
         """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""

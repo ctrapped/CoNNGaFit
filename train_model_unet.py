@@ -55,6 +55,7 @@ HYPERPARAM_KEYS = {
     "label_scaling",
     "seed",
 }
+OPTIONAL_HYPERPARAM_KEYS = {"mass_weight_power"}
 DATASET_KEYS = {
     "target",
     "augment",
@@ -164,7 +165,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
-hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS)
+hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS)
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
@@ -180,6 +181,9 @@ if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
         f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
     )
+mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted MSE
+if not mass_weight_power >= 0:
+    raise ValueError(f"{args.hyperparams}: mass_weight_power = {mass_weight_power!r} should be 0 or more")
 seed = hyperparams["seed"]
 # Weight initialization, dropout and the order training batches are drawn in all come from these generators
 random.seed(seed)
@@ -314,7 +318,8 @@ validation_data = CoNNGaFitImageDataset(
 
 
 class WithIndices(Dataset):
-    """Wraps a dataset so each sample also returns its index, to look up its name after shuffling."""
+    """Wraps a dataset so each sample also returns its loss weights (see mass_weight_power) and its index,
+    to look up its name after shuffling."""
 
     def __init__(self, dataset):
         self.dataset = dataset
@@ -323,7 +328,12 @@ class WithIndices(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        return (*self.dataset[idx], idx)
+        image, label = self.dataset[idx]
+        if mass_weight_power > 0:
+            weights = self.dataset.mass_weights(idx, mass_weight_power)
+        else:
+            weights = np.ones_like(label)
+        return image, label, weights, idx
 
 
 train_dataloader = DataLoader(WithIndices(training_data), batch_size=batch_size, shuffle=True)  # Reshuffled every epoch
@@ -378,7 +388,7 @@ def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
-    """Run one training epoch: iterate the dataloader, backprop MSE loss each batch, and on
+    """Run one training epoch: iterate the dataloader, backprop the weighted MSE loss each batch, and on
     the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
     Returns the loss averaged over all batches in the epoch.
     """
@@ -386,12 +396,13 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
     size = len(dataloader.dataset)
     epoch_loss = 0.0
     num_batches = len(dataloader)
-    for batch, (x, y, idx) in enumerate(dataloader):
+    for batch, (x, y, w, idx) in enumerate(dataloader):
         x = x.to(device)
         y = y.to(device)
+        w = w.to(device)
 
         pred = model(x.float())
-        loss = loss_fn(pred, y.float())
+        loss = loss_fn(pred, y.float(), w.float())
         epoch_loss += loss.item()
         if epoch >= epochs - 1:
             save_batch_outputs(x, y, pred, idx, training_data, image_output_training, epoch, comp_images=False)
@@ -432,12 +443,13 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     specific_accuracy = np.zeros(len(dataloader.dataset))
 
     with torch.no_grad():
-        for x, y, idx in dataloader:
+        for x, y, w, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
+            w = w.to(device)
 
             pred = model(x.float())
-            validation_loss += loss_fn(pred, y.float()).item()
+            validation_loss += loss_fn(pred, y.float(), w.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
@@ -482,11 +494,12 @@ def test_loop(dataloader, model, loss_fn, epoch):
     specific_accuracy = np.zeros(len(dataloader.dataset))
 
     with torch.no_grad():
-        for x, y, idx in dataloader:
+        for x, y, w, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
+            w = w.to(device)
             pred = model(x.float())
-            test_loss += loss_fn(pred, y.float()).item()
+            test_loss += loss_fn(pred, y.float(), w.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
@@ -536,7 +549,11 @@ validation_names = validation_data.names
 training_names = training_data.names
 
 #### Define Loss Function and Optimizer ####
-loss_fn = nn.MSELoss()
+def loss_fn(pred, y, w):
+    """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
+    return torch.mean(w * nn.functional.mse_loss(pred, y, reduction="none"))
+
+
 optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=weight_decay
 )  # Steepest gradient descent, can use different optimizers
