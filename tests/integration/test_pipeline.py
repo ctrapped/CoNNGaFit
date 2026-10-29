@@ -14,7 +14,7 @@ import pytest
 
 from use_model import load_model, predict
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 TRAIN_SCRIPT = REPO / "train_model_unet.py"
 INFERENCE_SCRIPT = REPO / "inference_template.py"
 DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
