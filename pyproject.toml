@@ -43,7 +43,7 @@ py-modules = [
 testpaths = ["tests"]
 pythonpath = [".", "examples"]
 addopts = "-ra"
-markers = ["slow: trains on the full demo data (about a minute); skip with -m \"not slow\""]
+markers = ["slow: trains on the full demo data; skip with -m \"not slow\""]
 
 [tool.ruff]
 src = [".", "examples"]  # first-party modules, for import sorting
