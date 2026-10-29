@@ -23,10 +23,10 @@ VOF_VIEW = re.compile(r"_i(?P<inclination>[^_]+)_pa(?P<position_angle>[^_]+)_(?P
 def snapshot_range(snapshots, where):
     """(minSnap, maxSnap) from a snapshot number or an inclusive [minSnap, maxSnap] pair."""
     if isinstance(snapshots, int):
-        #One snapshot tha is an interger
+        # One snapshot tha is an interger
         return snapshots, snapshots
     if isinstance(snapshots, (list, tuple)) and len(snapshots) == 2 and all(isinstance(v, int) for v in snapshots):
-        #A list of two snapshots, which are integers
+        # A list of two snapshots, which are integers
         return snapshots[0], snapshots[1]
     raise ValueError(f"{where}: snapshots = {snapshots!r} should be a snapshot or [minSnap, maxSnap]")
 
@@ -127,7 +127,7 @@ def label_map(hf, target):
     # e.g. radial momentum = mass * radial velocity, per pixel
     target_maps = TARGETS[target]
     if len(target_maps) > 1:
-        #Multiply Mass and Velocities for Momenta
+        # Multiply Mass and Velocities for Momenta
         label = np.multiply(hf[target_maps[0]][...], hf[target_maps[1]][...])
     else:
         label = hf[target_maps[0]][...]
@@ -276,9 +276,9 @@ class CoNNGaFitImageDataset:
         """file_idx's label before augmentation: a 2-d map read from the open file hf, or its radial curve."""
         if self.radial_bins is None:
             return label_map(hf, self.target)
-        if file_idx not in self.curves: #Has the radial curve already been computed?
+        if file_idx not in self.curves:  # Has the radial curve already been computed?
             with h5py.File(self.curve_paths[file_idx], "r") as hf_curve:
-                #Calculate Radial Curve if not already done
+                # Calculate Radial Curve if not already done
                 self.curves[file_idx] = radial_profile(hf_curve, self.target, self.radial_bins)
         return self.curves[file_idx]
 

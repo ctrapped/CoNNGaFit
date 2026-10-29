@@ -548,6 +548,7 @@ model.summary(print_fn=logger.info, layers=False)  # stage table and parameter c
 validation_names = validation_data.names
 training_names = training_data.names
 
+
 #### Define Loss Function and Optimizer ####
 def loss_fn(pred, y, w):
     """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
