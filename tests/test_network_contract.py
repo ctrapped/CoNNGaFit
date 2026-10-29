@@ -89,6 +89,16 @@ def test_backward_reaches_every_parameter(network, make_model, make_cube, head):
         assert torch.isfinite(param.grad).all(), name  # no NaN/inf gradients
 
 
+def test_gaussian_nll_reaches_every_parameter(network, make_model, make_cube, head):
+    """The predict_variance training loss (as in train_model_unet.py) reaches both the mean and log-variance outputs."""
+    model = make_model(network, head=head, predict_variance=True)
+    mean, logvar = model(make_cube())
+    nn.GaussianNLLLoss()(mean, torch.randn_like(mean), logvar.exp()).backward()
+    for name, param in model.named_parameters():
+        assert param.grad is not None, name  # parameter is connected to the loss
+        assert torch.isfinite(param.grad).all(), name  # no NaN/inf gradients
+
+
 def test_output_activation_bounds_predictions(network, make_model, make_cube, head):
     out = make_model(network, head=head, output_activation=nn.Tanh)(make_cube())
     assert out.abs().max() <= 1

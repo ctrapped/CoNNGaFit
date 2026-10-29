@@ -1,6 +1,7 @@
-"""Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net trains on a
-single VOF image for two epochs, writes a valid checkpoint, and predicts outputs of the expected size, both when
-training ends and when the checkpoint is reloaded by use_model.py and inference_template.py."""
+"""Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net, with and
+without predict_variance, trains on a single VOF image for two epochs, writes a valid checkpoint, and predicts outputs
+(and, with predict_variance, their 1-sigma uncertainties) of the expected size, both when training ends and when the
+checkpoint is reloaded by use_model.py and inference_template.py."""
 
 import json
 import shutil
@@ -32,8 +33,12 @@ SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling=
 RADIAL_BINS = 10
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
 
-# (run name, output head, radial bins): a map from every head, plus a radial curve from the fc head
-RUNS = [("fc", "fc", 0), ("conv", "conv", 0), ("conv_halfres", "conv_halfres", 0), ("fc_radial", "fc", RADIAL_BINS)]
+# (run name, output head, radial bins, predict_variance): a map from every head, plus a radial curve from the fc
+# head, each with and without predict_variance (every head predicts its log-variance differently)
+OUTPUTS = [("fc", "fc", 0), ("conv", "conv", 0), ("conv_halfres", "conv_halfres", 0), ("fc_radial", "fc", RADIAL_BINS)]
+RUNS = [(name, head, bins, False) for name, head, bins in OUTPUTS] + [
+    (f"{name}_variance", head, bins, True) for name, head, bins in OUTPUTS
+]
 
 
 def toml_lines(params):
@@ -41,9 +46,14 @@ def toml_lines(params):
     return [f"{key} = {json.dumps(value)}" for key, value in params.items()]
 
 
-def write_configs(folder, head, radial_bins):
+def write_configs(folder, head, radial_bins, predict_variance):
     with open(DEFAULT_HYPERPARAMS, "rb") as f:
-        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": head}
+        hyperparams = {
+            **tomllib.load(f),
+            **SMALL_HYPERPARAMS,
+            "output_head": head,
+            "predict_variance": predict_variance,
+        }
     (folder / "hyperparams.toml").write_text("\n".join(toml_lines(hyperparams)) + "\n")
 
     datasets = dict(
@@ -67,15 +77,15 @@ def expected_shape(radial_bins):
     return (radial_bins,) if radial_bins else (n_y, n_x)
 
 
-@pytest.fixture(scope="module", params=RUNS, ids=[name for name, _, _ in RUNS])
+@pytest.fixture(scope="module", params=RUNS, ids=[name for name, *_ in RUNS])
 def trained(request, tmp_path_factory, run_script):
-    """Train once per configuration on IMAGE; returns (run name, head, radial bins, run folder)."""
-    name, head, radial_bins = request.param
+    """Train once per configuration on IMAGE; returns (run name, head, radial bins, predict_variance, run folder)."""
+    name, head, radial_bins, predict_variance = request.param
     run_dir = tmp_path_factory.mktemp(name)
     image_dir = run_dir / "vof" / GALAXY / f"i{INCLINATION}"
     image_dir.mkdir(parents=True)
     shutil.copy(IMAGE, image_dir)
-    write_configs(run_dir, head, radial_bins)
+    write_configs(run_dir, head, radial_bins, predict_variance)
     run_script(
         TRAIN_SCRIPT,
         "--hyperparams", "hyperparams.toml",
@@ -85,20 +95,22 @@ def trained(request, tmp_path_factory, run_script):
         "--output-dir", "diag",
         cwd=run_dir,
     )  # fmt: skip
-    return name, head, radial_bins, run_dir
+    return name, head, radial_bins, predict_variance, run_dir
 
 
-def saved_test_prediction(run_dir, name):
-    """The prediction the training script saved for IMAGE at the end of training."""
+def saved_test_outputs(run_dir, name):
+    """The prediction and its 1-sigma uncertainty (None without predict_variance) the training script saved for IMAGE
+    at the end of training."""
     saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{IMAGE.stem}_Epoch*.hdf5"))
     with h5py.File(saved, "r") as hf:
-        return hf["prediction"][()]
+        return hf["prediction"][()], (hf["uncertainty"][()] if "uncertainty" in hf else None)
 
 
 def test_training_writes_valid_checkpoint(trained):
-    name, head, radial_bins, run_dir = trained
+    name, head, radial_bins, predict_variance, run_dir = trained
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
         assert hf["output_head"][()].decode() == head  # records the head it was trained with
+        assert bool(hf["predict_variance"][()]) == predict_variance  # and whether it predicts its uncertainty
         n_y, n_x, n_spec = image_shape()
         assert tuple(hf["input_shape"][()]) == (n_spec, n_y, n_x)  # built for the cube, spectral axis first
         # the saved copy of the datasets file round-trips
@@ -106,31 +118,40 @@ def test_training_writes_valid_checkpoint(trained):
         # image normalization and label scaling needed for inference are finite
         assert np.isfinite(hf["image_stats"][()]).all() and np.isfinite(hf["label_stats"][()]).all()
     with h5py.File(run_dir / "diag" / "diagnostics" / f"{name}_LossesAndAccuracies.hdf5", "r") as hf:
-        assert len(hf["training_losses"][()]) == SMALL_HYPERPARAMS["epochs"]  # one loss per epoch
-        assert np.isfinite(hf["training_losses"][()]).all()  # every training loss is finite
-        assert np.isfinite(hf["validation_losses"][()]).all()  # every validation loss is finite
+        for history in ("training_losses", "validation_losses", "training_mses", "validation_mses"):
+            assert len(hf[history][()]) == SMALL_HYPERPARAMS["epochs"], history  # one value per epoch
+            assert np.isfinite(hf[history][()]).all(), history  # every loss (and MSE of the mean) is finite
         assert np.isfinite(hf["final_test_loss"][()])  # the final test loss is finite
+        assert np.isfinite(hf["final_test_mse"][()])  # and so is the final test MSE
 
 
 def test_saved_prediction_has_expected_size(trained):
-    name, _, radial_bins, run_dir = trained
-    prediction = saved_test_prediction(run_dir, name)
+    name, _, radial_bins, predict_variance, run_dir = trained
+    prediction, uncertainty = saved_test_outputs(run_dir, name)
     assert np.squeeze(prediction).shape == expected_shape(radial_bins)  # a whole map, or one value per ring
+    assert (uncertainty is not None) == predict_variance  # an uncertainty is saved only with predict_variance
+    if predict_variance:
+        assert uncertainty.shape == prediction.shape  # one 1-sigma per predicted value
+        assert np.isfinite(uncertainty).all() and (uncertainty > 0).all()  # each a positive, finite spread
 
 
 def test_checkpoint_reproduces_saved_prediction(trained):
-    name, _, radial_bins, run_dir = trained
+    name, _, radial_bins, predict_variance, run_dir = trained
     model, metadata = load_model(str(run_dir / "nets" / name))
-    [(_, prediction)] = predict(model, metadata, [str(IMAGE)])
+    [(_, prediction, std)] = predict(model, metadata, [str(IMAGE)], return_std=True)
     assert prediction.shape == expected_shape(radial_bins)  # predict returns a map or a curve of the expected size
     # and the same values the training script saved for this image
-    np.testing.assert_allclose(
-        prediction, np.squeeze(saved_test_prediction(run_dir, name)), rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL
-    )
+    saved_prediction, saved_uncertainty = saved_test_outputs(run_dir, name)
+    np.testing.assert_allclose(prediction, np.squeeze(saved_prediction), rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
+    if predict_variance:  # the same 1-sigma too
+        assert std.shape == prediction.shape
+        np.testing.assert_allclose(std, np.squeeze(saved_uncertainty), rtol=PREDICTION_RTOL, atol=PREDICTION_ATOL)
+    else:
+        assert std is None  # a network without predict_variance has no uncertainty to give
 
 
 def test_inference_script_writes_expected_outputs(trained, run_script):
-    name, _, radial_bins, run_dir = trained
+    name, _, radial_bins, predict_variance, run_dir = trained
     image_list = run_dir / "images.csv"
     image_list.write_text(f"{IMAGE}\n")
     run_script(
@@ -145,3 +166,6 @@ def test_inference_script_writes_expected_outputs(trained, run_script):
     assert output.with_suffix(".png").is_file()  # a plot of the prediction
     with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
         assert hf[dataset].shape == expected_shape(radial_bins)  # and an hdf5 of it, of the expected size
+        assert ("uncertainty" in hf) == predict_variance  # with its 1-sigma only with predict_variance
+        if predict_variance:
+            assert hf["uncertainty"].shape == expected_shape(radial_bins)
