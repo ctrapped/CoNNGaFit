@@ -40,7 +40,7 @@ label_scaling = "none"
 #   0   - unweighted (default)
 #   0.5 - square root of mass, so the densest pixels don't dominate either
 #   1   - mass-weighted
-mass_weight_power = 0.5
+mass_weight_power = 0
 
 # Predict a per-pixel uncertainty along with each value: the network outputs a mean and a
 # log-variance, trained with a Gaussian negative log-likelihood instead of MSE.
