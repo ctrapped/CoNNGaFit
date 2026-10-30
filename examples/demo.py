@@ -46,7 +46,7 @@ SPLITS = {
     "testing": ["vflat220"],
 }
 SNAPSHOT = 600
-# configs/hyperparams_rc.toml, made small enough to train in about a minute on a CPU
+# configs/hyperparams_rc.toml, made small enough to train in a few minutes on a CPU
 HYPERPARAM_OVERRIDES = {
     "n_filt0": 4,
     "k0": 5,
@@ -57,8 +57,8 @@ HYPERPARAM_OVERRIDES = {
     "label_scaling": "one-sided",
     "predict_variance": True,  # Also predict each ring's 1-sigma uncertainty
 }
-DEFAULT_EPOCHS = 100
-DETECTION = 1e18  # cm^-2: Keep VOF's demo noise (3e18 cm^-2 in each of 48 channels)
+DEFAULT_EPOCHS = 200
+DETECTION = 1e20  # cm^-2: Keep VOF's demo noise (3e18 cm^-2 in each of 48 channels)
 
 
 def toml_lines(params):
@@ -189,7 +189,11 @@ def plot(model_path, output, figure_file):
     fig.savefig(figure_file, dpi=110, bbox_inches="tight")
     plt.close(fig)
     residuals = np.array(residuals)
-    return np.sqrt(np.mean(np.square(residuals))), np.mean(np.abs(residuals) < np.array(sigmas))
+    return (
+        np.sqrt(np.mean(np.square(residuals))),
+        np.mean(np.abs(residuals) < np.array(sigmas)),
+        np.mean(np.abs(residuals) < 3 * np.array(sigmas)),
+    )
 
 
 def main():
@@ -202,9 +206,10 @@ def main():
 
     model_path = train(output, args.epochs)
     figure_file = output / "demo.png"
-    rms, within_sigma = plot(model_path, output, figure_file)
+    rms, within_sigma, within_3sigma = plot(model_path, output, figure_file)
     print(f"Model:  {model_path}.pt\nFigure: {figure_file}\nRotation curve RMS error: {rms:.1f} km/s")  # noqa: T201
-    print(f"Within predicted 1σ: {within_sigma:.0%} of rings (68% if calibrated)")  # noqa: T201
+    # print(f"Within predicted 1σ: {within_sigma:.0%} of rings (68% if calibrated)")  # noqa: T201
+    print(f"Within predicted 1σ: {within_sigma:.0%} of rings ({within_3sigma:.0%} within 3σ)")  # noqa: T201
 
 
 if __name__ == "__main__":
