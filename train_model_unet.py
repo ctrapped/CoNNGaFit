@@ -581,17 +581,18 @@ def weighted_mse_loss(pred, y, w):
 
 
 def weighted_gaussian_nll_loss(pred, y, logvar, w):
-    """GaussianNLLLoss weighted by w"""
+    """Gaussian NLL of (pred, exp(logvar)), each pixel (or ring) weighted by w; all ones is nn.GaussianNLLLoss."""
     return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
 
 
 loss_fn = weighted_gaussian_nll_loss if predict_variance else weighted_mse_loss  # The training objective
 mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
-LOSS_LABEL = "Gaussian NLL" if predict_variance else "MSE"
+LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
 
 def compute_loss(output, y, w):
-    """The training objective: Gaussian NLL of (mean, exp(logvar)) if predict_variance, else MSE weighted by w."""
+    """The training objective, each pixel (or ring) weighted by w: Gaussian NLL of (mean, exp(logvar)) if
+    predict_variance, else MSE."""
     if predict_variance:
         mean, logvar = output
         return loss_fn(mean, y, logvar, w)

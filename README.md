@@ -90,6 +90,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `dropout_rate`, `block_dropout_rate` | Dropout before the output layer, and channel-wise dropout inside every block (off by default) |
 | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]) |
 | `predict_variance` | `true` also predicts each value's 1σ uncertainty: the network outputs a mean and log-variance and trains with `nn.GaussianNLLLoss` instead of MSE. Needs `label_scaling = "symmetric"` or `"one-sided"` |
+| `mass_weight_power` | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted; 0.5 in `hyperparams_rc.toml`). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |
 | `seed` | Random seed for weight initialization, dropout and batch order; the same seed, data and settings on the same machine give the same network |
 
 `configs/hyperparams_rc.toml` is a starting point for rotational velocity.
@@ -125,7 +126,7 @@ DiagnosticOutputs/
                       holds the MSE of the predicted mean
 ```
 
-Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun/yr).
+Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun km/s).
 
 ## Networks
 

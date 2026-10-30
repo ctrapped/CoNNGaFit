@@ -18,8 +18,8 @@ All notable changes to this project are documented here. The format follows
 - `examples/demo_inference.py`: runs the committed, pre-trained demo network (`examples/demo_model/`)
   on the demo's test galaxy with `use_model.run_inferences`, in a few seconds.
 - `mass_weight_power` hyperparameter: weights each pixel's (or ring's) loss by mass to that power,
-  so velocity networks aren't dominated by faint halo gas. 0 (the default) is plain MSE;
-  `configs/hyperparams_rc.toml` uses 0.5.
+  so velocity networks aren't dominated by faint halo gas. 0 (the default) is the unweighted loss;
+  `configs/hyperparams_rc.toml` uses 0.5. With `predict_variance` it weights the Gaussian NLL.
 - `seed` hyperparameter: seeds Python, NumPy and PyTorch before training and is saved in the checkpoint,
   so runs with the same seed, data and settings on the same machine give the same network.
 - `tests/integration/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo
