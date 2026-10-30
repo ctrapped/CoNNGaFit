@@ -58,8 +58,6 @@ HYPERPARAM_OVERRIDES = {
     "predict_variance": True,  # Also predict each ring's 1-sigma uncertainty
 }
 DEFAULT_EPOCHS = 200
-DETECTION = 1e20  # cm^-2: Keep VOF's demo noise (3e18 cm^-2 in each of 48 channels)
-
 
 def toml_lines(params):
     """Flat key = value TOML lines (JSON literals are valid TOML for strings, numbers and lists)."""
@@ -130,8 +128,7 @@ def plot(model_path, output, figure_file):
 
     velocities = (np.arange(cube.shape[2]) - (cube.shape[2] - 1) / 2) * channel_width
     moment0 = cube.sum(axis=2)  # total HI column density
-    detected = moment0 > DETECTION
-    moment1 = np.where(detected, (cube * velocities).sum(axis=2) / moment0, np.nan)
+    moment1 = (cube * velocities).sum(axis=2) / moment0
     extent = [-half_width, half_width, -half_width, half_width]
     maps = [
         (
@@ -208,7 +205,6 @@ def main():
     figure_file = output / "demo.png"
     rms, within_sigma, within_3sigma = plot(model_path, output, figure_file)
     print(f"Model:  {model_path}.pt\nFigure: {figure_file}\nRotation curve RMS error: {rms:.1f} km/s")  # noqa: T201
-    # print(f"Within predicted 1σ: {within_sigma:.0%} of rings (68% if calibrated)")  # noqa: T201
     print(f"Within predicted 1σ: {within_sigma:.0%} of rings ({within_3sigma:.0%} within 3σ)")  # noqa: T201
 
 
