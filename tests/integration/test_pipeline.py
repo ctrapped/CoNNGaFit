@@ -31,7 +31,10 @@ IMAGE = REPO / "examples" / "demo_data" / GALAXY / f"i{INCLINATION}" / IMAGE_NAM
 TARGET = "rotational_velocity"  # The demo images carry mass and rotational velocity annotations
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
-SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided", mass_weight_power=0.5)
+SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")
+# The runs with predict_variance also weight their loss by mass, covering the weighted Gaussian NLL for maps and
+# radial curves; the run without it trains unweighted, like the default configs
+MASS_WEIGHT_POWER = 0.5
 RADIAL_BINS = 10
 PREDICTION_RTOL, PREDICTION_ATOL = 1e-4, 1e-6
 
@@ -59,6 +62,7 @@ def write_configs(folder, head, radial_bins, predict_variance):
             **SMALL_HYPERPARAMS,
             "output_head": head,
             "predict_variance": predict_variance,
+            "mass_weight_power": MASS_WEIGHT_POWER if predict_variance else 0,
         }
     (folder / "hyperparams.toml").write_text("\n".join(toml_lines(hyperparams)) + "\n")
 
