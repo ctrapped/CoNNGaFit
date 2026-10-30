@@ -59,6 +59,7 @@ HYPERPARAM_OVERRIDES = {
 }
 DEFAULT_EPOCHS = 200
 
+
 def toml_lines(params):
     """Flat key = value TOML lines (JSON literals are valid TOML for strings, numbers and lists)."""
     return [f"{key} = {json.dumps(value)}" for key, value in params.items()]
