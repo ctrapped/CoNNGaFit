@@ -9,7 +9,7 @@ import unet3d_resblock as unet
 HEADS = ["fc", "conv", "conv_halfres"]
 CONV_HEADS = ["conv", "conv_halfres"]
 # stage_shapes() rows with no module of their own (concatenation, folding, resize) are not hooked;
-# the final map shape is checked by the forward-shape tests instead
+# the final map shape is checked on the output instead
 UNHOOKED_ROWS = ("+ skip", "resize to map", "fold spectra", "1x1 conv + resize")
 
 
@@ -22,18 +22,10 @@ def head_stages(model):
     return [model.avgpool0]
 
 
-def record_stage_shapes(model):
-    """Hook every stage of model in execution order; returns the list the hooks append (channels, dims) to."""
-
-    def record(module, inputs, out):
-        out = out[0] if isinstance(out, tuple) else out  # the stem also returns its half-resolution map
-        recorded.append((out.shape[1], tuple(out.shape[2:])))
-
+def stage_modules(model):
+    """Every stage of model with a module of its own, in execution order."""
     decoder = chain.from_iterable(zip(model.upsamples, model.dc_layers))
-    recorded = []
-    for module in [model.layer_stem, *model.encoder, *decoder, *head_stages(model)]:
-        module.register_forward_hook(record)
-    return recorded
+    return [model.layer_stem, *model.encoder, *decoder, *head_stages(model)]
 
 
 def test_too_many_stages_names_tightest_axis(make_model):
@@ -51,24 +43,6 @@ def test_rejects_unknown_upsample_mode(make_model):
         make_model(unet, upsample_mode="nearest")
 
 
-@pytest.mark.parametrize("head", HEADS)
-@pytest.mark.parametrize("upsample_mode", ["conv_transpose", "trilinear"])
-@pytest.mark.parametrize(
-    "input_shape, kernel",
-    [
-        ((16, 16, 16), (3, 3, 3)),
-        ((13, 10, 11), (3, 3, 3)),
-        ((16, 16, 16), (4, 4, 4)),
-    ],
-)
-def test_forward_shape_for_every_configuration(make_model, make_cube, head, upsample_mode, input_shape, kernel):
-    model = make_model(
-        unet, input_shape=input_shape, kernel_stem=kernel, kernel_coder=kernel, head=head, upsample_mode=upsample_mode
-    )
-    cube = make_cube(input_shape)
-    assert model(cube).shape == (len(cube), input_shape[1] * input_shape[2])
-
-
 @pytest.mark.parametrize("head", CONV_HEADS)
 @pytest.mark.parametrize("output_shape", [(8, 8), (20, 24)])
 def test_conv_heads_predict_on_any_map_grid(make_model, make_cube, head, output_shape):
@@ -79,13 +53,27 @@ def test_conv_heads_predict_on_any_map_grid(make_model, make_cube, head, output_
 
 @pytest.mark.parametrize("head", HEADS)
 @pytest.mark.parametrize("upsample_mode", ["conv_transpose", "trilinear"])
-def test_stage_shapes_match_forward_pass(make_model, make_cube, head, upsample_mode):
-    model = make_model(unet, head=head, upsample_mode=upsample_mode)
-    recorded = record_stage_shapes(model)
-    model(make_cube())
+@pytest.mark.parametrize(
+    "input_shape, kernel",
+    [
+        ((16, 16, 16), (3, 3, 3)),
+        ((13, 10, 11), (3, 3, 3)),
+        ((16, 16, 16), (4, 4, 4)),
+    ],
+)
+def test_stage_shapes_match_forward_pass(
+    make_model, make_cube, record_shapes, head, upsample_mode, input_shape, kernel
+):
+    model = make_model(
+        unet, input_shape=input_shape, kernel_stem=kernel, kernel_coder=kernel, head=head, upsample_mode=upsample_mode
+    )
+    recorded = record_shapes(stage_modules(model))
+    cube = make_cube(input_shape)
+    out = model(cube)
     expected = [
         (feats, tuple(shape))
         for label, feats, shape in model.stage_shapes()[1:]
         if not any(tag in label for tag in UNHOOKED_ROWS)
     ]
-    assert recorded == expected
+    assert recorded == expected  # every stage has the shape stage_shapes() reports
+    assert out.shape == (len(cube), input_shape[1] * input_shape[2])  # and the output is one value per pixel

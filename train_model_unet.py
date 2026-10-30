@@ -53,6 +53,7 @@ HYPERPARAM_KEYS = {
     "block_dropout_rate",
     "output_head",
     "label_scaling",
+    "predict_variance",
     "seed",
 }
 DATASET_KEYS = {
@@ -179,6 +180,14 @@ label_scaling = hyperparams["label_scaling"]
 if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
         f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
+    )
+predict_variance = hyperparams["predict_variance"]
+if not isinstance(predict_variance, bool):
+    raise ValueError(f"{args.hyperparams}: predict_variance = {predict_variance!r} should be true or false")
+if predict_variance and label_scaling == "none":
+    raise ValueError(
+        f'{args.hyperparams}: predict_variance = true needs label_scaling = "symmetric" or "one-sided", '
+        "since nn.GaussianNLLLoss floors the variance at 1e-6 in the units of the labels it trains on"
     )
 seed = hyperparams["seed"]
 # Weight initialization, dropout and the order training batches are drawn in all come from these generators
@@ -350,12 +359,17 @@ if radial_bins is not None:  # Labels are radial curves, so plot and save them a
 
 
 #### Save final-epoch outputs ####
-def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images=True):
+def save_batch_outputs(x, y, output, idx, dataset, output_base, epoch, comp_images=True):
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
-    image via its dataset index (idx), so names stay correct with shuffled or multiple batches."""
+    image via its dataset index (idx), so names stay correct with shuffled or multiple batches.
+    output is the network's output: the prediction, or (mean, logvar) if predict_variance, in which
+    case the predicted 1-sigma is saved and plotted too."""
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
-    np_pred = to_physical(pred.cpu().detach().numpy())
+    mean, logvar = output if predict_variance else (output, None)
+    np_pred = to_physical(mean.cpu().detach().numpy())
+    # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
+    np_sigma = np.exp(0.5 * logvar.cpu().detach().numpy()) * label_scale if predict_variance else None
     for tt in range(len(idx)):
         output_name = output_base + "_" + dataset.names[int(idx[tt])] + "_Epoch" + str(epoch)
         if comp_images:
@@ -371,30 +385,33 @@ def save_batch_outputs(x, y, pred, idx, dataset, output_base, epoch, comp_images
                 param_label=param_label,
                 unit_label=unit_label,
                 bin_op=bin_op,
+                uncertainty=np_sigma,
                 **radii,
             )  # Labels are already in physical units
-        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt)
+        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt, uncertainty=np_sigma)
 
 
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
-    """Run one training epoch: iterate the dataloader, backprop MSE loss each batch, and on
+    """Run one training epoch: iterate the dataloader, backprop loss_fn (see compute_loss) each batch, and on
     the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
-    Returns the loss averaged over all batches in the epoch.
+    Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch.
     """
     model.train()
     size = len(dataloader.dataset)
-    epoch_loss = 0.0
+    epoch_loss, epoch_mse = 0.0, 0.0
     num_batches = len(dataloader)
     for batch, (x, y, idx) in enumerate(dataloader):
         x = x.to(device)
         y = y.to(device)
 
-        pred = model(x.float())
-        loss = loss_fn(pred, y.float())
+        output = model(x.float())
+        loss = loss_fn(output, y.float())
+        pred = output[0] if predict_variance else output
         epoch_loss += loss.item()
+        epoch_mse += mse_fn(pred, y.float()).item()
         if epoch >= epochs - 1:
-            save_batch_outputs(x, y, pred, idx, training_data, image_output_training, epoch, comp_images=False)
+            save_batch_outputs(x, y, output, idx, training_data, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -405,7 +422,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
             current = batch * len(x)
             logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
 
-    return epoch_loss / num_batches
+    return epoch_loss / num_batches, epoch_mse / num_batches
 
 
 def count_accurate(pred, y):
@@ -420,12 +437,13 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     "accuracy" (the percentage of predicted values within accuracy_tolerance of the label -
     a loose sanity metric, not a real accuracy). On the final epoch, also writes correlation
     plots and per-sample comparison images/hdf5 snapshots. Returns
-    (validation_loss, accuracy, specific_accuracy) where specific_accuracy is the accuracy of
-    every sample in the validation set, in dataset order.
+    (validation_loss, validation_mse, accuracy, specific_accuracy) where validation_mse is the MSE of
+    the predicted mean and specific_accuracy is the accuracy of every sample in the validation set,
+    in dataset order.
     """
     model.eval()
     num_batches = len(dataloader)
-    validation_loss, correct = 0, 0
+    validation_loss, validation_mse, correct = 0, 0, 0
     total = 0
     final = epoch >= epochs - 1
     all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
@@ -436,8 +454,10 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             x = x.to(device)
             y = y.to(device)
 
-            pred = model(x.float())
-            validation_loss += loss_fn(pred, y.float()).item()
+            output = model(x.float())
+            validation_loss += loss_fn(output, y.float()).item()
+            pred = output[0] if predict_variance else output
+            validation_mse += mse_fn(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
@@ -447,13 +467,14 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, pred, idx, validation_data, image_output_validation, epoch)
+                save_batch_outputs(x, y, output, idx, validation_data, image_output_validation, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
     accuracy = correct / total * 100
     validation_loss /= num_batches
-    logger.info("Validation: accuracy %.1f%%, avg loss %8f", accuracy, validation_loss)
+    validation_mse /= num_batches
+    logger.info("Validation: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, validation_loss, validation_mse)
 
     if final and radial_bins is None:
         make_correlation_plot(
@@ -464,18 +485,18 @@ def validation_loop(dataloader, model, loss_fn, epoch):
         )
 
     model.train()
-    return validation_loss, accuracy, specific_accuracy
+    return validation_loss, validation_mse, accuracy, specific_accuracy
 
 
 #### Define Test Loop ####
 def test_loop(dataloader, model, loss_fn, epoch):
     """Evaluate the model on the held-out test set. Same rough accuracy metric and final-epoch
     diagnostic outputs as validation_loop above, written under image_output_final_test instead.
-    Returns (test_loss, accuracy, specific_accuracy).
+    Returns (test_loss, test_mse, accuracy, specific_accuracy).
     """
     model.eval()
     num_batches = len(dataloader)
-    test_loss, correct = 0, 0
+    test_loss, test_mse, correct = 0, 0, 0
     total = 0
     final = epoch >= epochs - 1
     all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
@@ -485,8 +506,10 @@ def test_loop(dataloader, model, loss_fn, epoch):
         for x, y, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
-            pred = model(x.float())
-            test_loss += loss_fn(pred, y.float()).item()
+            output = model(x.float())
+            test_loss += loss_fn(output, y.float()).item()
+            pred = output[0] if predict_variance else output
+            test_mse += mse_fn(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
@@ -496,13 +519,14 @@ def test_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, pred, idx, test_data, image_output_final_test, epoch)
+                save_batch_outputs(x, y, output, idx, test_data, image_output_final_test, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
     accuracy = correct / total * 100
     test_loss /= num_batches
-    logger.info("Test: accuracy %.1f%%, avg loss %8f", accuracy, test_loss)
+    test_mse /= num_batches
+    logger.info("Test: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, test_loss, test_mse)
 
     if final and radial_bins is None:
         make_correlation_plot(
@@ -513,7 +537,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
         )
 
     model.train()
-    return test_loss, accuracy, specific_accuracy
+    return test_loss, test_mse, accuracy, specific_accuracy
 
 
 #### Define the Model ####
@@ -530,13 +554,26 @@ model = NeuralNetwork(
     block_dropout_rate=block_dropout_rate,
     head=output_head,
     output_size=radial_bins,
+    predict_variance=predict_variance,
 ).to(device)
 model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
 validation_names = validation_data.names
 training_names = training_data.names
 
 #### Define Loss Function and Optimizer ####
-loss_fn = nn.MSELoss()
+loss_fn = nn.GaussianNLLLoss() if predict_variance else nn.MSELoss()  # The training objective
+mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
+LOSS_LABEL = "Gaussian NLL" if predict_variance else "MSE"
+
+
+def compute_loss(output, y):
+    """The training objective: Gaussian NLL of (mean, exp(logvar)) if predict_variance, else MSE."""
+    if predict_variance:
+        mean, logvar = output
+        return loss_fn(mean, y, logvar.exp())
+    return loss_fn(output, y)
+
+
 optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=weight_decay
 )  # Steepest gradient descent, can use different optimizers
@@ -544,6 +581,8 @@ optimizer = torch.optim.Adam(
 #### Initialize losses and specific accuracies ####
 training_losses = np.zeros((epochs))
 validation_losses = np.zeros((epochs))
+training_mses = np.zeros((epochs))
+validation_mses = np.zeros((epochs))
 validation_accuracies = np.zeros((epochs))
 specific_accuracies = np.zeros((len(validation_data), epochs))  # Each validation sample's accuracy, every epoch
 
@@ -551,9 +590,9 @@ specific_accuracies = np.zeros((len(validation_data), epochs))  # Each validatio
 #### Perform Training Loop ####
 for t in range(epochs):
     logger.info("Epoch %d/%d", t + 1, epochs)
-    training_losses[t] = train_loop(train_dataloader, model, loss_fn, optimizer, t)
-    validation_losses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
-        validation_dataloader, model, loss_fn, t
+    training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t)
+    validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
+        validation_dataloader, model, compute_loss, t
     )
 
 
@@ -574,6 +613,7 @@ hf_norm.create_dataset("weight_decay", data=weight_decay)
 hf_norm.create_dataset("n_filt0", data=n_filt0)
 hf_norm.create_dataset("dropout_rate", data=dropout_rate)
 hf_norm.create_dataset("block_dropout_rate", data=block_dropout_rate)
+hf_norm.create_dataset("predict_variance", data=predict_variance)
 hf_norm.create_dataset("run_name", data=run_name)
 hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
@@ -603,8 +643,11 @@ test_data = CoNNGaFitImageDataset(
 test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
 testing_names = test_data.names
 
-final_test_loss, final_test_accuracy, final_test_specific_accuracy = test_loop(test_dataloader, model, loss_fn, t)
+final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = test_loop(
+    test_dataloader, model, compute_loss, t
+)
 logger.info("Testing set loss = %g", final_test_loss)
+logger.info("Testing set MSE = %g", final_test_mse)
 logger.info("Testing set accuracy = %g", final_test_accuracy)
 logger.info("Testing set specific accuracies:")
 for name, accuracy in zip(testing_names, final_test_specific_accuracy):
@@ -612,20 +655,21 @@ for name, accuracy in zip(testing_names, final_test_specific_accuracy):
 
 
 #### Make Basic Diagnostic Outputs ####
-fig1 = plt.figure()
-plt.plot(np.log10(training_losses))
-plt.title("Training Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Log(Loss)")
-plt.savefig(diagnostic_output + "_trainingLoss.png")
+def plot_loss(losses, title, output):
+    """Plot a loss curve per epoch, on a log axis unless some value isn't positive (the Gaussian NLL can be negative)."""
+    plt.figure()
+    plt.plot(np.arange(1, len(losses) + 1), losses)
+    if np.all(losses > 0):
+        plt.yscale("log")
+    plt.title(title)
+    plt.xlabel("Epoch")
+    plt.ylabel(LOSS_LABEL)
+    plt.savefig(output)
+    plt.close()
 
-fig2 = plt.figure()
-plt.plot(np.log10(validation_losses))
-plt.title("Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Log(Loss)")
 
-plt.savefig(diagnostic_output + "_validationLoss.png")
+plot_loss(training_losses, "Training Loss", diagnostic_output + "_trainingLoss.png")
+plot_loss(validation_losses, "Validation Loss", diagnostic_output + "_validationLoss.png")
 
 fig3 = plt.figure()
 plt.plot(validation_accuracies)
@@ -651,12 +695,15 @@ plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
 hf_diagnostic = h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w")
 hf_diagnostic.create_dataset("training_losses", data=training_losses)
 hf_diagnostic.create_dataset("validation_losses", data=validation_losses)
+hf_diagnostic.create_dataset("training_mses", data=training_mses)
+hf_diagnostic.create_dataset("validation_mses", data=validation_mses)
 hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
 hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
 hf_diagnostic.create_dataset("training_names", data=training_names)
 hf_diagnostic.create_dataset("validation_names", data=validation_names)
 hf_diagnostic.create_dataset("testing_names", data=testing_names)
 hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
+hf_diagnostic.create_dataset("final_test_mse", data=final_test_mse)
 hf_diagnostic.create_dataset("final_test_accuracy", data=final_test_accuracy)
 hf_diagnostic.create_dataset("final_test_specific_accuracy", data=final_test_specific_accuracy)
 
