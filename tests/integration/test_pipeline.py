@@ -11,6 +11,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
+import torch
 
 from use_model import load_model, predict, run_inferences
 
@@ -149,6 +150,7 @@ def test_checkpoint_reproduces_saved_prediction(trained):
 def test_run_inferences_writes_expected_outputs(trained):
     name, _, radial_bins, predict_variance, run_dir = trained
     run_inferences(str(run_dir / "nets" / name), [str(IMAGE)], str(run_dir / "inference_"))
+    assert torch.is_grad_enabled()  # inference leaves gradients on for the caller
     output, dataset = ("radialPlot", "prediction") if radial_bins else ("projectionMap", "image")
     output = run_dir / f"inference_{IMAGE.stem}_{output}"
     assert output.with_suffix(".png").is_file()  # a plot of the prediction
