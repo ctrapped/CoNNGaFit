@@ -45,24 +45,34 @@ def load_model(model_path):
         block_dropout_rate=hyperparams["block_dropout_rate"],
         head=metadata["output_head"],
         output_size=radial_bins,
+        predict_variance=hyperparams.get("predict_variance", False),  # absent in checkpoints from before it existed
     ).to(device)
     model.load_state_dict(torch.load(model_path + ".pt", map_location=device, weights_only=True))
     return model.eval(), metadata
 
 
-def predict(model, metadata, image_paths, save_latent_images=False):
-    """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve."""
+def predict(model, metadata, image_paths, save_latent_images=False, return_std=False):
+    """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve.
+    With return_std, yield (name, prediction, std): std is the predicted 1-sigma in the same units and shape, or
+    None if the model wasn't trained with predict_variance."""
     image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
     label_offset, label_scale = metadata["label_stats"]
     dataset = CoNNGaFitImageInferenceDataset(
         image_paths, transform=Compose([ToTensor(), Normalize(image_mean, image_stdv)])
     )
     n_y, n_x = (int(n) for n in metadata["input_shape"][1:])
-    with torch.no_grad():
-        for name, image in zip(dataset.names, dataset):
-            pred = model(image[None].float().to(device), save_latent_images).cpu().numpy()[0]
-            pred = pred * label_scale + label_offset  # Back to physical units
-            yield name, (pred if "radial_bins" in metadata else pred.reshape(n_y, n_x))
+    shape = (-1,) if "radial_bins" in metadata else (n_y, n_x)
+    for name, image in zip(dataset.names, dataset):
+        with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
+            output = model(image[None].float().to(device), save_latent_images)
+        mean, logvar = output if model.predict_variance else (output, None)
+        pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
+        if not return_std:
+            yield name, pred
+            continue
+        # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
+        std = None if logvar is None else (np.exp(0.5 * logvar.cpu().numpy()[0]) * label_scale).reshape(shape)
+        yield name, pred, std
 
 
 def ring_radii_kpc(path, n_bins):
@@ -77,27 +87,33 @@ def ring_radii_kpc(path, n_bins):
     return ring_radii(fov_kpc, n_bins)
 
 
-def save_radial_curve(curve, radii, output, param_label, unit_label):
-    """Save a predicted radial curve to output + "radialPlot.png" and output + "radialPlot.hdf5"."""
+def save_radial_curve(curve, radii, output, param_label, unit_label, uncertainty=None):
+    """Save a predicted radial curve to output + "radialPlot.png" and output + "radialPlot.hdf5". With uncertainty
+    (the predicted 1-sigma of each ring), its +/-1 sigma is shaded around the curve and saved too."""
     x = np.arange(len(curve)) if radii is None else radii
     plt.figure()
-    plt.plot(x, curve, "k", lw=2.5)
-    plt.axhline(0, color="k", ls="--", lw=1.5)
+    plt.plot(x, curve, "k", lw=2.5, label="Prediction")
+    if uncertainty is not None:
+        plt.fill_between(x, curve - uncertainty, curve + uncertainty, color="k", alpha=0.2, lw=0, label=r"$\pm1\sigma$")
+    plt.axhline(0, color="k", ls="--", lw=1.5, label="Zero line")
     plt.xlabel("Radial bin" if radii is None else "Radius [kpc]")
     plt.ylabel(param_label + " " + unit_label)
-    plt.legend(["Prediction", "Zero line"])
+    plt.legend()
     plt.savefig(output + "radialPlot.png", bbox_inches="tight")  # "tight" keeps the y-axis label in the figure
     plt.close()
 
     with h5py.File(output + "radialPlot.hdf5", "w") as hf:
         hf.create_dataset("prediction", data=curve)
+        if uncertainty is not None:
+            hf.create_dataset("uncertainty", data=uncertainty)
         if radii is not None:
             hf.create_dataset("r_plot", data=radii)
 
 
 def run_inferences(model_path, image_paths, output_prefix, save_latent_images=False):
     """Run the network at model_path (no .pt/.hdf5 extension) on each datacube in image_paths, saving a PNG and an
-    hdf5 of each prediction under output_prefix: <name>_projectionMap for maps, <name>_radialPlot for radial curves."""
+    hdf5 of each prediction under output_prefix: <name>_projectionMap for maps, <name>_radialPlot for radial curves.
+    Networks trained with predict_variance also save and plot each prediction's 1-sigma uncertainty."""
     logger.info("Using %s device", device)
     model, metadata = load_model(model_path)
     target = metadata["target"]
@@ -106,11 +122,12 @@ def run_inferences(model_path, image_paths, output_prefix, save_latent_images=Fa
 
     image_paths = list(image_paths)
     os.makedirs(os.path.dirname(output_prefix) or ".", exist_ok=True)
-    for path, (name, pred) in zip(image_paths, predict(model, metadata, image_paths, save_latent_images)):
+    predictions = predict(model, metadata, image_paths, save_latent_images, return_std=True)
+    for path, (name, pred, std) in zip(image_paths, predictions):
         output = output_prefix + name + "_"
         if pred.ndim == 1:
             radii = ring_radii_kpc(path, len(pred))
-            save_radial_curve(pred, radii, output, param_label, unit_label)
+            save_radial_curve(pred, radii, output, param_label, unit_label, uncertainty=std)
         else:
             # make_image takes the flattened map; predictions are already in physical units
             make_image(
@@ -120,6 +137,7 @@ def run_inferences(model_path, image_paths, output_prefix, save_latent_images=Fa
                 sim_to_physical_units=1,
                 param_label=param_label,
                 unit_label=unit_label,
+                uncertainty=std,
             )
         logger.info("Saved %s", output)
 

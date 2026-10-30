@@ -22,11 +22,17 @@ All notable changes to this project are documented here. The format follows
   `configs/hyperparams_rc.toml` uses 0.5.
 - `seed` hyperparameter: seeds Python, NumPy and PyTorch before training and is saved in the checkpoint,
   so runs with the same seed, data and settings on the same machine give the same network.
-- `tests/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo
+- `tests/integration/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo
   image, writes a valid checkpoint, and predicts outputs of the expected size when reloaded.
-- `tests/test_demo.py` (marked `slow`): trains the demo on all its data and checks the losses
+- `tests/integration/test_demo.py` (marked `slow`): trains the demo on all its data and checks the losses
   fall and the test galaxy's rotation curve is predicted to within 10 km/s, for the new and committed
   networks. CI runs it on pull requests; `pytest -m "not slow"` skips it locally.
+- `predict_variance` hyperparameter: the ResBlock U-Net also predicts each value's 1σ uncertainty,
+  trained with `nn.GaussianNLLLoss`. The uncertainty is saved with the final-epoch snapshots and
+  comparison plots, returned by `use_model.predict(..., return_std=True)` and written by `run_inferences`.
+- Training records the MSE of the predicted mean (`training_mses`, `validation_mses` and `final_test_mse`).
+- Tests for `predict_variance`: Gaussian NLL gradients for every network and head, pipeline runs with
+  every output head, and calibration of the demo's predicted uncertainties.
 
 ### Changed
 - **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
@@ -34,6 +40,13 @@ All notable changes to this project are documented here. The format follows
   `cylindrical_radial_mass_flux`), plus the new `rotational_momentum`. Divide by a pixel or ring
   width after inference to get a mass flux.
 - **Breaking:** hyperparameter files need a `seed` key (`seed = 0` in `configs/`).
+- **Breaking:** hyperparameter files need a `predict_variance` key (`predict_variance = false` in `configs/`).
+- The demo trains with `predict_variance`. Its figure adds ±1σ bands, a residual panel and both loss
+  curves, and the committed demo network is retrained.
+- Loss plots use a log axis unless the loss can be negative.
+- The demo tests check the MSE of the mean, since the Gaussian NLL can be negative.
+- Tests are split into `tests/unit/` (networks and building blocks, a few seconds) and
+  `tests/integration/` (training, inference and the demo); `pytest tests/unit` runs only the unit tests.
 - **Breaking:** `use_model.py` runs networks trained by `train_model_unet.py`, rebuilding them from
   their checkpoint; `run_inferences` and the inference scripts no longer take a network type.
 - Validation accuracy counts predictions within 0.1 standard deviations of the training labels,

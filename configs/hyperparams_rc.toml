@@ -41,6 +41,12 @@ label_scaling = "none"
 #   1   - mass-weighted
 mass_weight_power = 0.5
 
+# Predict a per-pixel uncertainty along with each value: the network outputs a mean and a
+# log-variance, trained with a Gaussian negative log-likelihood instead of MSE.
+# Requires label_scaling = "symmetric" or "one-sided", since the loss floors the variance at
+# 1e-6 in the units of the labels it trains on.
+predict_variance = false
+
 # Random seed for weight initialization, dropout and the order of training batches. Runs with the same
 # seed, data and hyperparameters on the same machine give the same network.
 seed = 0

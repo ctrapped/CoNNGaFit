@@ -15,8 +15,10 @@ from unet_blocks import (
     _match_spatial,
 )
 
-LENGTHS = range(1, 12)
-KERNELS = (2, 3, 4, 5)
+# The padding depends only on the kernel's parity and on the length modulo the stride: these lengths cover
+# every remainder for strides 1-3, and lengths below the kernel size
+LENGTHS = (1, 2, 5, 6)
+KERNELS = (2, 3)
 STRIDES = (1, 2, 3)
 BATCH, CHANNELS = 2, 3
 KERNEL = (3, 3, 3)
