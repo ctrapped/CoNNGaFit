@@ -182,7 +182,7 @@ if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
         f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
     )
-mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted MSE
+mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
 if not mass_weight_power >= 0:
     raise ValueError(f"{args.hyperparams}: mass_weight_power = {mass_weight_power!r} should be 0 or more")
 predict_variance = hyperparams["predict_variance"]
@@ -578,19 +578,23 @@ training_names = training_data.names
 def weighted_mse_loss(pred, y, w):
     """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
     return torch.mean(w * nn.functional.mse_loss(pred, y, reduction="none"))
-def weighted_gaussian_nll_loss(pred, y, w):
-     "GaussianNLLLoss weighted by w"
-     return torch.mean(w * nn.functional.gaussian_nll_loss(mean, y, logvar.exp(), reduction="none"))
+
+
+def weighted_gaussian_nll_loss(pred, y, logvar, w):
+    """GaussianNLLLoss weighted by w"""
+    return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
+
+
 loss_fn = weighted_gaussian_nll_loss if predict_variance else weighted_mse_loss  # The training objective
 mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
 LOSS_LABEL = "Gaussian NLL" if predict_variance else "MSE"
 
 
 def compute_loss(output, y, w):
-    """The training objective: Gaussian NLL of (mean, exp(logvar)) if predict_variance, else MSE."""
+    """The training objective: Gaussian NLL of (mean, exp(logvar)) if predict_variance, else MSE weighted by w."""
     if predict_variance:
         mean, logvar = output
-        return loss_fn(mean, y, w)
+        return loss_fn(mean, y, logvar, w)
     return loss_fn(output, y, w)
 
 
