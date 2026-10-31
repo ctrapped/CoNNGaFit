@@ -2,14 +2,14 @@
 
 [![tests](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml/badge.svg)](https://github.com/ctrapped/CoNNGaFit/actions/workflows/tests.yml)
 
-**Co**nvolutional **N**eural **N**etworks for **Ga**laxy **Fit**ting: train 3-d convolutional neural networks to predict the physical properties of a galaxy's gas, such as its radial mass flux or rotation, directly from HI 21cm spectral datacubes.
+**Co**nvolutional **N**eural **N**etworks for **Ga**laxy **Fit**ting: train 3-d convolutional neural networks to predict the physical properties of a galaxy's gas, such as its radial momentum or rotation, directly from HI 21cm spectral datacubes.
 
 Training data comes from [VeryObservableFIRE](https://github.com/ctrapped/VeryObservableFIRE) (VOF), which turns FIRE galaxy simulations into synthetic telescope observations paired with the true gas properties at every pixel.
 
 ## Highlights
 
 - **Network:** a 3-d residual U-Net (`unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves.
-- **Targets:** mass, radial / cylindrical-radial / rotational velocity, and radial / cylindrical-radial mass flux, all read from VOF's per-pixel annotations.
+- **Targets:** mass, radial / cylindrical-radial / rotational velocity, and radial / cylindrical-radial / rotational momentum (mass × velocity), all read from VOF's per-pixel annotations.
 - **Configuration:** hyperparameters and datasets live in two TOML files, so a training run is reproducible from its config, and every trained model stores both files alongside its weights.
 - **Development:** 360 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
 
@@ -57,8 +57,8 @@ Training is set by two parameter files, `configs/hyperparams.toml` and `configs/
 `configs/datasets.toml` sets what to learn and which VOF outputs to learn it from:
 
 ```toml
-target = "radial_mass_flux"     # mass, radial_velocity, cylindrical_radial_velocity,
-                                # rotational_velocity, radial_mass_flux, cylindrical_radial_mass_flux
+target = "radial_momentum"      # mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity,
+                                # radial_momentum, cylindrical_radial_momentum, rotational_momentum
 augment = "major_axis"          # rotations/flips added to the training set: "major_axis", "all" or "none"
 inclinations = [45]             # inclinations to use in every set: "all", or a list in degrees
 radial_bins = 0                 # 0 trains on maps; N > 0 trains on N-bin radial curves
@@ -90,6 +90,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `dropout_rate`, `block_dropout_rate` | Dropout before the output layer, and channel-wise dropout inside every block (off by default) |
 | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]) |
 | `predict_variance` | `true` also predicts each value's 1σ uncertainty: the network outputs a mean and log-variance and trains with `nn.GaussianNLLLoss` instead of MSE. Needs `label_scaling = "symmetric"` or `"one-sided"` |
+| `mass_weight_power` | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted, the default; 0.5 is a good start). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |
 | `seed` | Random seed for weight initialization, dropout and batch order; the same seed, data and settings on the same machine give the same network |
 
 `configs/hyperparams_rc.toml` is a starting point for rotational velocity.
@@ -125,7 +126,7 @@ DiagnosticOutputs/
                       holds the MSE of the predicted mean
 ```
 
-Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun/yr).
+Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun km/s).
 
 ## Networks
 

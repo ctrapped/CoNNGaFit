@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   rotation curve of one it hasn't seen, in about a minute on a CPU. Its figure is in the README.
 - `examples/demo_inference.py`: runs the committed, pre-trained demo network (`examples/demo_model/`)
   on the demo's test galaxy with `use_model.run_inferences`, in a few seconds.
+- `mass_weight_power` hyperparameter: weights each pixel's (or ring's) loss by mass to that power,
+  so velocity networks aren't dominated by faint halo gas. 0 (the default) is the unweighted loss,
+  and 0.5 a good start. With `predict_variance` it weights the Gaussian NLL.
 - `seed` hyperparameter: seeds Python, NumPy and PyTorch before training and is saved in the checkpoint,
   so runs with the same seed, data and settings on the same machine give the same network.
 - `tests/integration/test_pipeline.py`: every output head (and radial curves) trains for two epochs on one demo
@@ -32,6 +35,10 @@ All notable changes to this project are documented here. The format follows
   every output head, and calibration of the demo's predicted uncertainties.
 
 ### Changed
+- **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
+  `radial_momentum` and `cylindrical_radial_momentum` (formerly `radial_mass_flux` and
+  `cylindrical_radial_mass_flux`), plus the new `rotational_momentum`. Divide by a pixel or ring
+  width after inference to get a mass flux.
 - **Breaking:** hyperparameter files need a `seed` key (`seed = 0` in `configs/`).
 - **Breaking:** hyperparameter files need a `predict_variance` key (`predict_variance = false` in `configs/`).
 - The demo trains with `predict_variance`. Its figure adds ±1σ bands, a residual panel and both loss

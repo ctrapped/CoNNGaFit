@@ -1,4 +1,4 @@
-# Training hyperparameters for train_model_unet.py (tuned for radial_mass_flux)
+# Training hyperparameters for train_model_unet.py (tuned for radial_momentum)
 # Pass a different file with --hyperparams. Every key below is required.
 
 learning_rate = 1e-4
@@ -30,9 +30,17 @@ output_head = "conv_halfres"
 
 # Label scaling, computed once from every training label and saved with the model:
 #   "none"      - train on labels in physical units
-#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. mass flux)
+#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. radial momentum)
 #   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
 label_scaling = "none"
+
+# Weight each pixel's (or ring's) loss (MSE, or Gaussian NLL with predict_variance) by its
+# mass ** mass_weight_power, normalized to mean 1 per image, so the loss isn't dominated by faint
+# halo gas; meant for velocity targets. Pixels with no mass aren't trained (mean or 1σ).
+#   0   - unweighted (default)
+#   0.5 - square root of mass, so the densest pixels don't dominate either
+#   1   - mass-weighted
+mass_weight_power = 0
 
 # Predict a per-pixel uncertainty along with each value: the network outputs a mean and a
 # log-variance, trained with a Gaussian negative log-likelihood instead of MSE.

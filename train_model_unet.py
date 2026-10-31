@@ -56,6 +56,7 @@ HYPERPARAM_KEYS = {
     "predict_variance",
     "seed",
 }
+OPTIONAL_HYPERPARAM_KEYS = {"mass_weight_power"}
 DATASET_KEYS = {
     "target",
     "augment",
@@ -165,7 +166,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
-hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS)
+hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS)
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
@@ -181,6 +182,9 @@ if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
         f'{args.hyperparams}: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"'
     )
+mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
+if not mass_weight_power >= 0:
+    raise ValueError(f"{args.hyperparams}: mass_weight_power = {mass_weight_power!r} should be 0 or more")
 predict_variance = hyperparams["predict_variance"]
 if not isinstance(predict_variance, bool):
     raise ValueError(f"{args.hyperparams}: predict_variance = {predict_variance!r} should be true or false")
@@ -278,7 +282,7 @@ logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, trai
 label_offset, label_scale = 0.0, 1.0
 all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
 if label_scaling != "none":
-    if label_scaling == "symmetric":  # e.g. mass flux: divide by max(|label|), to [-1, 1]
+    if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
         label_scale = np.max(np.abs(all_labels))
     else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
         label_offset = (np.max(all_labels) + np.min(all_labels)) / 2
@@ -323,7 +327,8 @@ validation_data = CoNNGaFitImageDataset(
 
 
 class WithIndices(Dataset):
-    """Wraps a dataset so each sample also returns its index, to look up its name after shuffling."""
+    """Wraps a dataset so each sample also returns its loss weights (see mass_weight_power) and its index,
+    to look up its name after shuffling."""
 
     def __init__(self, dataset):
         self.dataset = dataset
@@ -332,7 +337,12 @@ class WithIndices(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        return (*self.dataset[idx], idx)
+        image, label = self.dataset[idx]
+        if mass_weight_power > 0:
+            weights = self.dataset.mass_weights(idx, mass_weight_power)
+        else:
+            weights = np.ones_like(label)
+        return image, label, weights, idx
 
 
 train_dataloader = DataLoader(WithIndices(training_data), batch_size=batch_size, shuffle=True)  # Reshuffled every epoch
@@ -401,12 +411,13 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
     size = len(dataloader.dataset)
     epoch_loss, epoch_mse = 0.0, 0.0
     num_batches = len(dataloader)
-    for batch, (x, y, idx) in enumerate(dataloader):
+    for batch, (x, y, w, idx) in enumerate(dataloader):
         x = x.to(device)
         y = y.to(device)
+        w = w.to(device)
 
         output = model(x.float())
-        loss = loss_fn(output, y.float())
+        loss = loss_fn(output, y.float(), w.float())
         pred = output[0] if predict_variance else output
         epoch_loss += loss.item()
         epoch_mse += mse_fn(pred, y.float()).item()
@@ -450,12 +461,13 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     specific_accuracy = np.zeros(len(dataloader.dataset))
 
     with torch.no_grad():
-        for x, y, idx in dataloader:
+        for x, y, w, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
+            w = w.to(device)
 
             output = model(x.float())
-            validation_loss += loss_fn(output, y.float()).item()
+            validation_loss += loss_fn(output, y.float(), w.float()).item()
             pred = output[0] if predict_variance else output
             validation_mse += mse_fn(pred, y.float()).item()
 
@@ -503,11 +515,12 @@ def test_loop(dataloader, model, loss_fn, epoch):
     specific_accuracy = np.zeros(len(dataloader.dataset))
 
     with torch.no_grad():
-        for x, y, idx in dataloader:
+        for x, y, w, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
+            w = w.to(device)
             output = model(x.float())
-            test_loss += loss_fn(output, y.float()).item()
+            test_loss += loss_fn(output, y.float(), w.float()).item()
             pred = output[0] if predict_variance else output
             test_mse += mse_fn(pred, y.float()).item()
 
@@ -560,18 +573,30 @@ model.summary(print_fn=logger.info, layers=False)  # stage table and parameter c
 validation_names = validation_data.names
 training_names = training_data.names
 
+
 #### Define Loss Function and Optimizer ####
-loss_fn = nn.GaussianNLLLoss() if predict_variance else nn.MSELoss()  # The training objective
+def weighted_mse_loss(pred, y, w):
+    """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
+    return torch.mean(w * nn.functional.mse_loss(pred, y, reduction="none"))
+
+
+def weighted_gaussian_nll_loss(pred, y, logvar, w):
+    """Gaussian NLL of (pred, exp(logvar)), each pixel (or ring) weighted by w; all ones is nn.GaussianNLLLoss."""
+    return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
+
+
+loss_fn = weighted_gaussian_nll_loss if predict_variance else weighted_mse_loss  # The training objective
 mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
-LOSS_LABEL = "Gaussian NLL" if predict_variance else "MSE"
+LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
 
-def compute_loss(output, y):
-    """The training objective: Gaussian NLL of (mean, exp(logvar)) if predict_variance, else MSE."""
+def compute_loss(output, y, w):
+    """The training objective, each pixel (or ring) weighted by w: Gaussian NLL of (mean, exp(logvar)) if
+    predict_variance, else MSE."""
     if predict_variance:
         mean, logvar = output
-        return loss_fn(mean, y, logvar.exp())
-    return loss_fn(output, y)
+        return loss_fn(mean, y, logvar, w)
+    return loss_fn(output, y, w)
 
 
 optimizer = torch.optim.Adam(

@@ -23,8 +23,10 @@ VOF_VIEW = re.compile(r"_i(?P<inclination>[^_]+)_pa(?P<position_angle>[^_]+)_(?P
 def snapshot_range(snapshots, where):
     """(minSnap, maxSnap) from a snapshot number or an inclusive [minSnap, maxSnap] pair."""
     if isinstance(snapshots, int):
+        # One snapshot tha is an interger
         return snapshots, snapshots
     if isinstance(snapshots, (list, tuple)) and len(snapshots) == 2 and all(isinstance(v, int) for v in snapshots):
+        # A list of two snapshots, which are integers
         return snapshots[0], snapshots[1]
     raise ValueError(f"{where}: snapshots = {snapshots!r} should be a snapshot or [minSnap, maxSnap]")
 
@@ -96,17 +98,15 @@ def face_on_path(path):
 
 
 #### Labels ####
-KM_PER_KPC = 3.086e16
-S_PER_YR = 3.154e7
-
 # Training targets, and the VOF annotation maps each is made from (multiplied together)
 TARGETS = {
     "mass": ["mass_annotation"],
     "radial_velocity": ["radial_velocity_annotation"],
     "cylindrical_radial_velocity": ["cylindrical_radial_velocity_annotation"],
     "rotational_velocity": ["rotational_velocity_annotation"],
-    "radial_mass_flux": ["mass_annotation", "radial_velocity_annotation"],
-    "cylindrical_radial_mass_flux": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
+    "radial_momentum": ["mass_annotation", "radial_velocity_annotation"],
+    "cylindrical_radial_momentum": ["mass_annotation", "cylindrical_radial_velocity_annotation"],
+    "rotational_momentum": ["mass_annotation", "rotational_velocity_annotation"],
 }
 # target -> (plot label, plot units, how pixels are combined when binning plots)
 TARGET_SETTINGS = {
@@ -114,30 +114,32 @@ TARGET_SETTINGS = {
     "radial_velocity": ("Rad. Vel.", r"[km s$^{-1}$]", "mean"),
     "cylindrical_radial_velocity": ("Cyl. Rad. Vel.", r"[km s$^{-1}$]", "mean"),
     "rotational_velocity": ("Rot. Vel.", r"[km s$^{-1}$]", "mean"),
-    "radial_mass_flux": ("Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
-    "cylindrical_radial_mass_flux": ("Cyl. Radial Mass Flux", r"[M$_{\odot}$ yr$^{-1}$]", "sum"),
+    "radial_momentum": ("Radial Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
+    "cylindrical_radial_momentum": ("Cyl. Radial Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
+    "rotational_momentum": ("Rot. Momentum", r"[M$_{\odot}$ km s$^{-1}$]", "sum"),
 }
-# Targets converted from Msun km/s to a mass flux in Msun/yr (see label_map)
-MASS_FLUX_TARGETS = {"radial_mass_flux", "cylindrical_radial_mass_flux"}
+# Momentum targets, mass * velocity [Msun km/s]: summed in radial curves, not mass-weighted like velocities
+MOMENTUM_TARGETS = {"radial_momentum", "cylindrical_radial_momentum", "rotational_momentum"}
 
 
 def label_map(hf, target):
-    """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun/yr (mass fluxes) per pixel."""
-    # e.g. radial mass flux = mass * radial velocity, per pixel
-    label = np.prod([hf[name][()] for name in TARGETS[target]], axis=0)
-    if target in MASS_FLUX_TARGETS:
-        # Mass flux through a shell one pixel wide: mass * velocity / pixel width [Msun/yr]
-        pixel_kpc = hf.attrs["fov_kpc"] / label.shape[1]
-        label = label / (pixel_kpc * KM_PER_KPC) * S_PER_YR
+    """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun km/s (momenta) per pixel."""
+    # e.g. radial momentum = mass * radial velocity, per pixel
+    target_maps = TARGETS[target]
+    if len(target_maps) > 1:
+        # Multiply Mass and Velocities for Momenta
+        label = np.multiply(hf[target_maps[0]][...], hf[target_maps[1]][...])
+    else:
+        label = hf[target_maps[0]][...]
     return label
 
 
 def radial_profile(hf, target, n_bins):
     """Reduce an open VOF file's annotation maps to a radial curve of target, in n_bins equal-width rings.
 
-    Radius is measured in the image plane from the image center, out to the image edge. Mass is
-    the total in each ring [Msun], mass flux the flux through each ring [Msun/yr], and velocities
-    the mass-weighted mean [km/s], zero in rings with no mass.
+    Radius is measured in the image plane from the image center, out to the image edge. Mass and
+    momentum are the totals in each ring [Msun, Msun km/s], and velocities the mass-weighted mean
+    [km/s], zero in rings with no mass.
     """
     mass = hf["mass_annotation"][()]
     fov_kpc = hf.attrs["fov_kpc"]
@@ -154,10 +156,8 @@ def radial_profile(hf, target, n_bins):
     if target == "mass":
         return ring_mass
     momentum = ring_sum(mass * hf[TARGETS[target][-1]][()])  # Msun km/s
-    if target in MASS_FLUX_TARGETS:
-        # Flux through a shell one ring wide: mass * velocity / ring width [Msun/yr]
-        ring_kpc = edges[1] - edges[0]
-        return momentum / (ring_kpc * KM_PER_KPC) * S_PER_YR
+    if target in MOMENTUM_TARGETS:
+        return momentum
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
 
 
@@ -193,14 +193,14 @@ def augmentation_suffix(rotations, flip):
 
 ####Dataset class for training. Finds each galaxy's VOF datacubes; get loads one (optionally rotated/flipped) datacube and its target annotation map or radial curve ('label')
 class CoNNGaFitImageDataset:
-    """PyTorch-style dataset of (datacube, label) pairs from VOF's optically thin outputs, for training CoNNGaFit networks.
+    """PyTorch-style dataset of (datacube, label) pairs from VeryObservableFIRE's optically thin projection
 
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
         {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600} (see
         find_vof_images); snapshot ranges are inclusive, and every position angle found is used.
-    target: which annotation to learn, a key of TARGETS (e.g. "radial_mass_flux",
+    target: which annotation to learn, a key of TARGETS (e.g. "radial_momentum",
         "rotational_velocity"). Labels are returned flattened, one value per image pixel, in
-        Msun (mass), km/s (velocities), or Msun/yr (mass fluxes).
+        Msun (mass), km/s (velocities), or Msun km/s (momenta).
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize for the image, label scaling for the label).
     augment: None (default), "major_axis", or "all" (see AUGMENTATIONS): include each image's
@@ -259,6 +259,8 @@ class CoNNGaFitImageDataset:
             augment,
         )
 
+        self.masses = {}  # mass map or ring masses per file, for mass_weights
+
         if radial_bins is not None:
             # Where each image's radial curve comes from; check every face-on file exists up front
             if radial_projection == "face_on":
@@ -274,8 +276,9 @@ class CoNNGaFitImageDataset:
         """file_idx's label before augmentation: a 2-d map read from the open file hf, or its radial curve."""
         if self.radial_bins is None:
             return label_map(hf, self.target)
-        if file_idx not in self.curves:
+        if file_idx not in self.curves:  # Has the radial curve already been computed?
             with h5py.File(self.curve_paths[file_idx], "r") as hf_curve:
+                # Calculate Radial Curve if not already done
                 self.curves[file_idx] = radial_profile(hf_curve, self.target, self.radial_bins)
         return self.curves[file_idx]
 
@@ -288,6 +291,23 @@ class CoNNGaFitImageDataset:
         """The flattened label of image file_idx before augmentation and target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).flatten().astype("float")
+
+    def mass_weights(self, idx, power):
+        """Sample idx's loss weights, mass ** power per pixel (or ring), flattened like its label, with mean 1."""
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        if file_idx not in self.masses:
+            if self.radial_bins is None:
+                with h5py.File(self.img_paths[file_idx], "r") as hf:
+                    self.masses[file_idx] = hf["mass_annotation"][()]
+            else:  # The mass in each ring, from the file the curve is measured on
+                with h5py.File(self.curve_paths[file_idx], "r") as hf:
+                    self.masses[file_idx] = radial_profile(hf, "mass", self.radial_bins)
+        weights = self.masses[file_idx] ** power
+        if self.radial_bins is None:
+            weights = augment_array(weights, *self.augmentations[aug_idx])  # Rotated/flipped like the label
+        weights = weights.flatten().astype("float")
+        # Mean 1, so every image counts equally however massive; an image with no mass is weighted uniformly
+        return weights / weights.mean() if weights.mean() > 0 else np.ones_like(weights)
 
     def radii(self, idx):
         """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""

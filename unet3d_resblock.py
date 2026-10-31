@@ -61,7 +61,7 @@ def _check_stage_compatibility(input_shape, n_stages):
 #### Full network ####
 class NeuralNetwork(nn.Module):
     """3-d residual U-Net mapping an HI 21cm spectral datacube (nSpec x nX x nY, any size)
-    to a flattened output map (e.g. radial mass flux, rotational velocity, inclination) of
+    to a flattened output map (e.g. radial momentum, rotational velocity, inclination) of
     length `output_size` (default nX*nY).
 
     Architecture:
