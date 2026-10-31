@@ -86,7 +86,7 @@ class Decoder(nn.Module):
 #### Full network ####
 class NeuralNetwork(nn.Module):
     """3-d dilated residual network ("Encode-Process-Decode") mapping an HI 21cm spectral
-    datacube (nSpec x nX x nY, any size) to a flattened output map (e.g. radial mass flux,
+    datacube (nSpec x nX x nY, any size) to a flattened output map (e.g. radial momentum,
     rotational velocity, inclination) of length `output_size` (default nX*nY).
 
     Architecture:

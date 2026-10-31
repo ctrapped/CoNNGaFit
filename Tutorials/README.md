@@ -39,7 +39,7 @@ Run VOF for each galaxy you want to train, validate or test on, using the inclin
 Copy `configs/datasets.toml` and edit it. It sets what to learn and which VOF output directories to learn it from:
 
 ```toml
-target = "radial_mass_flux"
+target = "radial_momentum"
 augment = "major_axis"
 inclinations = [45]
 radial_bins = 0
@@ -57,7 +57,7 @@ base_dir = "/path/to/VOF_outputs"   # optional: relative paths below are relativ
 "m12m" = 600
 ```
 
-- `target`: `mass`, `radial_velocity`, `cylindrical_radial_velocity`, `rotational_velocity`, `radial_mass_flux` or `cylindrical_radial_mass_flux`.
+- `target`: `mass`, `radial_velocity`, `cylindrical_radial_velocity`, `rotational_velocity`, `radial_momentum`, `cylindrical_radial_momentum` or `rotational_momentum`.
 - `augment`: rotations/flips added to the training set: `"major_axis"` (4 per image, keeping the major axis along x), `"all"` (8 per image) or `"none"`.
 - `inclinations`: `"all"`, or a list in degrees, used for every set.
 - `radial_bins`: `0` trains on maps (one value per pixel); `N > 0` trains on `N`-bin radial curves.
@@ -67,12 +67,12 @@ Every key is checked when training starts, and a missing directory, snapshot or 
 
 ## 4. Choose hyperparameters
 
-`configs/hyperparams.toml` (tuned for radial mass flux) and `configs/hyperparams_rc.toml` (rotational velocity) are the starting points; the comments in each file explain every key. The ones you'll most often change:
+`configs/hyperparams.toml` (tuned for radial momentum) and `configs/hyperparams_rc.toml` (rotational velocity) are the starting points; the comments in each file explain every key. The ones you'll most often change:
 
 - `epochs`: training length, and the main driver of run time.
 - `output_head`: `"conv_halfres"` or `"conv"` for large maps (128×128 and up), `"fc"` for small maps or radial curves.
 - `n_filt0`, `k0`, `k1`: network size.
-- `label_scaling`: `"symmetric"` for signed targets like mass flux, `"one-sided"` for targets like rotational velocity.
+- `label_scaling`: `"symmetric"` for signed targets like radial momentum, `"one-sided"` for targets like rotational velocity.
 
 ## 5. Run
 
@@ -80,7 +80,7 @@ Every key is checked when training starts, and a missing directory, snapshot or 
 python train_model_unet.py \
     --hyperparams configs/hyperparams.toml \
     --datasets my_datasets.toml \
-    --run-name m12_massflux
+    --run-name m12_momentum
 ```
 
 Run from the repository root. The defaults for `--hyperparams` and `--datasets` are the files in `configs/`. `--run-name` names the checkpoint and every output (default: the target). Batch sizes default to about a tenth of each set; override them with `--batch-size` and `--test-batch-size`. Run with `--help` for every option.

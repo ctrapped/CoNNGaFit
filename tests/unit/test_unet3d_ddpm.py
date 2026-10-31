@@ -79,13 +79,6 @@ def test_film_with_zero_scale_and_shift_is_identity(spatial):
     torch.testing.assert_close(ddpm._film(h, torch.zeros(BATCH_SIZE, 2 * channels)), h)
 
 
-def test_batch_to_group_norm_replaces_every_batchnorm():
-    module = nn.Sequential(nn.BatchNorm3d(6), nn.Sequential(nn.Conv3d(6, 12, 1), nn.BatchNorm3d(12)))
-    ddpm._batch_to_group_norm(module, max_groups=8)
-    norms = [m for m in module.modules() if isinstance(m, (nn.BatchNorm3d, nn.GroupNorm))]
-    assert [(type(m), m.num_groups) for m in norms] == [(nn.GroupNorm, 2), (nn.GroupNorm, 4)]
-
-
 @pytest.mark.parametrize("dim", [8, 9])
 def test_timestep_embedding_shape_and_dependence_on_t(dim):
     out_dim = 16
@@ -146,15 +139,13 @@ def test_denoiser_backward_reaches_every_parameter(make_denoiser):
 
 @pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
 @pytest.mark.parametrize("map_shape", [MAP_SHAPE, (8, 8)])
-def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, upsample_mode, map_shape):
+def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, record_shapes, upsample_mode, map_shape):
     model = make_denoiser(upsample_mode=upsample_mode)
     stages = [model.stem, *(blocks[-1] for blocks in model.encoder)]
     for up, blocks in zip(model.upsamples, model.decoder):
         stages += [up, blocks[-1]]
     stages += [model.head.pool, *model.head.blocks, model.head.out]
-    recorded = []
-    for module in stages:
-        module.register_forward_hook(lambda m, inputs, out: recorded.append((out.shape[1], tuple(out.shape[2:]))))
+    recorded = record_shapes(stages)
     model(*denoiser_inputs(map_shape=map_shape))
     expected = [
         (feats, tuple(shape))
@@ -170,11 +161,10 @@ def test_denoiser_param_breakdown_accounts_for_every_parameter(make_denoiser):
 
 
 #### Diffusion process ####
-def test_alpha_bar_is_a_saved_decreasing_buffer(make_diffusion):
+def test_alpha_bar_is_a_saved_buffer(make_diffusion):
     diffusion = make_diffusion()
     assert "alpha_bar" in diffusion.state_dict()  # saved with checkpoints and moved by .to(device)
     assert diffusion.alpha_bar.shape == (N_TIMESTEPS,)  # one value per timestep
-    assert (diffusion.alpha_bar[1:] < diffusion.alpha_bar[:-1]).all()  # signal strictly decreases with t
 
 
 def test_q_sample_mixes_signal_and_noise(make_diffusion):

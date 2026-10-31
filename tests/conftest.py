@@ -54,6 +54,25 @@ def make_cube():
     return make
 
 
+@pytest.fixture
+def record_shapes():
+    """Factory that hooks each of a list of modules; returns the list every forward pass then appends each module's
+    output (channels, spatial shape) to, in execution order."""
+
+    def record(modules):
+        recorded = []
+
+        def hook(module, inputs, out):
+            out = out[0] if isinstance(out, tuple) else out  # e.g. a stem that also returns its half-resolution map
+            recorded.append((out.shape[1], tuple(out.shape[2:])))
+
+        for module in modules:
+            module.register_forward_hook(hook)
+        return recorded
+
+    return record
+
+
 @pytest.fixture(scope="session")
 def run_script():
     """Run a Python script in a subprocess, as from the command line; fails the test with the end of its output

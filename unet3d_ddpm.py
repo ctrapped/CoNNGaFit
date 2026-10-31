@@ -10,7 +10,7 @@ from unet_diagnostics import count_params, layer_param_lines
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
-# Learns p(map | cube): a 2-d target map (e.g. radial mass flux) is diffused with Gaussian noise
+# Learns p(map | cube): a 2-d target map (e.g. radial momentum) is diffused with Gaussian noise
 # and a 3-d residual U-Net, built from the shared blocks in unet_blocks.py, learns to remove it while
 # looking at the datacube. Sampling many maps per cube gives a posterior (mean + uncertainty).
 #
