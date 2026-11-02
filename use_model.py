@@ -44,8 +44,11 @@ def load_model(model_path):
 
 def predict(model, metadata, image_paths, save_latent_images=False, return_std=False):
     """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve.
-    With return_std, yield (name, prediction, std): std is the predicted 1-sigma in the same units and shape, or
-    None if the model wasn't trained with predict_variance."""
+    With return_std, yield (name, prediction, std): std is the ddpm network's posterior standard deviation, or the
+    resblock network's predicted 1-sigma, in the same units and shape; None for a resblock network trained without
+    predict_variance. save_latent_images needs the resblock network."""
+    if save_latent_images and metadata["network"] == "ddpm":
+        raise ValueError("save_latent_images needs the resblock network")
     image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
     label_offset, label_scale = metadata["label_stats"]
     dataset = CoNNGaFitImageInferenceDataset(
@@ -54,15 +57,21 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
     n_y, n_x = (int(n) for n in metadata["input_shape"][1:])
     shape = (-1,) if "radial_bins" in metadata else (n_y, n_x)
     for name, image in zip(dataset.names, dataset):
+        cube = image[None].float().to(device)
         with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
-            output = model(image[None].float().to(device), save_latent_images)
-        mean, logvar = output if model.predict_variance else (output, None)
+            if metadata["network"] == "ddpm":
+                mean, std = model.predict_with_uncertainty(cube, int(metadata["n_samples"]))
+            else:
+                output = model(cube, save_latent_images)
+                mean, logvar = output if model.predict_variance else (output, None)
+                std = None if logvar is None else torch.exp(0.5 * logvar)
         pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
         if not return_std:
             yield name, pred
             continue
         # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
-        std = None if logvar is None else (np.exp(0.5 * logvar.cpu().numpy()[0]) * label_scale).reshape(shape)
+        if std is not None:
+            std = (std.cpu().numpy()[0] * label_scale).reshape(shape)
         yield name, pred, std
 
 
