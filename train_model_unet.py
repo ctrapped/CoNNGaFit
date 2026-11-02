@@ -163,11 +163,6 @@ hyperparams, hyperparams_text = load_parameter_file(
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
-n_fc = hyperparams["n_fc"]
-n_filt0 = hyperparams["n_filt0"]
-dropout_rate = hyperparams["dropout_rate"]
-block_dropout_rate = hyperparams["block_dropout_rate"]
-output_head = hyperparams["output_head"]
 label_scaling = hyperparams["label_scaling"]
 if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
@@ -607,23 +602,14 @@ torch.save(model.state_dict(), model_output_path + ".pt")
 # Save the normalization information for loading data
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
 hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
-hf_norm.create_dataset("label_scaling", data=label_scaling)
-hf_norm.create_dataset("seed", data=seed)
 hf_norm.create_dataset(
     "label_stats", data=np.array([label_offset, label_scale])
 )  # physical label = scaled label * label_scale + label_offset
-hf_norm.create_dataset("learning_rate", data=learning_rate)
-hf_norm.create_dataset("n_fc", data=n_fc)
-hf_norm.create_dataset("weight_decay", data=weight_decay)
-hf_norm.create_dataset("n_filt0", data=n_filt0)
-hf_norm.create_dataset("dropout_rate", data=dropout_rate)
-hf_norm.create_dataset("block_dropout_rate", data=block_dropout_rate)
-hf_norm.create_dataset("predict_variance", data=predict_variance)
+for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
+    hf_norm.create_dataset(key, data=value)
 hf_norm.create_dataset("run_name", data=run_name)
 hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
-hf_norm.create_dataset("network", data=network)
-hf_norm.create_dataset("output_head", data=output_head)
 if radial_bins is not None:
     hf_norm.create_dataset("radial_bins", data=radial_bins)
     hf_norm.create_dataset("radial_projection", data=radial_projection)

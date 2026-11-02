@@ -109,7 +109,7 @@ def run_inferences(model_path, image_paths, output_prefix, save_latent_images=Fa
     model, metadata = load_model(model_path)
     target = metadata["target"]
     param_label, unit_label, _ = TARGET_SETTINGS[target]
-    logger.info("Loaded %s (%s, %s head)", model_path, target, metadata["output_head"])
+    logger.info("Loaded %s (%s, %s network)", model_path, target, metadata["network"])
 
     image_paths = list(image_paths)
     os.makedirs(os.path.dirname(output_prefix) or ".", exist_ok=True)
