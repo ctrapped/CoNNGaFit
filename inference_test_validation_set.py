@@ -40,6 +40,11 @@ def parse_args():
         required=True,
         help="Path to a checkpoint written by train_model_unet.py, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
     )
+    parser.add_argument(
+        "--save-latent-images",
+        action="store_true",
+        help="Also save PNGs of the network's intermediate activations to latentImages/ (resblock networks only).",
+    )
     add_logging_arguments(parser)
     return parser.parse_args()
 
@@ -53,4 +58,6 @@ validation_set_filename = (
 )
 validation_dir = os.path.join(args.data_dir, "annotation_datasets", validation_set_filename)
 
-run_inferences(args.model_path, read_image_list(validation_dir), args.output_dir, save_latent_images=True)
+run_inferences(
+    args.model_path, read_image_list(validation_dir), args.output_dir, save_latent_images=args.save_latent_images
+)
