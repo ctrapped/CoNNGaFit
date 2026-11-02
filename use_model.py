@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
+from networks import build_model
 from plotting_functions import make_image
-from unet3d_resblock import NeuralNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -32,21 +32,12 @@ def load_model(model_path):
     for key, value in metadata.items():  # h5py reads strings back as bytes
         if isinstance(value, bytes):
             metadata[key] = value.decode()
+    if "network" not in metadata:
+        raise ValueError(f"{model_path}.hdf5 doesn't record its network")
     hyperparams = tomllib.loads(metadata["hyperparams_text"])
-    k0, k1 = hyperparams["k0"], hyperparams["k1"]
     radial_bins = int(metadata["radial_bins"]) if "radial_bins" in metadata else None
-    model = NeuralNetwork(
-        tuple(int(n) for n in metadata["input_shape"]),
-        hyperparams["n_filt0"],
-        (k0, k0, k0),
-        (k1, k1, k1),
-        hyperparams["n_fc"],
-        fc_dropout_rate=hyperparams["dropout_rate"],
-        block_dropout_rate=hyperparams["block_dropout_rate"],
-        head=metadata["output_head"],
-        output_size=radial_bins,
-        predict_variance=hyperparams.get("predict_variance", False),  # absent in checkpoints from before it existed
-    ).to(device)
+    input_shape = tuple(int(n) for n in metadata["input_shape"])
+    model = build_model(metadata["network"], input_shape, hyperparams, output_size=radial_bins).to(device)
     model.load_state_dict(torch.load(model_path + ".pt", map_location=device, weights_only=True))
     return model.eval(), metadata
 

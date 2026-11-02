@@ -11,7 +11,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
 from logging_setup import add_logging_arguments, configure_logging
-from unet3d_resblock import NeuralNetwork
+from networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
 
 matplotlib.use("Agg")
 import argparse
@@ -40,25 +40,9 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 
 
 ####   PARAMETER FILES   ####
-# Keys every parameter file must have (see configs/*.toml for what each one does)
-HYPERPARAM_KEYS = {
-    "network",
-    "learning_rate",
-    "weight_decay",
-    "epochs",
-    "n_fc",
-    "n_filt0",
-    "k0",
-    "k1",
-    "dropout_rate",
-    "block_dropout_rate",
-    "output_head",
-    "label_scaling",
-    "predict_variance",
-    "seed",
-}
-OPTIONAL_HYPERPARAM_KEYS = {"mass_weight_power"}
 NETWORKS = ("resblock",)  # Values of the hyperparameter files' network key this script trains
+# Keys every datasets file must have (see configs/*.toml for what each one does; networks.py lists each network's
+# hyperparameter keys)
 DATASET_KEYS = {
     "target",
     "augment",
@@ -169,17 +153,18 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
-hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS)
-network = hyperparams["network"]
+with open(args.hyperparams, "rb") as f:
+    network = tomllib.load(f).get("network")  # Sets which keys the file must have
 if network not in NETWORKS:
     raise ValueError(f"{args.hyperparams}: network = {network!r} should be one of {NETWORKS}")
+hyperparams, hyperparams_text = load_parameter_file(
+    args.hyperparams, HYPERPARAM_KEYS[network], OPTIONAL_HYPERPARAM_KEYS[network]
+)
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
 n_fc = hyperparams["n_fc"]
 n_filt0 = hyperparams["n_filt0"]
-k0 = hyperparams["k0"]
-k1 = hyperparams["k1"]
 dropout_rate = hyperparams["dropout_rate"]
 block_dropout_rate = hyperparams["block_dropout_rate"]
 output_head = hyperparams["output_head"]
@@ -563,18 +548,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
 input_shape = tuple(
     training_data[0][0].shape
 )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-model = NeuralNetwork(
-    input_shape,
-    n_filt0,
-    (k0, k0, k0),
-    (k1, k1, k1),
-    n_fc,
-    fc_dropout_rate=dropout_rate,
-    block_dropout_rate=block_dropout_rate,
-    head=output_head,
-    output_size=radial_bins,
-    predict_variance=predict_variance,
-).to(device)
+model = build_model(network, input_shape, hyperparams, output_size=radial_bins).to(device)
 model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
 validation_names = validation_data.names
 training_names = training_data.names
