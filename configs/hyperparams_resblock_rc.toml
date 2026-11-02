@@ -50,6 +50,10 @@ mass_weight_power = 0
 # 1e-6 in the units of the labels it trains on.
 predict_variance = false
 
+# Predict (and so score the accuracy and MSE of) the training and validation sets every
+# predict_every epochs, and on the final epoch; the loss is computed every epoch.
+predict_every = 1
+
 # Random seed for weight initialization, dropout and the order of training batches. Runs with the same
 # seed, data and hyperparameters on the same machine give the same network.
 seed = 0

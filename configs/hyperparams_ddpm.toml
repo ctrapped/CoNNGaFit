@@ -21,6 +21,12 @@ schedule = "cosine"  # Noise schedule: "cosine" or "linear"
 # Each sample map is inferred by taking n_timesteps passes of the denoiser.
 n_samples = 30
 
+# Predict (and so score the accuracy and MSE of) the training and validation sets every
+# predict_every epochs, and on the final epoch; the loss is computed every epoch.
+# Each prediction costs n_samples * n_timesteps denoiser passes per cube (very expensive)..
+# Set it to epochs or more to predict on the final epoch only
+predict_every = 500
+
 # Label scaling, computed once from every training label and saved with the model.
 # For DDPM scaling must be [-1,1] to match the Gaussian noise distribution.
 # Sampled maps are clipped to [-1, 1] unless "none":

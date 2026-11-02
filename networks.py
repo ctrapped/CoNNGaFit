@@ -17,6 +17,7 @@ SHARED_KEYS = {
     "k1",
     "block_dropout_rate",
     "label_scaling",
+    "predict_every",
     "seed",
 }
 HYPERPARAM_KEYS = {
