@@ -26,7 +26,7 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Hyperparameters and datasets (including the target annotation) are read from two parameter files,
-####configs/hyperparams.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
+####configs/hyperparams_resblock.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
 #
 ####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
 ####  Run with --help to see all options. The two parameter files and --run-name are normally the
@@ -42,6 +42,7 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####   PARAMETER FILES   ####
 # Keys every parameter file must have (see configs/*.toml for what each one does)
 HYPERPARAM_KEYS = {
+    "network",
     "learning_rate",
     "weight_decay",
     "epochs",
@@ -57,6 +58,7 @@ HYPERPARAM_KEYS = {
     "seed",
 }
 OPTIONAL_HYPERPARAM_KEYS = {"mass_weight_power"}
+NETWORKS = ("resblock",)  # Values of the hyperparameter files' network key this script trains
 DATASET_KEYS = {
     "target",
     "augment",
@@ -102,8 +104,9 @@ def parse_args():
     )
     parser.add_argument(
         "--hyperparams",
-        default=os.path.join(CONFIG_DIR, "hyperparams.toml"),
-        help="Hyperparameter file (learning rate, epochs, network size, output head). Default: configs/hyperparams.toml",
+        default=os.path.join(CONFIG_DIR, "hyperparams_resblock.toml"),
+        help="Hyperparameter file (network, learning rate, epochs, network size, output head). "
+        "Default: configs/hyperparams_resblock.toml",
     )
     parser.add_argument(
         "--datasets",
@@ -167,6 +170,9 @@ logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
 hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS)
+network = hyperparams["network"]
+if network not in NETWORKS:
+    raise ValueError(f"{args.hyperparams}: network = {network!r} should be one of {NETWORKS}")
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
@@ -642,6 +648,7 @@ hf_norm.create_dataset("predict_variance", data=predict_variance)
 hf_norm.create_dataset("run_name", data=run_name)
 hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
+hf_norm.create_dataset("network", data=network)
 hf_norm.create_dataset("output_head", data=output_head)
 if radial_bins is not None:
     hf_norm.create_dataset("radial_bins", data=radial_bins)

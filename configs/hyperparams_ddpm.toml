@@ -1,7 +1,7 @@
 # Conditional diffusion model (DDPM) hyperparameters for train_model_unet.py.
 # Pass this file with --hyperparams. Every key below is required.
 
-network = "ddpm"  # The conditional diffusion model in unet3d_ddpm.py, see networks.py
+network = "ddpm"  # The conditional diffusion model in unet3d_ddpm.py
 
 learning_rate = 1e-4
 weight_decay = 1e-3
@@ -18,9 +18,7 @@ schedule = "cosine"  # Noise schedule: "cosine" or "linear"
 
 # Each inference prediction is the mean and standard deviation of n_samples maps sampled from the
 # posterior. Meaning we infer predicted maps n_samples times from a random Gaussian noise map.
-# Each sample map is inferred by taking sampling_steps passes of the denoiser.
-# Note that sampling_steps can be less than n_timesteps to speed up inference at the cost of accuracy.
-sampling_steps = 1000
+# Each sample map is inferred by taking n_timesteps passes of the denoiser.
 n_samples = 30
 
 # Label scaling, computed once from every training label and saved with the model.

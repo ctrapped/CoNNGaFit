@@ -50,7 +50,7 @@ which runs the pre-trained demo network in [`examples/demo_model`](examples/demo
 python train_model_unet.py --run-name my_run
 ```
 
-Training is set by two parameter files, `configs/hyperparams.toml` and `configs/datasets.toml` by default; pass others with `--hyperparams` and `--datasets`. Every key is required unless marked optional.
+Training is set by two parameter files, `configs/hyperparams_resblock.toml` and `configs/datasets.toml` by default; pass others with `--hyperparams` and `--datasets`. Every key is required unless marked optional.
 
 ### Datasets file
 
@@ -83,6 +83,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 
 | Key | Meaning |
 |---|---|
+| `network` | The network to train: `"resblock"`, the residual U-Net in `unet3d_resblock.py` |
 | `learning_rate`, `weight_decay`, `epochs` | Adam optimizer settings and training length |
 | `n_filt0`, `k0`, `k1` | Filters in the first encoder stage (doubling at each later stage), stem kernel size, residual/deconv block kernel size |
 | `output_head` | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
@@ -93,7 +94,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `mass_weight_power` | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted, the default; 0.5 is a good start). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |
 | `seed` | Random seed for weight initialization, dropout and batch order; the same seed, data and settings on the same machine give the same network |
 
-`configs/hyperparams_rc.toml` is a starting point for rotational velocity.
+`configs/hyperparams_resblock_rc.toml` is a starting point for rotational velocity.
 
 ### Command-line options
 

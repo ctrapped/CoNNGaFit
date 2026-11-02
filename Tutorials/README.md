@@ -67,7 +67,7 @@ Every key is checked when training starts, and a missing directory, snapshot or 
 
 ## 4. Choose hyperparameters
 
-`configs/hyperparams.toml` (tuned for radial momentum) and `configs/hyperparams_rc.toml` (rotational velocity) are the starting points; the comments in each file explain every key. The ones you'll most often change:
+`configs/hyperparams_resblock.toml` (tuned for radial momentum) and `configs/hyperparams_resblock_rc.toml` (rotational velocity) are the starting points; the comments in each file explain every key. The ones you'll most often change:
 
 - `epochs`: training length, and the main driver of run time.
 - `output_head`: `"conv_halfres"` or `"conv"` for large maps (128×128 and up), `"fc"` for small maps or radial curves.
@@ -78,7 +78,7 @@ Every key is checked when training starts, and a missing directory, snapshot or 
 
 ```bash
 python train_model_unet.py \
-    --hyperparams configs/hyperparams.toml \
+    --hyperparams configs/hyperparams_resblock.toml \
     --datasets my_datasets.toml \
     --run-name m12_momentum
 ```

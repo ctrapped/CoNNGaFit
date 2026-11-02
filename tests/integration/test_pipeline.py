@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[2]
 TRAIN_SCRIPT = REPO / "train_model_unet.py"
 INFERENCE_SCRIPT = REPO / "inference_template.py"
 DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
-DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
+DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams_resblock.toml"
 
 # One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,
 # validation and testing set alike

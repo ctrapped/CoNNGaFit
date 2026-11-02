@@ -46,7 +46,7 @@ SPLITS = {
     "testing": ["vflat220"],
 }
 SNAPSHOT = 600
-# configs/hyperparams_rc.toml, made small enough to train in a few minutes on a CPU
+# configs/hyperparams_resblock_rc.toml, made small enough to train in a few minutes on a CPU
 HYPERPARAM_OVERRIDES = {
     "n_filt0": 4,
     "k0": 5,
@@ -67,7 +67,7 @@ def toml_lines(params):
 
 def write_configs(output, epochs):
     """Write the demo's hyperparameters and datasets files into output; returns their paths."""
-    with open(REPO_ROOT / "configs" / "hyperparams_rc.toml", "rb") as f:
+    with open(REPO_ROOT / "configs" / "hyperparams_resblock_rc.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **HYPERPARAM_OVERRIDES, "epochs": epochs}
     hyperparams_file = output / "hyperparams.toml"
     hyperparams_file.write_text("\n".join(toml_lines(hyperparams)) + "\n")
