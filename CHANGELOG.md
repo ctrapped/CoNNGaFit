@@ -33,6 +33,16 @@ All notable changes to this project are documented here. The format follows
 - Training records the MSE of the predicted mean (`training_mses`, `validation_mses` and `final_test_mse`).
 - Tests for `predict_variance`: Gaussian NLL gradients for every network and head, pipeline runs with
   every output head, and calibration of the demo's predicted uncertainties.
+- The conditional diffusion model (DDPM, `unet3d_ddpm.py`) in the training and inference pipeline, chosen
+  with `network = "ddpm"` and configured by `configs/hyperparams_ddpm.toml`. It trains on the denoising
+  loss, and each prediction is the mean of `n_samples` posterior samples, saved and plotted with their
+  standard deviation as its uncertainty. `networks.py` lists each network's hyperparameter keys and builds
+  either network for `train_model_unet.py` and `use_model.py`.
+- `predict_every` hyperparameter: the training and validation sets are predicted, and so their accuracy
+  and MSE scored, every `predict_every` epochs and on the final epoch.
+- `inference_test_validation_set.py --save-latent-images`.
+- `tests/unit/test_networks.py` (each network's keys, its config files and `build_model`) and
+  `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
 - **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
@@ -41,6 +51,16 @@ All notable changes to this project are documented here. The format follows
   width after inference to get a mass flux.
 - **Breaking:** hyperparameter files need a `seed` key (`seed = 0` in `configs/`).
 - **Breaking:** hyperparameter files need a `predict_variance` key (`predict_variance = false` in `configs/`).
+- **Breaking:** hyperparameter files need `network` and `predict_every` keys, and are checked against their
+  network's keys (`predict_variance` and `mass_weight_power` are ResBlock only). Checkpoints save every
+  hyperparameter of their network, and `use_model.py` needs their `network`.
+- **Breaking:** `configs/hyperparams.toml` and `configs/hyperparams_rc.toml` are renamed
+  `configs/hyperparams_resblock.toml` and `configs/hyperparams_resblock_rc.toml`.
+- **Breaking:** `unet3d_ddpm.DenoisingUNet3d` takes `input_shape` (and optional `map_shape`) and checks
+  them at construction, like `unet3d_resblock.NeuralNetwork`; its `summary()`, `stage_shapes()` and
+  `param_breakdown()` take no shape arguments. `GaussianDiffusion` samples by DDPM ancestral sampling
+  through every timestep, and `flat_labels` replaces `target_shape`.
+- `inference_test_validation_set.py` saves latent images only with `--save-latent-images`.
 - The demo trains with `predict_variance`. Its figure adds ±1σ bands, a residual panel and both loss
   curves, and the committed demo network is retrained.
 - Loss plots use a log axis unless the loss can be negative.
