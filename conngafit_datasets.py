@@ -134,12 +134,14 @@ def label_map(hf, target):
     return label
 
 
-def radial_profile(hf, target, n_bins):
+def radial_profile(hf, target, n_bins, values=None):
     """Reduce an open VOF file's annotation maps to a radial curve of target, in n_bins equal-width rings.
 
     Radius is measured in the image plane from the image center, out to the image edge. Mass and
     momentum are the totals in each ring [Msun, Msun km/s], and velocities the mass-weighted mean
     [km/s], zero in rings with no mass.
+    values: a map of target to bin in place of the file's own annotation (e.g. a network's prediction),
+    weighted by the file's mass like the annotation it replaces.
     """
     mass = hf["mass_annotation"][()]
     fov_kpc = hf.attrs["fov_kpc"]
@@ -154,10 +156,12 @@ def radial_profile(hf, target, n_bins):
 
     ring_mass = ring_sum(mass)
     if target == "mass":
-        return ring_mass
-    momentum = ring_sum(mass * hf[TARGETS[target][-1]][()])  # Msun km/s
+        return ring_mass if values is None else ring_sum(values)
     if target in MOMENTUM_TARGETS:
-        return momentum
+        momentum_map = mass * hf[TARGETS[target][-1]][()] if values is None else values
+        return ring_sum(momentum_map)  # Msun km/s
+    velocity_map = hf[TARGETS[target][-1]][()] if values is None else values
+    momentum = ring_sum(mass * velocity_map)
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
 
 

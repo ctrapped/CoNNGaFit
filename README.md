@@ -34,6 +34,8 @@ Trains a small network on VOF observations of six synthetic disk galaxies, each 
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/demo.png)
 
+`python examples/demo.py --predict map` trains the network on the rotational velocity map instead, with each pixel's 1σ, and bins the predicted map into the rotation curve (mass-weighted, as the true curve is). Its figure, `demo_map.png`, adds the true, predicted and residual velocity maps and the predicted 1σ map. Pass its network to `demo_inference.py` with `--model-path examples/demo_output/NetworkWeights/demo_map`.
+
 To run a trained network on new datacubes without training, run
 
 ```bash

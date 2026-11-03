@@ -41,6 +41,11 @@ All notable changes to this project are documented here. The format follows
 - `predict_every` hyperparameter: the training and validation sets are predicted, and so their accuracy
   and MSE scored, every `predict_every` epochs and on the final epoch.
 - `inference_test_validation_set.py --save-latent-images`.
+- `examples/demo.py --predict map`: trains the demo network on the rotational velocity map (with a mass-weighted
+  loss) and bins the predicted map into the rotation curve; its figure adds the true, predicted and residual
+  velocity maps and the predicted 1σ map. `examples/demo_inference.py` runs map networks too.
+- `conngafit_datasets.radial_profile(..., values=...)` bins a given map, such as a network's prediction, in place
+  of the file's annotation, weighted by the file's mass.
 - `tests/unit/test_networks.py` (each network's keys, its config files and `build_model`) and
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 

@@ -38,7 +38,7 @@ MAX_MEDIAN_SIGMA_KMS = 20  # median 1-sigma over the test galaxy's rings
 def true_curve(path):
     """The rotation curve the network is trained to predict for the image at path."""
     with h5py.File(path, "r") as hf:
-        return radial_profile(hf, demo.DATASETS["target"], demo.DATASETS["radial_bins"])
+        return radial_profile(hf, demo.DATASETS["target"], demo.N_RINGS)
 
 
 def predict_curves(model_path, images):
