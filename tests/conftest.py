@@ -111,16 +111,18 @@ def run_script():
     return run
 
 
-def expected_shape(radial_bins=0):
-    """A map has one value per sky pixel of the cube; a curve has one value per ring."""
+def expected_shape(radial_bins=0, n_maps=None):
+    """A map has one value per sky pixel of the cube; a curve has one value per ring. With n_maps, the shape of
+    n_maps such maps or curves stacked, as predicted for that many targets."""
     n_y, n_x, _ = IMAGE_SHAPE
-    return (radial_bins,) if radial_bins else (n_y, n_x)
+    shape = (radial_bins,) if radial_bins else (n_y, n_x)
+    return shape if n_maps is None else (n_maps, *shape)
 
 
-def saved_test_outputs(run_dir, name):
-    """The prediction and its 1-sigma uncertainty (None if the network gave none) the training script saved for
-    IMAGE at the end of training."""
-    saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{IMAGE.stem}_Epoch*.hdf5"))
+def saved_test_outputs(run_dir, name, target=TARGET):
+    """The prediction of target and its 1-sigma uncertainty (None if the network gave none) the training script
+    saved for IMAGE at the end of training."""
+    saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{IMAGE.stem}_{target}_Epoch*.hdf5"))
     with h5py.File(saved, "r") as hf:
         return hf["prediction"][()], (hf["uncertainty"][()] if "uncertainty" in hf else None)
 
@@ -128,15 +130,15 @@ def saved_test_outputs(run_dir, name):
 @pytest.fixture(scope="session")
 def train_on_image(tmp_path_factory, run_script):
     """Run the training script on IMAGE with a hyperparameters dict, in a new folder, and return the folder. The
-    network is written to nets/<name>, the diagnostic outputs to diag/."""
+    network is written to nets/<name>, the diagnostic outputs to diag/. target is a target name or a list of them."""
 
-    def train(name, hyperparams, radial_bins=0):
+    def train(name, hyperparams, radial_bins=0, target=TARGET):
         run_dir = tmp_path_factory.mktemp(name)
         image_dir = run_dir / "vof" / GALAXY / f"i{INCLINATION}"
         image_dir.mkdir(parents=True)
         shutil.copy(IMAGE, image_dir)
         datasets = dict(
-            target=TARGET, augment="none", inclinations=[INCLINATION], radial_bins=radial_bins, radial_projection="sky"
+            target=target, augment="none", inclinations=[INCLINATION], radial_bins=radial_bins, radial_projection="sky"
         )
         # Flat key = value TOML lines: JSON literals are valid TOML for strings, numbers and lists
         hyperparams_lines = [f"{key} = {json.dumps(value)}" for key, value in hyperparams.items()]
