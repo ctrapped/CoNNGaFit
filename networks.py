@@ -31,7 +31,7 @@ CLIP_RANGE = (-1.0, 1.0)  # Where scaled labels lie; the ddpm network's samples 
 
 def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
     """The network for cubes of input_shape (nSpec, nY, nX), predicting a map, or a radial curve of output_size bins
-    (resblock only), for each of n_maps targets (resblock only)."""
+    (resblock only), for each of n_maps targets."""
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
     if network == "resblock":
@@ -49,8 +49,6 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
             n_maps=n_maps,
         )
 
-    if n_maps != 1:
-        raise ValueError(f"the ddpm network predicts one map, not n_maps={n_maps}")
     if output_size is not None:
         raise ValueError(
             "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_shape must be set to None."
@@ -61,6 +59,7 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
         kernel_stem,
         kernel_coder,
         block_dropout_rate=hyperparams["block_dropout_rate"],
+        n_maps=n_maps,
     )
     return GaussianDiffusion(
         denoiser,

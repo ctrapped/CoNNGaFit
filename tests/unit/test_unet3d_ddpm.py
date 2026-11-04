@@ -9,6 +9,7 @@ import unet3d_ddpm as ddpm
 
 N_TIMESTEPS = 10
 N_SAMPLES = 3
+N_MAPS = 2
 # float32 convolutions sum in a different order for different batch sizes
 BATCH_RTOL, BATCH_ATOL = 1e-4, 1e-4
 MAP_SHAPE = INPUT_SHAPE[1:]
@@ -31,11 +32,12 @@ def make_denoiser():
 
 @pytest.fixture
 def make_diffusion(make_denoiser):
-    """Factory for a GaussianDiffusion around a small denoiser of map_shape; other keyword arguments go to
-    GaussianDiffusion."""
+    """Factory for a GaussianDiffusion around a small denoiser of n_maps maps of map_shape; other keyword arguments
+    go to GaussianDiffusion."""
 
-    def make(map_shape=None, **kwargs):
-        return ddpm.GaussianDiffusion(make_denoiser(map_shape=map_shape), n_timesteps=N_TIMESTEPS, **kwargs)
+    def make(map_shape=None, n_maps=1, **kwargs):
+        denoiser = make_denoiser(map_shape=map_shape, n_maps=n_maps)
+        return ddpm.GaussianDiffusion(denoiser, n_timesteps=N_TIMESTEPS, **kwargs)
 
     return make
 
@@ -47,9 +49,9 @@ def randomize_output(denoiser):
     return denoiser
 
 
-def denoiser_inputs(input_shape=INPUT_SHAPE, map_shape=MAP_SHAPE):
+def denoiser_inputs(input_shape=INPUT_SHAPE, map_shape=MAP_SHAPE, n_maps=1):
     cube = torch.randn(BATCH_SIZE, *input_shape)
-    y_t = torch.randn(BATCH_SIZE, *map_shape)
+    y_t = torch.randn(BATCH_SIZE, n_maps, *map_shape)
     t = torch.randint(0, N_TIMESTEPS, (BATCH_SIZE,))
     return cube, y_t, t
 
@@ -100,10 +102,11 @@ def test_timestep_embedding_shape_and_dependence_on_t(dim):
         ((13, 10, 11), (20, 24)),
     ],
 )
-def test_denoiser_predicts_noise_on_the_map_grid(make_denoiser, upsample_mode, input_shape, map_shape):
-    model = make_denoiser(upsample_mode=upsample_mode, input_shape=input_shape, map_shape=map_shape)
-    cube, y_t, t = denoiser_inputs(input_shape, map_shape)
-    assert model(cube, y_t, t).shape == y_t.shape
+@pytest.mark.parametrize("n_maps", [1, N_MAPS])
+def test_denoiser_predicts_noise_on_the_map_grid(make_denoiser, upsample_mode, input_shape, map_shape, n_maps):
+    model = make_denoiser(upsample_mode=upsample_mode, input_shape=input_shape, map_shape=map_shape, n_maps=n_maps)
+    cube, y_t, t = denoiser_inputs(input_shape, map_shape, n_maps)
+    assert model(cube, y_t, t).shape == y_t.shape  # one noise map per input map
 
 
 def test_untrained_denoiser_predicts_zero_noise(make_denoiser):
@@ -122,11 +125,13 @@ def test_denoiser_rejects_cube_too_small_for_its_depth(make_denoiser):
 
 
 @pytest.mark.parametrize(
-    "input_shape, map_shape", [((13, 10, 11), MAP_SHAPE), (INPUT_SHAPE, (8, 8))], ids=["cube", "map"]
+    "input_shape, map_shape, n_maps",
+    [((13, 10, 11), MAP_SHAPE, 1), (INPUT_SHAPE, (8, 8), 1), (INPUT_SHAPE, MAP_SHAPE, N_MAPS)],
+    ids=["cube", "map", "n_maps"],
 )
-def test_denoiser_rejects_inputs_of_another_shape(make_denoiser, input_shape, map_shape):
+def test_denoiser_rejects_inputs_of_another_shape(make_denoiser, input_shape, map_shape, n_maps):
     with pytest.raises(ValueError, match="built for"):
-        make_denoiser()(*denoiser_inputs(input_shape, map_shape))
+        make_denoiser()(*denoiser_inputs(input_shape, map_shape, n_maps))
 
 
 def test_denoiser_uses_no_batchnorm(make_denoiser):
@@ -141,9 +146,10 @@ def test_denoiser_samples_are_independent_of_the_batch(make_denoiser):
     )
 
 
-def test_denoiser_backward_reaches_every_parameter(make_denoiser):
-    model = randomize_output(make_denoiser())
-    model(*denoiser_inputs()).square().mean().backward()
+@pytest.mark.parametrize("n_maps", [1, N_MAPS])
+def test_denoiser_backward_reaches_every_parameter(make_denoiser, n_maps):
+    model = randomize_output(make_denoiser(n_maps=n_maps))
+    model(*denoiser_inputs(n_maps=n_maps)).square().mean().backward()
     for name, param in model.named_parameters():
         assert param.grad is not None, name  # parameter is connected to the output
         assert torch.isfinite(param.grad).all(), name  # no NaN/inf gradients
@@ -151,14 +157,15 @@ def test_denoiser_backward_reaches_every_parameter(make_denoiser):
 
 @pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
 @pytest.mark.parametrize("map_shape", [MAP_SHAPE, (8, 8)])
-def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, record_shapes, upsample_mode, map_shape):
-    model = make_denoiser(upsample_mode=upsample_mode, map_shape=map_shape)
+@pytest.mark.parametrize("n_maps", [1, N_MAPS])
+def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, record_shapes, upsample_mode, map_shape, n_maps):
+    model = make_denoiser(upsample_mode=upsample_mode, map_shape=map_shape, n_maps=n_maps)
     stages = [model.stem, *(blocks[-1] for blocks in model.encoder)]
     for up, blocks in zip(model.upsamples, model.decoder):
         stages += [up, blocks[-1]]
     stages += [model.head.pool, *model.head.blocks, model.head.out]
     recorded = record_shapes(stages)
-    model(*denoiser_inputs(map_shape=map_shape))
+    model(*denoiser_inputs(map_shape=map_shape, n_maps=n_maps))
     expected = [
         (feats, tuple(shape))
         for label, feats, shape in model.stage_shapes()
@@ -181,37 +188,39 @@ def test_alpha_bar_is_a_saved_buffer(make_diffusion):
 
 def test_q_sample_mixes_signal_and_noise(make_diffusion):
     diffusion = make_diffusion()
-    y0, noise = torch.randn(BATCH_SIZE, *MAP_SHAPE), torch.randn(BATCH_SIZE, *MAP_SHAPE)
+    y0, noise = torch.randn(BATCH_SIZE, 1, *MAP_SHAPE), torch.randn(BATCH_SIZE, 1, *MAP_SHAPE)
     t = torch.tensor([0, N_TIMESTEPS - 1])
-    ab = diffusion.alpha_bar[t].view(-1, 1, 1)
+    ab = diffusion.alpha_bar[t].view(-1, 1, 1, 1)
     torch.testing.assert_close(diffusion.q_sample(y0, t, noise), ab.sqrt() * y0 + (1 - ab).sqrt() * noise)
 
 
 @pytest.mark.parametrize("flatten", [False, True])
-def test_training_loss_is_a_finite_scalar(make_diffusion, flatten):
-    diffusion = make_diffusion(flat_labels=flatten)
-    y0 = torch.randn(BATCH_SIZE, *MAP_SHAPE)
-    loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0.flatten(1) if flatten else y0)
+@pytest.mark.parametrize("n_maps", [1, N_MAPS])
+def test_training_loss_is_a_finite_scalar(make_diffusion, flatten, n_maps):
+    diffusion = make_diffusion(n_maps=n_maps, flat_labels=flatten)
+    y0 = torch.randn(BATCH_SIZE, n_maps, *MAP_SHAPE)
+    loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0.flatten(2) if flatten else y0)
     assert loss.shape == ()  # a single scalar to backpropagate
     assert torch.isfinite(loss)  # no NaN/inf from the noising or denoiser
 
 
 def test_flattened_labels_need_flat_labels(make_diffusion):
     with pytest.raises(ValueError, match="flat_labels"):
-        make_diffusion()(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.randn(BATCH_SIZE, MAP_SHAPE[0] * MAP_SHAPE[1]))
+        make_diffusion()(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.randn(BATCH_SIZE, 1, MAP_SHAPE[0] * MAP_SHAPE[1]))
 
 
 @pytest.mark.parametrize(
-    "map_shape, flat_labels, expected",
+    "map_shape, n_maps, flat_labels, expected",
     [
-        (None, False, (N_SAMPLES, BATCH_SIZE, *MAP_SHAPE)),
-        ((8, 8), False, (N_SAMPLES, BATCH_SIZE, 8, 8)),
-        ((8, 8), True, (N_SAMPLES, BATCH_SIZE, 64)),
+        (None, 1, False, (N_SAMPLES, BATCH_SIZE, 1, *MAP_SHAPE)),
+        ((8, 8), 1, False, (N_SAMPLES, BATCH_SIZE, 1, 8, 8)),
+        ((8, 8), 1, True, (N_SAMPLES, BATCH_SIZE, 1, 64)),
+        ((8, 8), N_MAPS, True, (N_SAMPLES, BATCH_SIZE, N_MAPS, 64)),
     ],
 )
 @pytest.mark.parametrize("sample_kw", [dict(), dict(max_batch=2)])
-def test_sample_shape(make_diffusion, map_shape, flat_labels, expected, sample_kw):
-    diffusion = make_diffusion(map_shape=map_shape, flat_labels=flat_labels)
+def test_sample_shape(make_diffusion, map_shape, n_maps, flat_labels, expected, sample_kw):
+    diffusion = make_diffusion(map_shape=map_shape, n_maps=n_maps, flat_labels=flat_labels)
     assert diffusion.sample(torch.randn(BATCH_SIZE, *INPUT_SHAPE), n_samples=N_SAMPLES, **sample_kw).shape == expected
 
 
@@ -223,9 +232,11 @@ def test_samples_respect_clip_range(make_diffusion):
     assert samples.min() >= clip_range[0] and samples.max() <= clip_range[1]
 
 
-def test_predict_with_uncertainty_shapes(make_diffusion):
-    mean, std = make_diffusion().predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), n_samples=N_SAMPLES)
-    assert mean.shape == std.shape == (BATCH_SIZE, *MAP_SHAPE)  # one posterior mean and spread per pixel
+@pytest.mark.parametrize("n_maps", [1, N_MAPS])
+def test_predict_with_uncertainty_shapes(make_diffusion, n_maps):
+    diffusion = make_diffusion(n_maps=n_maps)
+    mean, std = diffusion.predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), n_samples=N_SAMPLES)
+    assert mean.shape == std.shape == (BATCH_SIZE, n_maps, *MAP_SHAPE)  # one posterior mean and spread per pixel
     assert (std > 0).any()  # the posterior samples differ
 
 
