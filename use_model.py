@@ -46,14 +46,18 @@ def load_model(model_path):
     return model.eval(), metadata
 
 
-def predict(model, metadata, image_paths, save_latent_images=False, return_std=False):
+def predict(model, metadata, image_paths, save_latent_images=False, return_std=False, return_samples=False):
     """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve, of
     each target in metadata["target"], stacked along the first axis.
     With return_std, yield (name, prediction, std): std is the ddpm network's posterior standard deviation, or the
     resblock network's predicted 1-sigma, in the same units and shape; None for a resblock network trained without
-    predict_variance. save_latent_images needs the resblock network."""
+    predict_variance. With return_samples (ddpm only), yield (name, samples) instead: the network's n_samples joint
+    posterior samples of every target, shape (n_samples, *prediction shape), to propagate into quantities derived
+    from several targets. save_latent_images needs the resblock network."""
     if save_latent_images and metadata["network"] == "ddpm":
         raise ValueError("save_latent_images needs the resblock network")
+    if return_samples and metadata["network"] != "ddpm":
+        raise ValueError("return_samples needs the ddpm network")
     image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
     # One offset and scale per target, as a column to broadcast over each target's pixels
     label_offset, label_scale = (np.reshape(stats, (-1, 1)) for stats in metadata["label_stats"])
@@ -66,12 +70,17 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
     for name, image in zip(dataset.names, dataset):
         cube = image[None].float().to(device)
         with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
-            if metadata["network"] == "ddpm":
+            if return_samples:
+                samples = model.sample(cube, int(metadata["n_samples"]))[:, 0]  # (n_samples, n_maps, n_pixels)
+            elif metadata["network"] == "ddpm":
                 mean, std = model.predict_with_uncertainty(cube, int(metadata["n_samples"]))
             else:
                 output = model(cube, save_latent_images)
                 mean, logvar = output if model.predict_variance else (output, None)
                 std = None if logvar is None else torch.exp(0.5 * logvar)
+        if return_samples:
+            yield name, (samples.cpu().numpy() * label_scale + label_offset).reshape(-1, *shape)  # Physical units
+            continue
         pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
         if not return_std:
             yield name, pred
