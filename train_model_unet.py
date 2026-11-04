@@ -25,7 +25,7 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####Trains the Unet read from unet3d_resblock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
-####Hyperparameters and datasets (including the target annotation) are read from two parameter files,
+####Hyperparameters and datasets (including the target annotations) are read from two parameter files,
 ####configs/hyperparams_resblock.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
 #
 ####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
@@ -94,12 +94,12 @@ def parse_args():
     parser.add_argument(
         "--datasets",
         default=os.path.join(CONFIG_DIR, "datasets.toml"),
-        help="Datasets file (target, augmentation, training/validation/testing galaxies). Default: configs/datasets.toml",
+        help="Datasets file (targets, augmentation, training/validation/testing galaxies). Default: configs/datasets.toml",
     )
     parser.add_argument(
         "--run-name",
         default=None,
-        help="Name for this run; the checkpoint and every diagnostic output are named after it. Default: the target",
+        help="Name for this run; the checkpoint and every diagnostic output are named after it. Default: the targets",
     )
 
     io = parser.add_argument_group(
@@ -191,9 +191,12 @@ torch.manual_seed(seed)  # Seeds the CPU and every GPU
 
 ####   DATASETS   ####
 datasets, datasets_text = load_parameter_file(args.datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS)
-target = datasets["target"]
-if target not in TARGETS:
-    raise ValueError(f"{args.datasets}: unknown target {target!r}; choose from {sorted(TARGETS)}")
+# One target name, or a list of them: the network predicts a map (or radial curve) of each
+targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
+unknown_targets = [target for target in targets if target not in TARGETS]
+if unknown_targets or not targets:
+    raise ValueError(f"{args.datasets}: unknown target {unknown_targets or targets!r}; choose from {sorted(TARGETS)}")
+n_maps = len(targets)
 training_sources = dataset_sources(datasets["training"], "training", args.datasets, datasets.get("base_dir"))
 validation_sources = dataset_sources(datasets["validation"], "validation", args.datasets, datasets.get("base_dir"))
 testing_sources = dataset_sources(datasets["testing"], "testing", args.datasets, datasets.get("base_dir"))
@@ -207,8 +210,7 @@ if not isinstance(suffix, str):
     raise ValueError(f"{args.datasets}: suffix = {suffix!r} should be a string")
 #############################
 
-param_label, unit_label, bin_op = TARGET_SETTINGS[target]
-run_name = args.run_name or target
+run_name = args.run_name or "_".join(targets)
 
 
 ####  Set input/output directories ####
@@ -227,7 +229,7 @@ model_output_path = os.path.join(args.network_dir, run_name)
 #### Load and Normalize Data ####
 training_data = CoNNGaFitImageDataset(
     training_sources,
-    target,
+    targets,
     augment=augment_training,
     radial_bins=radial_bins,
     radial_projection=radial_projection,
@@ -264,29 +266,33 @@ training_stdv = np.sqrt(sum_squared_deviations / n_pixels)
 del cube
 logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
 
-#### Label scaling, from every training label (augmentation doesn't change their range) ####
+#### Label scaling of each target, from every training label (augmentation doesn't change their range) ####
 # Labels are scaled to (label - label_offset) / label_scale for training; predictions and labels are
-# scaled back to physical units for every saved output and plot
-label_offset, label_scale = 0.0, 1.0
-all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))])
+# scaled back to physical units for every saved output and plot. Both have shape (n_maps, 1), one per target.
+label_offset, label_scale = np.zeros((n_maps, 1)), np.ones((n_maps, 1))
+# (n_maps, every training pixel or ring)
+all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))], axis=1)
+label_max = np.max(all_labels, axis=1, keepdims=True)
+label_min = np.min(all_labels, axis=1, keepdims=True)
 if label_scaling != "none":
     if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
-        label_scale = np.max(np.abs(all_labels))
+        label_scale = np.max(np.abs(all_labels), axis=1, keepdims=True)
     else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
-        label_offset = (np.max(all_labels) + np.min(all_labels)) / 2
-        label_scale = (np.max(all_labels) - np.min(all_labels)) / 2
-    if not label_scale > 0:
-        raise ValueError(
-            f"label_scaling = {label_scaling!r} needs training labels that aren't all {np.max(all_labels)}"
-        )
-    logger.info("Label scaling (%s): offset = %.4g, scale = %.4g", label_scaling, label_offset, label_scale)
+        label_offset = (label_max + label_min) / 2
+        label_scale = (label_max - label_min) / 2
+    constant = [target for target, scale in zip(targets, label_scale[:, 0]) if not scale > 0]
+    if constant:
+        raise ValueError(f"label_scaling = {label_scaling!r} needs training labels that aren't constant: {constant}")
+    for target, offset, scale in zip(targets, label_offset[:, 0], label_scale[:, 0]):
+        logger.info("Label scaling of %s (%s): offset = %.4g, scale = %.4g", target, label_scaling, offset, scale)
 
 #### Rough accuracy: the percentage of predicted values within accuracy_tolerance of their label, where ####
-#### accuracy_tolerance is ACCURACY_TOLERANCE times the spread (standard deviation) of every training label. ####
+#### accuracy_tolerance is ACCURACY_TOLERANCE times the spread (standard deviation) of each target's labels. ####
 #### Not a great metric, but okay for tracking general performance ####
 ACCURACY_TOLERANCE = 0.1
-accuracy_tolerance = ACCURACY_TOLERANCE * np.std(all_labels) / label_scale  # In scaled label units
-logger.info("Accuracy tolerance = %.4g (physical units)", accuracy_tolerance * label_scale)
+accuracy_tolerance = ACCURACY_TOLERANCE * np.std(all_labels, axis=1, keepdims=True) / label_scale  # Scaled units
+for target, tolerance in zip(targets, (accuracy_tolerance * label_scale)[:, 0]):
+    logger.info("Accuracy tolerance of %s = %.4g (physical units)", target, tolerance)
 del all_labels
 
 
@@ -304,7 +310,7 @@ training_data.target_transform = scale_labels
 
 validation_data = CoNNGaFitImageDataset(
     validation_sources,
-    target,
+    targets,
     radial_bins=radial_bins,
     radial_projection=radial_projection,
     inclinations=inclinations,
@@ -358,33 +364,44 @@ if radial_bins is not None:  # Labels are radial curves, so plot and save them a
 
 #### Save final-epoch outputs ####
 def save_batch_outputs(x, y, pred, sigma, idx, dataset, output_base, epoch, comp_images=True):
-    """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
-    image via its dataset index (idx), so names stay correct with shuffled or multiple batches.
-    sigma is each prediction's 1-sigma (see compute_loss), saved and plotted too, or None."""
+    """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and a comparison image),
+    named after its image via its dataset index (idx), so names stay correct with shuffled or multiple batches,
+    and after the target. sigma is each prediction's 1-sigma (see compute_loss), saved and plotted too, or None."""
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
     np_pred = to_physical(pred.cpu().detach().numpy())
     # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
     np_sigma = None if sigma is None else sigma.cpu().detach().numpy() * label_scale
-    for tt in range(len(idx)):
-        output_name = output_base + "_" + dataset.names[int(idx[tt])] + "_Epoch" + str(epoch)
-        if comp_images:
-            # Radial curves are plotted against the radius of each ring, from the image's field of view
-            radii = {"radii": dataset.radii(int(idx[tt]))} if radial_bins is not None else {}
-            make_comp_image(
-                np_pred,
-                np_y,
-                np_x,
-                output_name + ".png",
-                tt,
-                sim_to_physical_units=1,
-                param_label=param_label,
-                unit_label=unit_label,
-                bin_op=bin_op,
-                uncertainty=np_sigma,
-                **radii,
-            )  # Labels are already in physical units
-        save_hdf5(np_y, np_pred, output_name + ".hdf5", tt, uncertainty=np_sigma)
+    for m, target in enumerate(targets):
+        param_label, unit_label, bin_op = TARGET_SETTINGS[target]
+        target_sigma = None if np_sigma is None else np_sigma[:, m]
+        for tt in range(len(idx)):
+            output_name = f"{output_base}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
+            if comp_images:
+                # Radial curves are plotted against the radius of each ring, from the image's field of view
+                radii = {"radii": dataset.radii(int(idx[tt]))} if radial_bins is not None else {}
+                make_comp_image(
+                    np_pred[:, m],
+                    np_y[:, m],
+                    np_x,
+                    output_name + ".png",
+                    tt,
+                    sim_to_physical_units=1,
+                    param_label=param_label,
+                    unit_label=unit_label,
+                    bin_op=bin_op,
+                    uncertainty=target_sigma,
+                    **radii,
+                )  # Labels are already in physical units
+            save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
+
+
+def save_correlation_plots(all_pred, all_y, output_base, epoch):
+    """Write a correlation plot of each target's predicted and true maps, from lists of (nBatch, n_maps, n_pixels)
+    batches in physical units."""
+    all_pred, all_y = np.concatenate(all_pred), np.concatenate(all_y)
+    for m, target in enumerate(targets):
+        make_correlation_plot(all_pred[:, m], all_y[:, m], len(all_pred), f"{output_base}_{target}_Epoch{epoch}")
 
 
 #### Define Training Loop ####
@@ -429,7 +446,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
 def count_accurate(pred, y):
     """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels."""
     within = np.abs(pred - y) < accuracy_tolerance
-    return within.mean(axis=1) * 100, within.sum()
+    return within.mean(axis=(1, 2)) * 100, within.sum()
 
 
 #### Define Validation Loop ####
@@ -482,12 +499,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     logger.info("Validation: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, validation_loss, validation_mse)
 
     if final and radial_bins is None:
-        make_correlation_plot(
-            np.concatenate(all_pred),
-            np.concatenate(all_y),
-            sum(len(a) for a in all_pred),
-            diagnostic_output + "_ValidationCorrelationPlot_Epoch" + str(epoch),
-        )
+        save_correlation_plots(all_pred, all_y, diagnostic_output + "_ValidationCorrelationPlot", epoch)
 
     model.train()
     return validation_loss, validation_mse, accuracy, specific_accuracy
@@ -534,12 +546,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     logger.info("Test: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, test_loss, test_mse)
 
     if final and radial_bins is None:
-        make_correlation_plot(
-            np.concatenate(all_pred),
-            np.concatenate(all_y),
-            sum(len(a) for a in all_pred),
-            diagnostic_output + "_TestCorrelationPlot_Epoch" + str(epoch),
-        )
+        save_correlation_plots(all_pred, all_y, diagnostic_output + "_TestCorrelationPlot", epoch)
 
     model.train()
     return test_loss, test_mse, accuracy, specific_accuracy
@@ -549,7 +556,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
 input_shape = tuple(
     training_data[0][0].shape
 )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-model = build_model(network, input_shape, hyperparams, output_size=radial_bins).to(device)
+model = build_model(network, input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps).to(device)
 model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
 validation_names = validation_data.names
 training_names = training_data.names
@@ -631,13 +638,14 @@ torch.save(model.state_dict(), model_output_path + ".pt")
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
 hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
 hf_norm.create_dataset(
-    "label_stats", data=np.array([label_offset, label_scale])
-)  # physical label = scaled label * label_scale + label_offset
+    "label_stats", data=np.stack([label_offset[:, 0], label_scale[:, 0]])
+)  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
 for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
     hf_norm.create_dataset(key, data=value)
 hf_norm.create_dataset("run_name", data=run_name)
 hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
-hf_norm.create_dataset("target", data=target)
+# In the order of the network's output maps
+hf_norm.create_dataset("target", data=np.array(targets, dtype=h5py.string_dtype()))
 if radial_bins is not None:
     hf_norm.create_dataset("radial_bins", data=radial_bins)
     hf_norm.create_dataset("radial_projection", data=radial_projection)
@@ -651,7 +659,7 @@ hf_norm.close()
 
 test_data = CoNNGaFitImageDataset(
     testing_sources,
-    target,
+    targets,
     radial_bins=radial_bins,
     radial_projection=radial_projection,
     inclinations=inclinations,
