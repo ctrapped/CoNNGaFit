@@ -24,6 +24,8 @@ DATASETS = {
     "radial_projection": "sky",
 }
 N_RINGS = 10  # Rings in each rotation curve
+# cm^-2: about 5 sigma for VOF's demo noise; fainter pixels are hidden in the map panels but still used for training
+DETECTION = 1e20
 SPLITS = {
     "training": ["vflat120", "vflat160", "vflat240", "vflat280"],
     "validation": ["vflat180"],
