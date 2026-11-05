@@ -144,11 +144,7 @@ def radial_profile(hf, target, n_bins, values=None):
     weighted by the file's mass like the annotation it replaces.
     """
     mass = hf["mass_annotation"][()]
-    fov_kpc = hf.attrs["fov_kpc"]
-    y, x = np.indices(mass.shape)
-    radius = np.hypot(y - (mass.shape[0] - 1) / 2, x - (mass.shape[1] - 1) / 2) * fov_kpc / mass.shape[1]
-    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
-    ring = np.digitize(radius, edges) - 1
+    ring = ring_index(mass.shape, hf.attrs["fov_kpc"], n_bins)
     inside = ring < n_bins  # pixels in the corners, beyond the image edge, are left out
 
     def ring_sum(values):
@@ -163,6 +159,15 @@ def radial_profile(hf, target, n_bins, values=None):
     velocity_map = hf[TARGETS[target][-1]][()] if values is None else values
     momentum = ring_sum(mass * velocity_map)
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
+
+
+def ring_index(shape, fov_kpc, n_bins):
+    """Each pixel's ring in an image of shape (nY, nX) and fov_kpc across, split into n_bins equal-width rings by
+    radius from the image center out to the image edge; pixels in the corners, beyond the edge, are n_bins or more."""
+    y, x = np.indices(shape)
+    radius = np.hypot(y - (shape[0] - 1) / 2, x - (shape[1] - 1) / 2) * fov_kpc / shape[1]
+    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
+    return np.digitize(radius, edges) - 1
 
 
 def ring_radii(fov_kpc, n_bins):
