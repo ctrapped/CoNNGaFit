@@ -67,7 +67,8 @@ The hyperparameters file's `network` key chooses the network, and so which other
 
 ```toml
 target = "radial_momentum"      # mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity,
-                                # radial_momentum, cylindrical_radial_momentum, rotational_momentum
+                                # radial_momentum, cylindrical_radial_momentum, rotational_momentum;
+                                # or a list, e.g. ["mass", "rotational_momentum"], to predict a map of each (resblock only)
 augment = "major_axis"          # rotations/flips added to the training set: "major_axis", "all" or "none"
 inclinations = [45]             # inclinations to use in every set: "all", or a list in degrees
 radial_bins = 0                 # 0 trains on maps; N > 0 trains on N-bin radial curves
@@ -111,7 +112,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--run-name` | the target | Name of the checkpoint and every diagnostic output |
+| `--run-name` | the targets, joined by `_` | Name of the checkpoint and every diagnostic output |
 | `--network-dir` | `NetworkWeights` | Where the trained model is written |
 | `--output-dir` | `DiagnosticOutputs` | Where diagnostic images and plots are written |
 | `--batch-size` | ~1/10 of the training set (at least 2) | Training batch size; `0` trains on the full set as one batch |
@@ -126,11 +127,13 @@ Both output directories are created if missing. Run with `--help` for details.
 NetworkWeights/
   <run-name>.pt       trained weights
   <run-name>.hdf5     everything needed to rebuild and use the network: image normalization
-                      (image_stats), label scaling (label_stats), input_shape, every
-                      hyperparameter of its network, and the full text of both parameter files
+                      (image_stats), label scaling of each target (label_stats), the targets,
+                      input_shape, every hyperparameter of its network, and the full text of
+                      both parameter files
 DiagnosticOutputs/
-  images/             final-epoch prediction vs. truth for every training, validation and
-                      test sample (.hdf5, plus a comparison .png for validation and test);
+  images/             final-epoch prediction vs. truth for every target of every training,
+                      validation and test sample (.hdf5, plus a comparison .png for validation
+                      and test), named <run-name>_<set>_<sample>_<target>_Epoch<N>;
                       with predict_variance or the DDPM, each prediction's 1σ (the DDPM's
                       posterior standard deviation) as "uncertainty", and a 1σ panel in the
                       comparison .png

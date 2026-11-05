@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Several targets at once: `target` in the datasets file may be a list (e.g. `["mass", "rotational_momentum"]`),
+  and the ResBlock U-Net (and the dilated ResNet, through its new `n_maps` argument) predicts a map or radial
+  curve of each from one shared network. The DDPM denoises the maps of every target together, so each sample is
+  drawn from their joint posterior. Labels are `(n_targets, n_pixels)`, each target is scaled separately
+  (`label_stats` is `(2, n_targets)`), and the checkpoint records the targets in order.
 - pytest suite for the network modules: shared blocks, both regression networks
   (fc and conv heads), and the DDPM denoiser and diffusion process.
 - GitHub Actions workflow running the tests on Python 3.11 and 3.12, plus a ruff lint job.
@@ -50,6 +55,11 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- The ResBlock U-Net and dilated ResNet return `(nBatch, n_maps, output_size)`, the DDPM's denoiser takes and
+  returns `(nBatch, n_maps, H, W)` maps and samples `(n_samples, nBatch, n_maps, ...)`, and `use_model.predict`
+  yields `(n_targets, ...)` arrays, also for a single target.
+- Saved outputs include the target in their names: `<sample>_<target>_Epoch<N>` for training snapshots, and
+  `<name>_<target>_projectionMap` / `_radialPlot` for `run_inferences`.
 - **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
   `radial_momentum` and `cylindrical_radial_momentum` (formerly `radial_mass_flux` and
   `cylindrical_radial_mass_flux`), plus the new `rotational_momentum`. Divide by a pixel or ring

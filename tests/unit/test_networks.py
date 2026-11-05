@@ -15,6 +15,7 @@ BUILD_SHAPE = (32, 32, 32)  # (nSpec, nY, nX)
 # Overrides that make each config file's network small enough to build in a moment
 SMALL_HYPERPARAMS = dict(n_filt0=2, k0=3, k1=3, n_fc=8, n_timesteps=10)
 NETWORK_CLASSES = {"resblock": NeuralNetwork, "ddpm": GaussianDiffusion}
+N_MAPS = 2
 
 
 @pytest.mark.parametrize("path", CONFIG_FILES, ids=lambda path: path.name)
@@ -35,6 +36,14 @@ def test_build_model_matches_network(path):
     if isinstance(model, GaussianDiffusion):
         assert model.flat_labels  # samples and labels are flattened maps, as conngafit_datasets.py gives them
         assert model.denoiser.input_shape == BUILD_SHAPE  # built for the cube
+
+
+@pytest.mark.parametrize("path", CONFIG_FILES, ids=lambda path: path.name)
+def test_build_model_predicts_every_map(path):
+    with open(path, "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
+    model = build_model(hyperparams["network"], BUILD_SHAPE, hyperparams, n_maps=N_MAPS)
+    assert (model.denoiser if isinstance(model, GaussianDiffusion) else model).n_maps == N_MAPS
 
 
 def test_ddpm_rejects_radial_curves():
