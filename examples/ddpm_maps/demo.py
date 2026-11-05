@@ -27,15 +27,19 @@ sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo 
 
 from conngafit_datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402 - after sys.path
 from demo_common import (  # noqa: E402
+    COLUMN_DENSITY_LIMITS,
     CURVE_TARGET,
     DATA_DIR,
     DATASETS,
     DETECTION,
     HYPERPARAM_OVERRIDES,
+    LOS_VELOCITY_LIMITS,
+    MAP_PANELS,
     MAP_TARGETS,
     N_RINGS,
     REPO_ROOT,
     SNAPSHOT,
+    SNR_LIMITS,
     SPLITS,
     curve_errors,
     load_history,
@@ -47,7 +51,7 @@ from demo_common import (  # noqa: E402
     train,
     write_configs,
 )
-from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot_maps  # noqa: E402
+from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot_map  # noqa: E402
 from use_model import load_model, predict  # noqa: E402
 
 RUN_NAME = "demo_ddpm"
@@ -97,16 +101,19 @@ def main():
     fig, ((ax_density, ax_velocity, ax_curve), (ax_residual, ax_mse, ax_loss)), map_axes = demo_figure(len(MAP_TARGETS))
     column_density, velocity = moment_maps(images["cubes"][0], images["channel_widths"][0])
     extent = [-fov_kpc / 2, fov_kpc / 2, -fov_kpc / 2, fov_kpc / 2]
-    plot_inputs((ax_density, ax_velocity), column_density, velocity, extent)
+    plot_inputs((ax_density, ax_velocity), column_density, velocity, extent, COLUMN_DENSITY_LIMITS, LOS_VELOCITY_LIMITS)
     radii = ring_radii(fov_kpc, N_RINGS)
     plot_curves(ax_curve, ax_residual, radii, images["true_curves"], curves, sigmas, position_angles)
     plot_history(
         ax_mse, history["training_mses"], history["validation_mses"], "MSE of the mean", "MSE (scaled labels)", "log"
     )
     plot_history(ax_loss, history["training_losses"], history["validation_losses"], *LOSS)
-    labels = [f"{TARGET_SETTINGS[target][0]} {TARGET_SETTINGS[target][1]}" for target in MAP_TARGETS]
     undetected = column_density < DETECTION
-    plot_maps(map_axes, labels, images["true_maps"][0], maps[0], map_sigmas[0], undetected, extent)
+    for row, target, true_map, predicted_map, sigma_map in zip(
+        map_axes, MAP_TARGETS, images["true_maps"][0], maps[0], map_sigmas[0]
+    ):
+        label = f"{TARGET_SETTINGS[target][0]} {TARGET_SETTINGS[target][1]}"
+        plot_map(row, label, true_map, predicted_map, sigma_map, undetected, extent, SNR_LIMITS, **MAP_PANELS[target])
     figure_file = output / f"{RUN_NAME}.png"
     fig.savefig(figure_file, dpi=110, bbox_inches="tight")
     plt.close(fig)

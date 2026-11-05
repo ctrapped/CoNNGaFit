@@ -25,10 +25,12 @@ sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo 
 
 from conngafit_datasets import ring_radii  # noqa: E402 - after sys.path
 from demo_common import (  # noqa: E402
+    COLUMN_DENSITY_LIMITS,
     CURVE_TARGET,
     DATA_DIR,
     DATASETS,
     HYPERPARAM_OVERRIDES,
+    LOS_VELOCITY_LIMITS,
     N_RINGS,
     REPO_ROOT,
     RESBLOCK_OVERRIDES,
@@ -82,7 +84,7 @@ def main():
     column_density, velocity = moment_maps(images["cubes"][0], images["channel_widths"][0])
     half_width = images["fovs_kpc"][0] / 2
     extent = [-half_width, half_width, -half_width, half_width]
-    plot_inputs((ax_density, ax_velocity), column_density, velocity, extent)
+    plot_inputs((ax_density, ax_velocity), column_density, velocity, extent, COLUMN_DENSITY_LIMITS, LOS_VELOCITY_LIMITS)
     radii = ring_radii(images["fovs_kpc"][0], N_RINGS)
     plot_curves(ax_curve, ax_residual, radii, images["true_curves"], curves, sigmas, position_angles)
     plot_history(
