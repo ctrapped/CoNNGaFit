@@ -14,7 +14,7 @@ from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, REPO, TARGET, expected_shap
 from use_model import load_model, predict, run_inferences
 
 INFERENCE_SCRIPT = REPO / "inference_template.py"
-DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
+DEMO_MODEL = REPO / "examples" / "resnet_curve" / "model" / "demo"  # a committed checkpoint, for inference_template.py
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
 SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")

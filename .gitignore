@@ -37,8 +37,9 @@ outputs/
 *.err
 slurm-*.out
 
-# The demo's data is small and committed (see examples/make_demo_data.py); its outputs aren't
+# The demos' data and the curve demo's network are small and committed (see examples/make_demo_data.py); their
+# outputs aren't
 !examples/demo_data/**/*.hdf5
-examples/demo_output/
-!examples/demo_model/demo.pt
-!examples/demo_model/demo.hdf5
+examples/*/output/
+!examples/resnet_curve/model/demo.pt
+!examples/resnet_curve/model/demo.hdf5
