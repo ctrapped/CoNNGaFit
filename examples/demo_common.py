@@ -26,6 +26,17 @@ DATASETS = {
 N_RINGS = 10  # Rings in each rotation curve
 # cm^-2: about 5 sigma for VOF's demo noise; fainter pixels are hidden in the map panels but still used for training
 DETECTION = 1e20
+# Color limits of every demo's map panels, so each property is drawn on the same scale in every figure
+COLUMN_DENSITY_LIMITS = (1e19, 1e23)  # cm^-2, on a log scale
+LOS_VELOCITY_LIMITS = (-300, 300)  # km/s
+SNR_LIMITS = (0, 10)  # Predicted / 1-sigma
+# Each target map's panels: on a log or linear color scale, the values' limits, and the limit of their difference
+# (log10(predicted / true) in dex on a log scale, predicted - true otherwise)
+MAP_PANELS = {
+    "mass": {"log_scale": True, "value_limits": (1e5, 2e8), "difference_limit": 1.5},
+    "rotational_momentum": {"log_scale": True, "value_limits": (1e7, 2e10), "difference_limit": 1.5},
+    "rotational_velocity": {"log_scale": False, "value_limits": (-100, 300), "difference_limit": 100},
+}
 SPLITS = {
     "training": ["vflat120", "vflat160", "vflat240", "vflat280"],
     "validation": ["vflat180"],
