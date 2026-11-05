@@ -38,8 +38,9 @@ from use_model import load_model, predict, ring_radii_kpc  # noqa: E402
 
 DATA_DIR = REPO_ROOT / "examples" / "demo_data"
 RUN_NAME = "demo"
+CURVE_TARGET = "rotational_velocity"  # The demo network's single target, binned into the rotation curve
 DATASETS = {
-    "target": "rotational_velocity",
+    "target": CURVE_TARGET,
     "augment": "major_axis",
     "inclinations": [45],
     "radial_projection": "sky",
@@ -157,13 +158,13 @@ def binned_curve(path, prediction, sigma):
     and its 1-sigma, weighting each pixel by its mass as radial_profile does for the true curve. The ring 1-sigma
     assumes the pixels' errors are independent."""
     with h5py.File(path) as f:
-        curve = radial_profile(f, DATASETS["target"], N_RINGS, values=prediction)
+        curve = radial_profile(f, CURVE_TARGET, N_RINGS, values=prediction)
         if sigma is None:
             return curve, None
         # Variance of a mass-weighted mean, sum(m^2 sigma^2) / sum(m)^2: the mass-weighted mean of m sigma^2,
         # divided by the ring's mass
         mass = f["mass_annotation"][()]
-        weighted_variance = radial_profile(f, DATASETS["target"], N_RINGS, values=mass * sigma**2)
+        weighted_variance = radial_profile(f, CURVE_TARGET, N_RINGS, values=mass * sigma**2)
         ring_mass = radial_profile(f, "mass", N_RINGS)
     ring_variance = np.divide(weighted_variance, ring_mass, out=np.zeros(N_RINGS), where=ring_mass > 0)
     return curve, np.sqrt(ring_variance)
@@ -183,7 +184,8 @@ def plot(model_path, output, figure_file, loss):
         key=lambda path: float(VOF_VIEW.search(Path(path).name)["position_angle"]),
     )
     predictions, maps_predicted = {}, {}
-    for path, (name, pred, std) in zip(test_files, predict(model, metadata, test_files, return_std=True)):
+    for path, (name, preds, stds) in zip(test_files, predict(model, metadata, test_files, return_std=True)):
+        pred, std = preds[0], stds[0]  # Predictions are stacked over targets
         if predicts_maps:
             maps_predicted[name] = (pred, std)
             predictions[name] = binned_curve(path, pred, std)
@@ -194,7 +196,7 @@ def plot(model_path, output, figure_file, loss):
         cube = f["spectra"][()]  # (y, x, velocity channel), in cm^-2 per channel
         channel_width = f.attrs["dnu_kmps"]
         half_width = f.attrs["fov_kpc"] / 2
-        true_map = f[TARGETS[DATASETS["target"]][-1]][()]
+        true_map = f[TARGETS[CURVE_TARGET][-1]][()]
     run_name = metadata["run_name"]
     with h5py.File(output / "DiagnosticOutputs" / "diagnostics" / f"{run_name}_LossesAndAccuracies.hdf5") as f:
         training_losses = f["training_losses"][()]  # The training objective
@@ -250,7 +252,7 @@ def plot(model_path, output, figure_file, loss):
     residuals, sigmas = [], []
     for i, path in enumerate(test_files):
         with h5py.File(path) as f:
-            truth = radial_profile(f, DATASETS["target"], N_RINGS)  # The true rotation curve
+            truth = radial_profile(f, CURVE_TARGET, N_RINGS)  # The true rotation curve
         prediction, sigma = predictions[Path(path).stem]
         residual = prediction - truth
         residuals.append(residual)
