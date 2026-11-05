@@ -45,7 +45,7 @@ from demo_common import (  # noqa: E402
 from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs  # noqa: E402
 from use_model import load_model, predict  # noqa: E402
 
-RUN_NAME = "demo"
+RUN_NAME = "demo_resnet_curve"
 CONFIG = REPO_ROOT / "configs" / "hyperparams_resblock_rc.toml"
 HYPERPARAMS = {**HYPERPARAM_OVERRIDES, **RESBLOCK_OVERRIDES, "output_head": "fc"}
 EPOCHS = 200
