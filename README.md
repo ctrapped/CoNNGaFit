@@ -26,13 +26,9 @@ To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.o
 
 ## Demos
 
-Three demos train small networks on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), then predict the rotation curve of a galaxy they haven't seen, along with its 1σ uncertain. Each demo takes few minutes on a laptop CPU, and write their figure and network to an `output/` folder.
+Demos train small networks on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), then predict the rotation curve of a galaxy they haven't seen, along with its 1σ uncertain. Each demo takes few minutes on a laptop CPU, and write their figure and network to an `output/` folder.
 
-| Demo | Network | Predicts | Rotation curve |
-|---|---|---|---|
-| `examples/resnet_curve/demo.py` | ResBlock U-Net, fc head | the rotation curve, with each ring's 1σ | predicted directly |
-| `examples/resnet_maps/demo.py` | ResBlock U-Net, conv head | mass and rotational momentum maps, with each pixel's 1σ | each ring's total momentum over its total mass, with the maps' 1σ propagated into it |
-| `examples/ddpm_maps/demo.py` | DDPM | samples of the mass and rotational momentum maps from their joint posterior | the mean and spread of the samples' curves, so its 1σ includes the correlation between the mass and momentum errors |
+We showcase the simplest demo which is a ResBlock U-Net that predicts the rotation curve with 1σ uncertainty.
 
 ```bash
 python examples/resnet_curve/demo.py
@@ -40,15 +36,13 @@ python examples/resnet_curve/demo.py
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/resnet_curve/demo.png)
 
-The map demos' figures add a row for each map: its true and predicted values, log10(predicted / true) and the prediction's signal-to-noise (predicted / 1σ). They also print each map's RMS error.
-
 Each demo's `demo_inference.py` runs its trained network on the test galaxy without training. For example,
 
 ```bash
 python examples/resnet_curve/demo_inference.py
 ```
 
-runs the pre-trained network in [`examples/resnet_curve/model`](examples/resnet_curve/model) in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve and its 1σ uncertainty to `examples/resnet_curve/output/inference/`. The map demos' inference scripts run the network their `demo.py` trained (or one passed with `--model-path`): `resnet_maps` writes each predicted map with `use_model.run_inferences`, and `ddpm_maps` draws posterior samples with `use_model.predict(..., return_samples=True)`.
+runs the pre-trained network in [`examples/resnet_curve/model`](examples/resnet_curve/model) in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve and its 1σ uncertainty to `examples/resnet_curve/output/inference/`.
 
 The demos' shared settings, loaders and computations are in [`examples/demo_common.py`](examples/demo_common.py), and their plotting functions in [`examples/demo_plots.py`](examples/demo_plots.py). [`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
 
