@@ -24,27 +24,33 @@ pip install -e ".[dev]"     # + development tools (pytest, ruff, pre-commit)
 
 To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)). Instructions for the Quartz cluster at IU are in [`Tutorials/Quartz`](Tutorials/Quartz/README.md).
 
-## Demo
+## Demos
+
+Three demos train small networks on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), then predict the rotation curve of a galaxy they haven't seen, along with its 1σ uncertain. Each demo takes few minutes on a laptop CPU, and write their figure and network to an `output/` folder.
+
+| Demo | Network | Predicts | Rotation curve |
+|---|---|---|---|
+| `examples/resnet_curve/demo.py` | ResBlock U-Net, fc head | the rotation curve, with each ring's 1σ | predicted directly |
+| `examples/resnet_maps/demo.py` | ResBlock U-Net, conv head | mass and rotational momentum maps, with each pixel's 1σ | each ring's total momentum over its total mass, with the maps' 1σ propagated into it |
+| `examples/ddpm_maps/demo.py` | DDPM | samples of the mass and rotational momentum maps from their joint posterior | the mean and spread of the samples' curves, so its 1σ includes the correlation between the mass and momentum errors |
 
 ```bash
-python examples/demo.py
+python examples/resnet_curve/demo.py
 ```
 
-Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen, along with 1σ uncertainty. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png`:
+![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/resnet_curve/demo.png)
 
-![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/demo.png)
+The map demos' figures add a row for each map: its true and predicted values, log10(predicted / true) and the prediction's signal-to-noise (predicted / 1σ). They also print each map's RMS error.
 
-`python examples/demo.py --predict map` trains the network on the rotational velocity map instead, with each pixel's 1σ, and bins the predicted map into the rotation curve (mass-weighted, as the true curve is). Its figure, `demo_map.png`, adds the true, predicted and residual velocity maps and the predicted 1σ map. Pass its network to `demo_inference.py` with `--model-path examples/demo_output/NetworkWeights/demo_map`.
-
-To run a trained network on new datacubes without training, run
+Each demo's `demo_inference.py` runs its trained network on the test galaxy without training. For example,
 
 ```bash
-python examples/demo_inference.py
+python examples/resnet_curve/demo_inference.py
 ```
 
-which runs the pre-trained demo network in [`examples/demo_model`](examples/demo_model) on the test galaxy in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve and its 1σ uncertainty to `examples/demo_output/inference/`. Pass `--model-path examples/demo_output/NetworkWeights/demo` to use the network you trained with `demo.py` instead.
+runs the pre-trained network in [`examples/resnet_curve/model`](examples/resnet_curve/model) in a few seconds, writing a plot and an `.hdf5` file of each predicted rotation curve and its 1σ uncertainty to `examples/resnet_curve/output/inference/`. The map demos' inference scripts run the network their `demo.py` trained (or one passed with `--model-path`): `resnet_maps` writes each predicted map with `use_model.run_inferences`, and `ddpm_maps` draws posterior samples with `use_model.predict(..., return_samples=True)`.
 
-[`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
+The demos' shared settings, loaders and computations are in [`examples/demo_common.py`](examples/demo_common.py), and their plotting functions in [`examples/demo_plots.py`](examples/demo_plots.py). [`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
 
 ## Training
 
@@ -59,7 +65,7 @@ The hyperparameters file's `network` key chooses the network, and so which other
 | `network` | Starting points | Predicts |
 |---|---|---|
 | `"resblock"` | `configs/hyperparams_resblock.toml` (radial momentum), `configs/hyperparams_resblock_rc.toml` (rotational velocity) | maps or radial curves, with each value's 1σ if `predict_variance = true` |
-| `"ddpm"` | `configs/hyperparams_ddpm.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples |
+| `"ddpm"` | `configs/hyperparams_ddpm.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples, drawn jointly for every target |
 
 ### Datasets file
 
@@ -68,7 +74,7 @@ The hyperparameters file's `network` key chooses the network, and so which other
 ```toml
 target = "radial_momentum"      # mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity,
                                 # radial_momentum, cylindrical_radial_momentum, rotational_momentum;
-                                # or a list, e.g. ["mass", "rotational_momentum"], to predict a map of each (resblock only)
+                                # or a list, e.g. ["mass", "rotational_momentum"], to predict a map of each
 augment = "major_axis"          # rotations/flips added to the training set: "major_axis", "all" or "none"
 inclinations = [45]             # inclinations to use in every set: "all", or a list in degrees
 radial_bins = 0                 # 0 trains on maps; N > 0 trains on N-bin radial curves
@@ -173,7 +179,7 @@ pytest -m "not slow" # skip the demo-accuracy tests (about 2 minutes)
 pytest tests/unit    # only the unit tests (a few seconds)
 ```
 
-`tests/unit/` are simple unit tests. `tests/integration` includes pipeline smoke tests training and inference for each ResBlock output head and for the DDPM and a demo test `tests/integration/test_demo.py` (marked `slow`; CI runs it on pull requests) that trains a demo and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
+`tests/unit/` are simple unit tests. `tests/integration` includes pipeline smoke tests training and inference for each ResBlock output head and for the DDPM and a demo test `tests/integration/test_demo.py` (marked `slow`; CI runs it on pull requests) that trains the `resnet_curve` demo and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
 
 `main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/unit/` or `tests/integration/` for new code.
 
