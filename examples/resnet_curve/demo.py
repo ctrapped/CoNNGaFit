@@ -3,7 +3,7 @@ seen.
 
 Needs no simulation data and runs in a few minutes on a laptop CPU. From the repository root:
 
-    python examples/resnet_curve/demo.py         # writes examples/resnet_curve/output/demo.png
+    python examples/resnet_curve/demo.py         # writes examples/resnet_curve/output/demo_resnet_curve.png
     python examples/resnet_curve/demo.py --epochs 10 --output DIR
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic disk

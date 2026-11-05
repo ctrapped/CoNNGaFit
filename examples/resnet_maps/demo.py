@@ -3,7 +3,7 @@ predict one it hasn't seen and derive its rotation curve.
 
 Needs no simulation data and runs in a few minutes on a laptop CPU. From the repository root:
 
-    python examples/resnet_maps/demo.py          # writes examples/resnet_maps/output/demo.png
+    python examples/resnet_maps/demo.py          # writes examples/resnet_maps/output/demo_resnet_map.png
     python examples/resnet_maps/demo.py --epochs 10 --output DIR
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic disk

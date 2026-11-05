@@ -3,7 +3,7 @@
 Uses the pre-trained network in examples/resnet_curve/model/ and runs in a few seconds. From the repository root:
 
     python examples/resnet_curve/demo_inference.py   # writes examples/resnet_curve/output/inference/
-    python examples/resnet_curve/demo_inference.py --model-path examples/resnet_curve/output/NetworkWeights/demo
+    python examples/resnet_curve/demo_inference.py --model-path DIR/NetworkWeights/demo_resnet_curve
 
 examples/resnet_curve/model/ is a network trained by examples/resnet_curve/demo.py. For each datacube,
 use_model.run_inferences writes the predicted rotation curve and its 1-sigma as a plot and an hdf5 file, exactly as

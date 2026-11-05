@@ -4,7 +4,7 @@ training.
 Runs the model trained by examples/ddpm_maps/demo.py in under a minute. From the repository root:
 
     python examples/ddpm_maps/demo_inference.py
-    python examples/ddpm_maps/demo_inference.py --model-path DIR/NetworkWeights/demo
+    python examples/ddpm_maps/demo_inference.py --model-path DIR/NetworkWeights/demo_ddpm
 
 use_model.predict(..., return_samples=True) draws n_samples maps of both targets from their joint posterior for each
 datacube, as it would for a real observation converted with fits_to_conngafit.py. Each sample's rotation curve is
@@ -22,6 +22,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
 
 from conngafit_datasets import ring_index  # noqa: E402 - after sys.path
+from demo import RUN_NAME  # noqa: E402 - this folder's demo.py
 from demo_common import (  # noqa: E402
     CURVE_TARGET,
     DATA_DIR,
@@ -37,7 +38,7 @@ from demo_common import (  # noqa: E402
 from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import load_model, predict  # noqa: E402
 
-MODEL_PATH = Path(__file__).resolve().parent / "output" / "NetworkWeights" / "demo"
+MODEL_PATH = Path(__file__).resolve().parent / "output" / "NetworkWeights" / RUN_NAME
 
 
 def main():
@@ -49,7 +50,7 @@ def main():
     args = parser.parse_args()
     configure_logging(verbose=args.verbose, quiet=args.quiet)
 
-    # Every image's posterior samples, and the truths the synthetic galaxies come with, which a real observation wouldn't
+    # Every image's posterior samples, and the truths the synthetic galaxies come with (a real observation wouldn't)
     paths, _ = testing_images(DATA_DIR, SPLITS["testing"][0])
     model, metadata = load_model(str(args.model_path))
     samples = np.array([image_samples for _, image_samples in predict(model, metadata, paths, return_samples=True)])

@@ -114,7 +114,7 @@ def test_validation_loss_decreases(losses):
 
 
 def test_trained_network_predictions(demo_run):
-    assert (demo_run / "demo.png").is_file()  # the demo also plots its results
+    assert (demo_run / f"{demo.RUN_NAME}.png").is_file()  # the demo also plots its results
     model_path = demo_run / "NetworkWeights" / demo.RUN_NAME
     check_test_galaxy(*predict_curves(model_path, TEST_IMAGES))
     check_calibration(model_path)

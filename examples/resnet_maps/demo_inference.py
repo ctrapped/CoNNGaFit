@@ -3,7 +3,7 @@
 Runs the network trained by examples/resnet_maps/demo.py in a few seconds. From the repository root:
 
     python examples/resnet_maps/demo_inference.py   # writes examples/resnet_maps/output/inference/
-    python examples/resnet_maps/demo_inference.py --model-path DIR/NetworkWeights/demo
+    python examples/resnet_maps/demo_inference.py --model-path DIR/NetworkWeights/demo_resnet_map
 
 For each datacube, use_model.run_inferences writes each predicted map and its 1-sigma as a plot and an hdf5 file,
 exactly as it would for a real observation converted with fits_to_conngafit.py. The rotation curve is then each
@@ -21,6 +21,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
 
 from conngafit_datasets import ring_index  # noqa: E402 - after sys.path
+from demo import RUN_NAME  # noqa: E402 - this folder's demo.py
 from demo_common import (  # noqa: E402
     CURVE_TARGET,
     DATA_DIR,
@@ -37,7 +38,7 @@ from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import run_inferences  # noqa: E402
 
 DEMO_DIR = Path(__file__).resolve().parent
-MODEL_PATH = DEMO_DIR / "output" / "NetworkWeights" / "demo"
+MODEL_PATH = DEMO_DIR / "output" / "NetworkWeights" / RUN_NAME
 
 
 def main():

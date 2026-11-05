@@ -3,7 +3,7 @@ joint posterior given its datacube, then sample one it hasn't seen and derive it
 
 Needs no simulation data and runs in several minutes on a laptop CPU. From the repository root:
 
-    python examples/ddpm_maps/demo.py            # writes examples/ddpm_maps/output/demo.png
+    python examples/ddpm_maps/demo.py            # writes examples/ddpm_maps/output/demo_ddpm.png
     python examples/ddpm_maps/demo.py --epochs 10 --output DIR
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic disk
