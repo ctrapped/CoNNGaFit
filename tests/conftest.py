@@ -1,9 +1,13 @@
-"""Shared fixtures: small, CPU-sized models and input cubes for the network tests, and a script runner for the
-end-to-end tests."""
+"""Shared fixtures: small, CPU-sized models and input cubes for the network tests, and a script runner, a
+single-image training run and their helpers for the end-to-end tests."""
 
+import json
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
+import h5py
 import pytest
 import torch
 
@@ -14,6 +18,21 @@ INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
 SEED = 0
 SCRIPT_TIMEOUT_S = 600
+
+REPO = Path(__file__).resolve().parents[1]
+TRAIN_SCRIPT = REPO / "train_model_unet.py"
+CONFIG_DIR = REPO / "configs"
+
+# One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,
+# validation and testing set of the pipeline tests
+GALAXY = "vflat220"
+INCLINATION = 45
+SNAPSHOT = 600
+IMAGE_NAME = f"{GALAXY}_i{INCLINATION}_pa0_{SNAPSHOT}_image_fullSpectra.hdf5"
+IMAGE = REPO / "examples" / "demo_data" / GALAXY / f"i{INCLINATION}" / IMAGE_NAME
+TARGET = "rotational_velocity"  # The demo images carry mass and rotational velocity annotations
+with h5py.File(IMAGE, "r") as hf:
+    IMAGE_SHAPE = hf["spectra"].shape  # (n_y, n_x, n_spec), as VOF writes it
 
 # Constructor arguments shared by every network, plus per-network arguments that keep it small
 COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8)
@@ -90,3 +109,52 @@ def run_script():
         return result
 
     return run
+
+
+def expected_shape(radial_bins=0):
+    """A map has one value per sky pixel of the cube; a curve has one value per ring."""
+    n_y, n_x, _ = IMAGE_SHAPE
+    return (radial_bins,) if radial_bins else (n_y, n_x)
+
+
+def saved_test_outputs(run_dir, name):
+    """The prediction and its 1-sigma uncertainty (None if the network gave none) the training script saved for
+    IMAGE at the end of training."""
+    saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{IMAGE.stem}_Epoch*.hdf5"))
+    with h5py.File(saved, "r") as hf:
+        return hf["prediction"][()], (hf["uncertainty"][()] if "uncertainty" in hf else None)
+
+
+@pytest.fixture(scope="session")
+def train_on_image(tmp_path_factory, run_script):
+    """Run the training script on IMAGE with a hyperparameters dict, in a new folder, and return the folder. The
+    network is written to nets/<name>, the diagnostic outputs to diag/."""
+
+    def train(name, hyperparams, radial_bins=0):
+        run_dir = tmp_path_factory.mktemp(name)
+        image_dir = run_dir / "vof" / GALAXY / f"i{INCLINATION}"
+        image_dir.mkdir(parents=True)
+        shutil.copy(IMAGE, image_dir)
+        datasets = dict(
+            target=TARGET, augment="none", inclinations=[INCLINATION], radial_bins=radial_bins, radial_projection="sky"
+        )
+        # Flat key = value TOML lines: JSON literals are valid TOML for strings, numbers and lists
+        hyperparams_lines = [f"{key} = {json.dumps(value)}" for key, value in hyperparams.items()]
+        datasets_lines = [f"{key} = {json.dumps(value)}" for key, value in datasets.items()]
+        for split in ("training", "validation", "testing"):
+            datasets_lines += [f"[{split}]", f'"vof/{GALAXY}" = {SNAPSHOT}']
+        (run_dir / "hyperparams.toml").write_text("\n".join(hyperparams_lines) + "\n")
+        (run_dir / "datasets.toml").write_text("\n".join(datasets_lines) + "\n")
+
+        run_script(
+            TRAIN_SCRIPT,
+            "--hyperparams", "hyperparams.toml",
+            "--datasets", "datasets.toml",
+            "--run-name", name,
+            "--network-dir", "nets",
+            "--output-dir", "diag",
+            cwd=run_dir,
+        )  # fmt: skip
+        return run_dir
+
+    return train

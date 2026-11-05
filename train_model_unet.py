@@ -11,7 +11,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
 from logging_setup import add_logging_arguments, configure_logging
-from unet3d_resblock import NeuralNetwork
+from networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
 
 matplotlib.use("Agg")
 import argparse
@@ -26,7 +26,7 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Hyperparameters and datasets (including the target annotation) are read from two parameter files,
-####configs/hyperparams.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
+####configs/hyperparams_resblock.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
 #
 ####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
 ####  Run with --help to see all options. The two parameter files and --run-name are normally the
@@ -40,23 +40,8 @@ from plotting_functions import make_comp_image, make_comp_image_1d, make_correla
 
 
 ####   PARAMETER FILES   ####
-# Keys every parameter file must have (see configs/*.toml for what each one does)
-HYPERPARAM_KEYS = {
-    "learning_rate",
-    "weight_decay",
-    "epochs",
-    "n_fc",
-    "n_filt0",
-    "k0",
-    "k1",
-    "dropout_rate",
-    "block_dropout_rate",
-    "output_head",
-    "label_scaling",
-    "predict_variance",
-    "seed",
-}
-OPTIONAL_HYPERPARAM_KEYS = {"mass_weight_power"}
+# Keys every datasets file must have (see configs/*.toml for what each one does; networks.py lists each network's
+# hyperparameter keys)
 DATASET_KEYS = {
     "target",
     "augment",
@@ -102,8 +87,9 @@ def parse_args():
     )
     parser.add_argument(
         "--hyperparams",
-        default=os.path.join(CONFIG_DIR, "hyperparams.toml"),
-        help="Hyperparameter file (learning rate, epochs, network size, output head). Default: configs/hyperparams.toml",
+        default=os.path.join(CONFIG_DIR, "hyperparams_resblock.toml"),
+        help="Hyperparameter file (network, learning rate, epochs, network size, output head). "
+        "Default: configs/hyperparams_resblock.toml",
     )
     parser.add_argument(
         "--datasets",
@@ -166,17 +152,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info("Using %s device", device)
 
 ####   HYPERPARAMETERS   ####
-hyperparams, hyperparams_text = load_parameter_file(args.hyperparams, HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS)
+with open(args.hyperparams, "rb") as f:
+    network = tomllib.load(f).get("network")  # Sets which keys the file must have
+if network not in HYPERPARAM_KEYS:
+    raise ValueError(f"{args.hyperparams}: network = {network!r} should be one of {sorted(HYPERPARAM_KEYS)}")
+hyperparams, hyperparams_text = load_parameter_file(
+    args.hyperparams, HYPERPARAM_KEYS[network], OPTIONAL_HYPERPARAM_KEYS[network]
+)
 learning_rate = hyperparams["learning_rate"]
 weight_decay = hyperparams["weight_decay"]
 epochs = hyperparams["epochs"]
-n_fc = hyperparams["n_fc"]
-n_filt0 = hyperparams["n_filt0"]
-k0 = hyperparams["k0"]
-k1 = hyperparams["k1"]
-dropout_rate = hyperparams["dropout_rate"]
-block_dropout_rate = hyperparams["block_dropout_rate"]
-output_head = hyperparams["output_head"]
 label_scaling = hyperparams["label_scaling"]
 if label_scaling not in ("none", "symmetric", "one-sided"):
     raise ValueError(
@@ -185,7 +170,7 @@ if label_scaling not in ("none", "symmetric", "one-sided"):
 mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
 if not mass_weight_power >= 0:
     raise ValueError(f"{args.hyperparams}: mass_weight_power = {mass_weight_power!r} should be 0 or more")
-predict_variance = hyperparams["predict_variance"]
+predict_variance = hyperparams.get("predict_variance", False)  # resblock only
 if not isinstance(predict_variance, bool):
     raise ValueError(f"{args.hyperparams}: predict_variance = {predict_variance!r} should be true or false")
 if predict_variance and label_scaling == "none":
@@ -193,6 +178,9 @@ if predict_variance and label_scaling == "none":
         f'{args.hyperparams}: predict_variance = true needs label_scaling = "symmetric" or "one-sided", '
         "since nn.GaussianNLLLoss floors the variance at 1e-6 in the units of the labels it trains on"
     )
+predict_every = hyperparams["predict_every"]
+if not (isinstance(predict_every, int) and predict_every >= 1):
+    raise ValueError(f"{args.hyperparams}: predict_every = {predict_every!r} should be an integer of 1 or more")
 seed = hyperparams["seed"]
 # Weight initialization, dropout and the order training batches are drawn in all come from these generators
 random.seed(seed)
@@ -369,17 +357,15 @@ if radial_bins is not None:  # Labels are radial curves, so plot and save them a
 
 
 #### Save final-epoch outputs ####
-def save_batch_outputs(x, y, output, idx, dataset, output_base, epoch, comp_images=True):
+def save_batch_outputs(x, y, pred, sigma, idx, dataset, output_base, epoch, comp_images=True):
     """Save each sample in a batch as an hdf5 snapshot (and a comparison image), named after its
     image via its dataset index (idx), so names stay correct with shuffled or multiple batches.
-    output is the network's output: the prediction, or (mean, logvar) if predict_variance, in which
-    case the predicted 1-sigma is saved and plotted too."""
+    sigma is each prediction's 1-sigma (see compute_loss), saved and plotted too, or None."""
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
-    mean, logvar = output if predict_variance else (output, None)
-    np_pred = to_physical(mean.cpu().detach().numpy())
+    np_pred = to_physical(pred.cpu().detach().numpy())
     # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
-    np_sigma = np.exp(0.5 * logvar.cpu().detach().numpy()) * label_scale if predict_variance else None
+    np_sigma = None if sigma is None else sigma.cpu().detach().numpy() * label_scale
     for tt in range(len(idx)):
         output_name = output_base + "_" + dataset.names[int(idx[tt])] + "_Epoch" + str(epoch)
         if comp_images:
@@ -405,24 +391,28 @@ def save_batch_outputs(x, y, output, idx, dataset, output_base, epoch, comp_imag
 def train_loop(dataloader, model, loss_fn, optimizer, epoch):
     """Run one training epoch: iterate the dataloader, backprop loss_fn (see compute_loss) each batch, and on
     the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
-    Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch.
+    Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
+    batch was predicted.
     """
     model.train()
     size = len(dataloader.dataset)
     epoch_loss, epoch_mse = 0.0, 0.0
+    n_predicted = 0  # Batches with predictions, made every predict_every epochs
     num_batches = len(dataloader)
+    final = epoch >= epochs - 1
+    predict = final or (epoch + 1) % predict_every == 0
     for batch, (x, y, w, idx) in enumerate(dataloader):
         x = x.to(device)
         y = y.to(device)
         w = w.to(device)
 
-        output = model(x.float())
-        loss = loss_fn(output, y.float(), w.float())
-        pred = output[0] if predict_variance else output
+        loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
         epoch_loss += loss.item()
-        epoch_mse += mse_fn(pred, y.float()).item()
-        if epoch >= epochs - 1:
-            save_batch_outputs(x, y, output, idx, training_data, image_output_training, epoch, comp_images=False)
+        if pred is not None:
+            n_predicted += 1
+            epoch_mse += mse_fn(pred, y.float()).item()
+        if final:
+            save_batch_outputs(x, y, pred, sigma, idx, training_data, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -433,7 +423,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
             current = batch * len(x)
             logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
 
-    return epoch_loss / num_batches, epoch_mse / num_batches
+    return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
 
 
 def count_accurate(pred, y):
@@ -457,8 +447,9 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     validation_loss, validation_mse, correct = 0, 0, 0
     total = 0
     final = epoch >= epochs - 1
+    predict = final or (epoch + 1) % predict_every == 0
     all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
-    specific_accuracy = np.zeros(len(dataloader.dataset))
+    specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
         for x, y, w, idx in dataloader:
@@ -466,9 +457,10 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             y = y.to(device)
             w = w.to(device)
 
-            output = model(x.float())
-            validation_loss += loss_fn(output, y.float(), w.float()).item()
-            pred = output[0] if predict_variance else output
+            loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
+            validation_loss += loss.item()
+            if pred is None:  # Predictions are made every predict_every epochs
+                continue
             validation_mse += mse_fn(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
@@ -479,13 +471,14 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, output, idx, validation_data, image_output_validation, epoch)
+                save_batch_outputs(x, y, pred, sigma, idx, validation_data, image_output_validation, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
-    accuracy = correct / total * 100
+    # No predictions, and so no accuracy or MSE, on the epochs between predict_every
+    accuracy = correct / total * 100 if total else np.nan
     validation_loss /= num_batches
-    validation_mse /= num_batches
+    validation_mse = validation_mse / num_batches if total else np.nan
     logger.info("Validation: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, validation_loss, validation_mse)
 
     if final and radial_bins is None:
@@ -512,16 +505,15 @@ def test_loop(dataloader, model, loss_fn, epoch):
     total = 0
     final = epoch >= epochs - 1
     all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
-    specific_accuracy = np.zeros(len(dataloader.dataset))
+    specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
         for x, y, w, idx in dataloader:
             x = x.to(device)
             y = y.to(device)
             w = w.to(device)
-            output = model(x.float())
-            test_loss += loss_fn(output, y.float(), w.float()).item()
-            pred = output[0] if predict_variance else output
+            loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=final)
+            test_loss += loss.item()
             test_mse += mse_fn(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
@@ -532,7 +524,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
             total += np.size(np_y)
 
             if final:
-                save_batch_outputs(x, y, output, idx, test_data, image_output_final_test, epoch)
+                save_batch_outputs(x, y, pred, sigma, idx, test_data, image_output_final_test, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
 
@@ -557,18 +549,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
 input_shape = tuple(
     training_data[0][0].shape
 )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-model = NeuralNetwork(
-    input_shape,
-    n_filt0,
-    (k0, k0, k0),
-    (k1, k1, k1),
-    n_fc,
-    fc_dropout_rate=dropout_rate,
-    block_dropout_rate=block_dropout_rate,
-    head=output_head,
-    output_size=radial_bins,
-    predict_variance=predict_variance,
-).to(device)
+model = build_model(network, input_shape, hyperparams, output_size=radial_bins).to(device)
 model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
 validation_names = validation_data.names
 training_names = training_data.names
@@ -587,16 +568,38 @@ def weighted_gaussian_nll_loss(pred, y, logvar, w):
 
 loss_fn = weighted_gaussian_nll_loss if predict_variance else weighted_mse_loss  # The training objective
 mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
-LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
+if network == "ddpm":
+    LOSS_LABEL = "Denoising MSE"
+else:
+    LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
 
-def compute_loss(output, y, w):
-    """The training objective, each pixel (or ring) weighted by w: Gaussian NLL of (mean, exp(logvar)) if
-    predict_variance, else MSE."""
+def compute_loss(model, x, y, w, predict=True):
+    """
+    (loss, prediction, 1-sigma) for a batch of cubes x and labels y, each pixel (or ring) weighted by w; the
+    prediction and 1-sigma are None unless predict.
+    resblock: Gaussian NLL of (mean, exp(logvar)) if predict_variance, with 1-sigma exp(logvar / 2), else MSE, with
+    1-sigma None.
+    ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
+    samples, which are only drawn if predict since this has high compute cost.
+    """
+    if network == "ddpm":
+        loss = model(x, y)
+        if not predict:
+            return loss, None, None
+        pred, sigma = model.predict_with_uncertainty(x, hyperparams["n_samples"])
+        return loss, pred, sigma
+
+    output = model(x)
     if predict_variance:
-        mean, logvar = output
-        return loss_fn(mean, y, logvar, w)
-    return loss_fn(output, y, w)
+        pred, logvar = output
+        loss, sigma = loss_fn(pred, y, logvar, w), torch.exp(0.5 * logvar)
+    else:
+        pred, sigma = output, None
+        loss = loss_fn(pred, y, w)
+    if not predict:
+        return loss, None, None
+    return loss, pred, sigma
 
 
 optimizer = torch.optim.Adam(
@@ -627,22 +630,14 @@ torch.save(model.state_dict(), model_output_path + ".pt")
 # Save the normalization information for loading data
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
 hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
-hf_norm.create_dataset("label_scaling", data=label_scaling)
-hf_norm.create_dataset("seed", data=seed)
 hf_norm.create_dataset(
     "label_stats", data=np.array([label_offset, label_scale])
 )  # physical label = scaled label * label_scale + label_offset
-hf_norm.create_dataset("learning_rate", data=learning_rate)
-hf_norm.create_dataset("n_fc", data=n_fc)
-hf_norm.create_dataset("weight_decay", data=weight_decay)
-hf_norm.create_dataset("n_filt0", data=n_filt0)
-hf_norm.create_dataset("dropout_rate", data=dropout_rate)
-hf_norm.create_dataset("block_dropout_rate", data=block_dropout_rate)
-hf_norm.create_dataset("predict_variance", data=predict_variance)
+for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
+    hf_norm.create_dataset(key, data=value)
 hf_norm.create_dataset("run_name", data=run_name)
 hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
 hf_norm.create_dataset("target", data=target)
-hf_norm.create_dataset("output_head", data=output_head)
 if radial_bins is not None:
     hf_norm.create_dataset("radial_bins", data=radial_bins)
     hf_norm.create_dataset("radial_projection", data=radial_projection)
@@ -696,8 +691,12 @@ def plot_loss(losses, title, output):
 plot_loss(training_losses, "Training Loss", diagnostic_output + "_trainingLoss.png")
 plot_loss(validation_losses, "Validation Loss", diagnostic_output + "_validationLoss.png")
 
+# Accuracies are NaN on the epochs between predict_every, so only the predicted epochs are plotted
+epoch_numbers = np.arange(1, epochs + 1)
+predicted = np.isfinite(validation_accuracies)
+
 fig3 = plt.figure()
-plt.plot(validation_accuracies)
+plt.plot(epoch_numbers[predicted], validation_accuracies[predicted], marker="o", ms=3)
 plt.title(f"Validation Accuracy (within {ACCURACY_TOLERANCE:g} label std. dev.)")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy [%]")
@@ -707,7 +706,7 @@ plt.savefig(diagnostic_output + "_ValidationAccuracy.png")
 
 fig4 = plt.figure()
 for name, accuracies in zip(validation_names, specific_accuracies):
-    plt.plot(accuracies, lw=0.5, label=name)
+    plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
 if len(validation_names) <= 10:  # Name each line, unless there are too many to read
     plt.legend(fontsize=6)
 plt.title("Validation Accuracy for each Snapshot")

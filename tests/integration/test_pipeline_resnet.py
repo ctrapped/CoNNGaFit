@@ -3,32 +3,18 @@ single VOF image for two epochs, writes a valid checkpoint, and predicts outputs
 1-sigma uncertainties) of the expected size, both when training ends and when the checkpoint is reloaded by
 use_model.py. inference_template.py runs the committed demo network."""
 
-import json
-import shutil
 import tomllib
-from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 import torch
+from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, REPO, expected_shape, saved_test_outputs
 
 from use_model import load_model, predict, run_inferences
 
-REPO = Path(__file__).resolve().parents[2]
-TRAIN_SCRIPT = REPO / "train_model_unet.py"
 INFERENCE_SCRIPT = REPO / "inference_template.py"
 DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
-DEFAULT_HYPERPARAMS = REPO / "configs" / "hyperparams.toml"
-
-# One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,
-# validation and testing set alike
-GALAXY = "vflat220"
-INCLINATION = 45
-SNAPSHOT = 600
-IMAGE_NAME = f"{GALAXY}_i{INCLINATION}_pa0_{SNAPSHOT}_image_fullSpectra.hdf5"
-IMAGE = REPO / "examples" / "demo_data" / GALAXY / f"i{INCLINATION}" / IMAGE_NAME
-TARGET = "rotational_velocity"  # The demo images carry mass and rotational velocity annotations
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
 SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")
@@ -50,70 +36,21 @@ RUNS = [
 ]
 
 
-def toml_lines(params):
-    """Flat key = value TOML lines (JSON literals are valid TOML for strings, numbers and lists)."""
-    return [f"{key} = {json.dumps(value)}" for key, value in params.items()]
-
-
-def write_configs(folder, head, radial_bins, predict_variance):
-    with open(DEFAULT_HYPERPARAMS, "rb") as f:
-        hyperparams = {
-            **tomllib.load(f),
-            **SMALL_HYPERPARAMS,
-            "output_head": head,
-            "predict_variance": predict_variance,
-            "mass_weight_power": MASS_WEIGHT_POWER if predict_variance else 0,
-        }
-    (folder / "hyperparams.toml").write_text("\n".join(toml_lines(hyperparams)) + "\n")
-
-    datasets = dict(
-        target=TARGET, augment="none", inclinations=[INCLINATION], radial_bins=radial_bins, radial_projection="sky"
-    )
-    lines = toml_lines(datasets)
-    for split in ("training", "validation", "testing"):
-        lines += [f"[{split}]", f'"vof/{GALAXY}" = {SNAPSHOT}']
-    (folder / "datasets.toml").write_text("\n".join(lines) + "\n")
-
-
-def image_shape():
-    """IMAGE's datacube shape as VOF writes it: (n_y, n_x, n_spec)."""
-    with h5py.File(IMAGE, "r") as hf:
-        return hf["spectra"].shape
-
-
-def expected_shape(radial_bins):
-    """A map has one value per sky pixel of the cube; a curve has one value per ring."""
-    n_y, n_x, _ = image_shape()
-    return (radial_bins,) if radial_bins else (n_y, n_x)
-
-
 @pytest.fixture(scope="module", params=RUNS, ids=[name for name, *_ in RUNS])
-def trained(request, tmp_path_factory, run_script):
+def trained(request, train_on_image):
     """Train once per configuration on IMAGE; returns (run name, head, radial bins, predict_variance, run folder)."""
     name, head, radial_bins, predict_variance = request.param
-    run_dir = tmp_path_factory.mktemp(name)
-    image_dir = run_dir / "vof" / GALAXY / f"i{INCLINATION}"
-    image_dir.mkdir(parents=True)
-    shutil.copy(IMAGE, image_dir)
-    write_configs(run_dir, head, radial_bins, predict_variance)
-    run_script(
-        TRAIN_SCRIPT,
-        "--hyperparams", "hyperparams.toml",
-        "--datasets", "datasets.toml",
-        "--run-name", name,
-        "--network-dir", "nets",
-        "--output-dir", "diag",
-        cwd=run_dir,
-    )  # fmt: skip
+    with open(CONFIG_DIR / "hyperparams_resblock.toml", "rb") as f:
+        default_hyperparams = tomllib.load(f)
+    hyperparams = {
+        **default_hyperparams,
+        **SMALL_HYPERPARAMS,
+        "output_head": head,
+        "predict_variance": predict_variance,
+        "mass_weight_power": MASS_WEIGHT_POWER if predict_variance else 0,
+    }
+    run_dir = train_on_image(name, hyperparams, radial_bins)
     return name, head, radial_bins, predict_variance, run_dir
-
-
-def saved_test_outputs(run_dir, name):
-    """The prediction and its 1-sigma uncertainty (None without predict_variance) the training script saved for IMAGE
-    at the end of training."""
-    saved = next((run_dir / "diag" / "images").glob(f"{name}_test_{IMAGE.stem}_Epoch*.hdf5"))
-    with h5py.File(saved, "r") as hf:
-        return hf["prediction"][()], (hf["uncertainty"][()] if "uncertainty" in hf else None)
 
 
 def test_training_writes_valid_checkpoint(trained):
@@ -121,7 +58,7 @@ def test_training_writes_valid_checkpoint(trained):
     with h5py.File(run_dir / "nets" / f"{name}.hdf5", "r") as hf:
         assert hf["output_head"][()].decode() == head  # records the head it was trained with
         assert bool(hf["predict_variance"][()]) == predict_variance  # and whether it predicts its uncertainty
-        n_y, n_x, n_spec = image_shape()
+        n_y, n_x, n_spec = IMAGE_SHAPE
         assert tuple(hf["input_shape"][()]) == (n_spec, n_y, n_x)  # built for the cube, spectral axis first
         # the saved copy of the datasets file round-trips
         assert tomllib.loads(hf["datasets_text"][()].decode())["radial_bins"] == radial_bins

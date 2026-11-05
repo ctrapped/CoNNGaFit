@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
+from networks import build_model
 from plotting_functions import make_image
-from unet3d_resblock import NeuralNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -32,29 +32,23 @@ def load_model(model_path):
     for key, value in metadata.items():  # h5py reads strings back as bytes
         if isinstance(value, bytes):
             metadata[key] = value.decode()
+    if "network" not in metadata:
+        raise ValueError(f"{model_path}.hdf5 doesn't record its network")
     hyperparams = tomllib.loads(metadata["hyperparams_text"])
-    k0, k1 = hyperparams["k0"], hyperparams["k1"]
     radial_bins = int(metadata["radial_bins"]) if "radial_bins" in metadata else None
-    model = NeuralNetwork(
-        tuple(int(n) for n in metadata["input_shape"]),
-        hyperparams["n_filt0"],
-        (k0, k0, k0),
-        (k1, k1, k1),
-        hyperparams["n_fc"],
-        fc_dropout_rate=hyperparams["dropout_rate"],
-        block_dropout_rate=hyperparams["block_dropout_rate"],
-        head=metadata["output_head"],
-        output_size=radial_bins,
-        predict_variance=hyperparams.get("predict_variance", False),  # absent in checkpoints from before it existed
-    ).to(device)
+    input_shape = tuple(int(n) for n in metadata["input_shape"])
+    model = build_model(metadata["network"], input_shape, hyperparams, output_size=radial_bins).to(device)
     model.load_state_dict(torch.load(model_path + ".pt", map_location=device, weights_only=True))
     return model.eval(), metadata
 
 
 def predict(model, metadata, image_paths, save_latent_images=False, return_std=False):
     """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve.
-    With return_std, yield (name, prediction, std): std is the predicted 1-sigma in the same units and shape, or
-    None if the model wasn't trained with predict_variance."""
+    With return_std, yield (name, prediction, std): std is the ddpm network's posterior standard deviation, or the
+    resblock network's predicted 1-sigma, in the same units and shape; None for a resblock network trained without
+    predict_variance. save_latent_images needs the resblock network."""
+    if save_latent_images and metadata["network"] == "ddpm":
+        raise ValueError("save_latent_images needs the resblock network")
     image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
     label_offset, label_scale = metadata["label_stats"]
     dataset = CoNNGaFitImageInferenceDataset(
@@ -63,15 +57,21 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
     n_y, n_x = (int(n) for n in metadata["input_shape"][1:])
     shape = (-1,) if "radial_bins" in metadata else (n_y, n_x)
     for name, image in zip(dataset.names, dataset):
+        cube = image[None].float().to(device)
         with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
-            output = model(image[None].float().to(device), save_latent_images)
-        mean, logvar = output if model.predict_variance else (output, None)
+            if metadata["network"] == "ddpm":
+                mean, std = model.predict_with_uncertainty(cube, int(metadata["n_samples"]))
+            else:
+                output = model(cube, save_latent_images)
+                mean, logvar = output if model.predict_variance else (output, None)
+                std = None if logvar is None else torch.exp(0.5 * logvar)
         pred = (mean.cpu().numpy()[0] * label_scale + label_offset).reshape(shape)  # Back to physical units
         if not return_std:
             yield name, pred
             continue
         # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
-        std = None if logvar is None else (np.exp(0.5 * logvar.cpu().numpy()[0]) * label_scale).reshape(shape)
+        if std is not None:
+            std = (std.cpu().numpy()[0] * label_scale).reshape(shape)
         yield name, pred, std
 
 
@@ -118,7 +118,7 @@ def run_inferences(model_path, image_paths, output_prefix, save_latent_images=Fa
     model, metadata = load_model(model_path)
     target = metadata["target"]
     param_label, unit_label, _ = TARGET_SETTINGS[target]
-    logger.info("Loaded %s (%s, %s head)", model_path, target, metadata["output_head"])
+    logger.info("Loaded %s (%s, %s network)", model_path, target, metadata["network"])
 
     image_paths = list(image_paths)
     os.makedirs(os.path.dirname(output_prefix) or ".", exist_ok=True)

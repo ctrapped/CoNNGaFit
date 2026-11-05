@@ -4,10 +4,12 @@ Uses the pre-trained demo network in examples/demo_model/ and runs in a few seco
 
     python examples/demo_inference.py       # writes examples/demo_output/inference/
     python examples/demo_inference.py --model-path examples/demo_output/NetworkWeights/demo   # your own demo.py run
+    python examples/demo_inference.py --model-path examples/demo_output/NetworkWeights/demo_map   # demo.py --predict map
 
 examples/demo_model/ is a network trained by examples/demo.py (copied from examples/demo_output/NetworkWeights/).
-For each datacube, use_model.run_inferences writes the predicted rotation curve as a plot and an hdf5 file,
-exactly as it would for a real observation converted with fits_to_conngafit.py.
+For each datacube, use_model.run_inferences writes the predicted rotation curve, or for a network that predicts
+maps the predicted velocity map, as a plot and an hdf5 file, exactly as it would for a real observation converted
+with fits_to_conngafit.py. Predicted maps are binned into the rotation curve to compare with the truth.
 """
 
 import argparse
@@ -21,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
 
 from conngafit_datasets import radial_profile  # noqa: E402
-from demo import DATA_DIR, DATASETS, SPLITS  # noqa: E402 - after the sys.path line above; examples/demo.py
+from demo import DATA_DIR, DATASETS, N_RINGS, SPLITS, binned_curve  # noqa: E402 - examples/demo.py
 from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import run_inferences  # noqa: E402
 
@@ -40,14 +42,24 @@ def main():
 
     image_paths = sorted(str(p) for p in (DATA_DIR / SPLITS["testing"][0]).rglob("*.hdf5"))
     run_inferences(str(args.model_path), image_paths, str(args.output) + "/")
+    with h5py.File(f"{args.model_path}.hdf5") as f:
+        predicts_maps = "radial_bins" not in f  # Networks that predict curves record their number of rings
 
     # The synthetic galaxies come with their true rotation curves, which a real observation wouldn't
     for path in image_paths:
         with h5py.File(path) as f:
-            truth = radial_profile(f, DATASETS["target"], DATASETS["radial_bins"])
-        with h5py.File(args.output / f"{Path(path).stem}_radialPlot.hdf5") as f:
-            prediction = f["prediction"][()]
-            sigma = f["uncertainty"][()] if "uncertainty" in f else None  # Networks trained with predict_variance
+            truth = radial_profile(f, DATASETS["target"], N_RINGS)
+        if predicts_maps:
+            with h5py.File(args.output / f"{Path(path).stem}_projectionMap.hdf5") as f:
+                prediction_map = f["image"][()]
+                sigma_map = (
+                    f["uncertainty"][()] if "uncertainty" in f else None
+                )  # Networks trained with predict_variance
+            prediction, sigma = binned_curve(path, prediction_map, sigma_map)
+        else:
+            with h5py.File(args.output / f"{Path(path).stem}_radialPlot.hdf5") as f:
+                prediction = f["prediction"][()]
+                sigma = f["uncertainty"][()] if "uncertainty" in f else None
         rms = np.sqrt(np.mean((prediction - truth) ** 2))
         within = "" if sigma is None else f", {np.mean(np.abs(prediction - truth) < sigma):.0%} of rings within 1σ"
         print(f"{Path(path).stem}: RMS error {rms:.1f} km/s{within}")  # noqa: T201
