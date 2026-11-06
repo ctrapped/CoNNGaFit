@@ -193,9 +193,11 @@ torch.manual_seed(seed)  # Seeds the CPU and every GPU
 datasets, datasets_text = load_parameter_file(args.datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS)
 # One target name, or a list of them: the network predicts a map (or radial curve) of each
 targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
-unknown_targets = [target for target in targets if target not in TARGETS]
-if unknown_targets or not targets:
-    raise ValueError(f"{args.datasets}: unknown target {unknown_targets or targets!r}; choose from {sorted(TARGETS)}")
+if not targets:
+    raise ValueError(f"{args.datasets}: target is empty; name at least one annotation")
+for target in targets:
+    if target not in TARGETS:
+        raise ValueError(f"{args.datasets}: unknown target {target!r}; choose from {sorted(TARGETS)}")
 n_maps = len(targets)
 training_sources = dataset_sources(datasets["training"], "training", args.datasets, datasets.get("base_dir"))
 validation_sources = dataset_sources(datasets["validation"], "validation", args.datasets, datasets.get("base_dir"))
@@ -272,18 +274,17 @@ logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, trai
 label_offset, label_scale = np.zeros((n_maps, 1)), np.ones((n_maps, 1))
 # (n_maps, every training pixel or ring)
 all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))], axis=1)
-label_max = np.max(all_labels, axis=1, keepdims=True)
-label_min = np.min(all_labels, axis=1, keepdims=True)
 if label_scaling != "none":
     if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
         label_scale = np.max(np.abs(all_labels), axis=1, keepdims=True)
     else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
+        label_max = np.max(all_labels, axis=1, keepdims=True)
+        label_min = np.min(all_labels, axis=1, keepdims=True)
         label_offset = (label_max + label_min) / 2
         label_scale = (label_max - label_min) / 2
-    constant = [target for target, scale in zip(targets, label_scale[:, 0]) if not scale > 0]
-    if constant:
-        raise ValueError(f"label_scaling = {label_scaling!r} needs training labels that aren't constant: {constant}")
     for target, offset, scale in zip(targets, label_offset[:, 0], label_scale[:, 0]):
+        if not scale > 0:
+            raise ValueError(f"label_scaling = {label_scaling!r} needs {target} training labels that aren't constant")
         logger.info("Label scaling of %s (%s): offset = %.4g, scale = %.4g", target, label_scaling, offset, scale)
 
 #### Rough accuracy: the percentage of predicted values within accuracy_tolerance of their label, where ####

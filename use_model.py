@@ -29,13 +29,14 @@ def load_model(model_path):
         if "hyperparams_text" not in hf:
             raise ValueError(f"{model_path}.hdf5 wasn't written by train_model_unet.py (no hyperparams_text)")
         metadata = {key: hf[key][()] for key in hf}
+        # The targets in the order of the network's output maps
+        targets = hf["target"].asstr()[()]  # One name (older checkpoints) or an array of names
+        metadata["target"] = np.atleast_1d(targets).tolist()
     for key, value in metadata.items():  # h5py reads strings back as bytes
         if isinstance(value, bytes):
             metadata[key] = value.decode()
     if "network" not in metadata:
         raise ValueError(f"{model_path}.hdf5 doesn't record its network")
-    # The targets in the order of the network's output maps, saved as a list or a single name
-    metadata["target"] = [t.decode() if isinstance(t, bytes) else str(t) for t in np.atleast_1d(metadata["target"])]
     hyperparams = tomllib.loads(metadata["hyperparams_text"])
     radial_bins = int(metadata["radial_bins"]) if "radial_bins" in metadata else None
     input_shape = tuple(int(n) for n in metadata["input_shape"])

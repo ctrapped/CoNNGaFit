@@ -93,7 +93,7 @@ def committed_outputs(tmp_path_factory, run_script):
     run_script(INFERENCE_DEMO, "--model-path", COMMITTED_MODEL, "--output", output)
     predictions, uncertainties = {}, {}
     for path in TEST_IMAGES:
-        with h5py.File(output / f"{path.stem}_{CURVE_TARGET}_radialPlot.hdf5", "r") as hf:
+        with h5py.File(output / f"{path.stem}_{demo.CURVE_TARGET}_radialPlot.hdf5", "r") as hf:
             predictions[path.stem] = hf["prediction"][()]
             uncertainties[path.stem] = hf["uncertainty"][()]
     return predictions, uncertainties
