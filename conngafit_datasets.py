@@ -236,9 +236,11 @@ class CoNNGaFitImageDataset:
         inclinations="all",
         suffix="",
     ):
-        unknown = [target for target in targets if target not in TARGETS]
-        if unknown or not targets:
-            raise ValueError(f"Unknown targets {unknown or targets!r}; choose from {sorted(TARGETS)}")
+        if not targets:
+            raise ValueError("targets is empty; name at least one annotation")
+        for target in targets:
+            if target not in TARGETS:
+                raise ValueError(f"Unknown target {target!r}; choose from {sorted(TARGETS)}")
         if augment not in AUGMENTATIONS:
             raise ValueError(f"Unknown augment {augment!r}; choose from {list(AUGMENTATIONS)}")
         if radial_projection not in ("face_on", "sky"):

@@ -193,9 +193,11 @@ torch.manual_seed(seed)  # Seeds the CPU and every GPU
 datasets, datasets_text = load_parameter_file(args.datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS)
 # One target name, or a list of them: the network predicts a map (or radial curve) of each
 targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
-unknown_targets = [target for target in targets if target not in TARGETS]
-if unknown_targets or not targets:
-    raise ValueError(f"{args.datasets}: unknown target {unknown_targets or targets!r}; choose from {sorted(TARGETS)}")
+if not targets:
+    raise ValueError(f"{args.datasets}: target is empty; name at least one annotation")
+for target in targets:
+    if target not in TARGETS:
+        raise ValueError(f"{args.datasets}: unknown target {target!r}; choose from {sorted(TARGETS)}")
 n_maps = len(targets)
 training_sources = dataset_sources(datasets["training"], "training", args.datasets, datasets.get("base_dir"))
 validation_sources = dataset_sources(datasets["validation"], "validation", args.datasets, datasets.get("base_dir"))
