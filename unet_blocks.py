@@ -454,7 +454,7 @@ class ConvMapHead(nn.Module):
         if label.startswith("head: 2-d res block"):
             return f"activation={type(self.blocks[0].act1).__name__}"
         if label == "head: output conv":
-            return f"{self.out_channels} output maps"
+            return f"{self.out_channels} channels"
         return None
 
 
