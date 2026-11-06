@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
 
 from conngafit_datasets import radial_profile  # noqa: E402
-from demo import CURVE_TARGET, DATA_DIR, N_RINGS, SPLITS, binned_curve  # noqa: E402 - examples/demo.py
+from demo import DATA_DIR, DATASETS, N_RINGS, SPLITS, binned_curve  # noqa: E402 - examples/demo.py
 from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import run_inferences  # noqa: E402
 
@@ -48,16 +48,16 @@ def main():
     # The synthetic galaxies come with their true rotation curves, which a real observation wouldn't
     for path in image_paths:
         with h5py.File(path) as f:
-            truth = radial_profile(f, CURVE_TARGET, N_RINGS)
+            truth = radial_profile(f, DATASETS["target"], N_RINGS)
         if predicts_maps:
-            with h5py.File(args.output / f"{Path(path).stem}_{CURVE_TARGET}_projectionMap.hdf5") as f:
+            with h5py.File(args.output / f"{Path(path).stem}_{DATASETS['target']}_projectionMap.hdf5") as f:
                 prediction_map = f["image"][()]
                 sigma_map = (
                     f["uncertainty"][()] if "uncertainty" in f else None
                 )  # Networks trained with predict_variance
             prediction, sigma = binned_curve(path, prediction_map, sigma_map)
         else:
-            with h5py.File(args.output / f"{Path(path).stem}_{CURVE_TARGET}_radialPlot.hdf5") as f:
+            with h5py.File(args.output / f"{Path(path).stem}_{DATASETS['target']}_radialPlot.hdf5") as f:
                 prediction = f["prediction"][()]
                 sigma = f["uncertainty"][()] if "uncertainty" in f else None
         rms = np.sqrt(np.mean((prediction - truth) ** 2))

@@ -38,7 +38,7 @@ MAX_MEDIAN_SIGMA_KMS = 20  # median 1-sigma over the test galaxy's rings
 def true_curve(path):
     """The rotation curve the network is trained to predict for the image at path."""
     with h5py.File(path, "r") as hf:
-        return radial_profile(hf, demo.CURVE_TARGET, demo.N_RINGS)
+        return radial_profile(hf, demo.DATASETS["target"], demo.N_RINGS)
 
 
 def predict_curves(model_path, images):
@@ -97,7 +97,7 @@ def committed_outputs(tmp_path_factory, run_script):
     run_script(INFERENCE_DEMO, "--model-path", COMMITTED_MODEL, "--output", output)
     predictions, uncertainties = {}, {}
     for path in TEST_IMAGES:
-        with h5py.File(output / f"{path.stem}_{demo.CURVE_TARGET}_radialPlot.hdf5", "r") as hf:
+        with h5py.File(output / f"{path.stem}_{demo.DATASETS['target']}_radialPlot.hdf5", "r") as hf:
             predictions[path.stem] = hf["prediction"][()]
             uncertainties[path.stem] = hf["uncertainty"][()]
     return predictions, uncertainties
