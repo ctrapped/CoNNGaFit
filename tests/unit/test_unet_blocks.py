@@ -8,6 +8,7 @@ from torch import nn
 from unet_blocks import (
     ConvMapHead,
     DilatedResidualBlock,
+    HalfResConvHead,
     ResBlock2d,
     SpectralAttentionPool,
     _ceil_conv_pad,
@@ -98,6 +99,17 @@ def test_conv_map_head_shape(n_blocks, map_shape, out_channels):
     head = ConvMapHead(CHANNELS, out_channels=out_channels, n_blocks=n_blocks)
     out = head(torch.randn(BATCH, CHANNELS, 7, 4, 4), map_shape)
     assert out.shape == (BATCH, out_channels, *map_shape)
+
+
+@pytest.mark.parametrize("predict_variance", [False, True])
+@pytest.mark.parametrize("n_maps", [1, 3])
+def test_half_res_conv_head_shape(predict_variance, n_maps):
+    n_spec, map_shape = 3, (5, 6)
+    head = HalfResConvHead(CHANNELS * n_spec, CHANNELS, CHANNELS, predict_variance=predict_variance, n_maps=n_maps)
+    outputs = head(torch.randn(BATCH, CHANNELS, n_spec, 4, 4), torch.randn(BATCH, CHANNELS, 2, 2, 2), map_shape)
+    assert len(outputs) == (2 if predict_variance else 1)  # the mean, and the log-variance with predict_variance
+    for out in outputs:
+        assert out.shape == (BATCH, n_maps, map_shape[0] * map_shape[1])  # each map flattened
 
 
 def test_conv_map_head_rejects_negative_blocks():

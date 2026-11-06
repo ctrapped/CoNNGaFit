@@ -45,9 +45,9 @@ def predict_curves(model_path, images):
     """A network's predicted rotation curves and their 1-sigma uncertainties for images, each keyed by image name."""
     model, metadata = load_model(str(model_path))
     predictions, uncertainties = {}, {}
-    for name, curve, sigma in predict(model, metadata, [str(p) for p in images], return_std=True):
-        predictions[name] = curve
-        uncertainties[name] = sigma
+    for name, curves, sigmas in predict(model, metadata, [str(p) for p in images], return_std=True):
+        predictions[name] = curves[0]  # The demo network predicts a single target
+        uncertainties[name] = sigmas[0]
     return predictions, uncertainties
 
 
@@ -97,7 +97,7 @@ def committed_outputs(tmp_path_factory, run_script):
     run_script(INFERENCE_DEMO, "--model-path", COMMITTED_MODEL, "--output", output)
     predictions, uncertainties = {}, {}
     for path in TEST_IMAGES:
-        with h5py.File(output / f"{path.stem}_radialPlot.hdf5", "r") as hf:
+        with h5py.File(output / f"{path.stem}_{demo.DATASETS['target']}_radialPlot.hdf5", "r") as hf:
             predictions[path.stem] = hf["prediction"][()]
             uncertainties[path.stem] = hf["uncertainty"][()]
     return predictions, uncertainties

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # 3-d dilated residual network ("Encode-Process-Decode") for HI 21cm spectral datacubes following
 # architecture in Stachenfeld et al. 2021, (https://arxiv.org/abs/2112.15275).
-# Reads an (nSpec x nX x nY) cube of arbitrary size and predicts a flattened output map,
+# Reads an (nSpec x nX x nY) cube of arbitrary size and predicts one or more flattened output maps,
 # matching the input/output conventions of unet3d_resblock.py. There is no spatial
 # downsampling/upsampling path or skip connections; the receptive field is grown entirely
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
@@ -86,8 +86,8 @@ class Decoder(nn.Module):
 #### Full network ####
 class NeuralNetwork(nn.Module):
     """3-d dilated residual network ("Encode-Process-Decode") mapping an HI 21cm spectral
-    datacube (nSpec x nX x nY, any size) to a flattened output map (e.g. radial momentum,
-    rotational velocity, inclination) of length `output_size` (default nX*nY).
+    datacube (nSpec x nX x nY, any size) to `n_maps` flattened output maps (e.g. mass and
+    rotational momentum), each of length `output_size` (default nX*nY).
 
     Architecture:
       - Encode (layer_encode): a single Conv3d projecting the 1-channel input to n_filt0
@@ -132,8 +132,11 @@ class NeuralNetwork(nn.Module):
             large input cubes, bringing every axis to ceil(N/stride).
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
-        output_size: length of the flattened prediction. Defaults to nX*nY from input_shape
+        output_size: length of each flattened map. Defaults to nX*nY from input_shape
             (or H*W from output_shape); must equal H*W for head='conv'.
+        n_maps: number of maps predicted from the shared body (default 1). Each head's output
+            layer predicts every map: n_maps output channels for head='conv', or
+            n_maps * output_size outputs for head='fc'.
         pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
             n_filt0 * prod(pool_output); the default (8, 8, 8) gives 512 * n_filt0.
         fc_dropout_rate: dropout probability after every hidden FC layer's activation (and,
@@ -152,16 +155,17 @@ class NeuralNetwork(nn.Module):
         fc_activation: activation between hidden fully-connected layers (default nn.LeakyReLU).
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         predict_variance: if False (default), the head has a single output Linear and
-            forward() returns one tensor of shape (nBatch, output_size). If True,
+            forward() returns one tensor of shape (nBatch, n_maps, output_size). If True,
             a second output Linear is added predicting a per-element log-variance, and
             forward() returns (mean, logvar) - train against a heteroscedastic loss such as
             nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
             no output_activation applied (it must stay unconstrained for exp() to reach any
-            positive variance). With head='conv' the log-variance is a second output channel
-            of the head's final conv instead of a second Linear.
+            positive variance). With head='conv' the log-variances are n_maps more output
+            channels of the head's final conv instead of a second Linear.
         head: 'fc' (default) - adaptive average pool -> flatten -> fully-connected layers, as
             set by pool_output/n_fc/n_fc_layers; its output Linear has
-            n_filt0 * prod(pool_output) * output_size weights, so it grows with the map size.
+            n_filt0 * prod(pool_output) * n_maps * output_size weights, so it grows with the map
+            size and number of maps.
             'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
             n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
             the input and map size (pool_output, n_fc and n_fc_layers are then unused).
@@ -199,9 +203,11 @@ class NeuralNetwork(nn.Module):
         head="fc",
         output_shape=None,
         n_head_blocks=2,
+        n_maps=1,
     ):
         super(NeuralNetwork, self).__init__()
         self.predict_variance = predict_variance
+        self.n_maps = n_maps
         if n_blocks < 1:
             raise ValueError("n_blocks must be >= 1")
         input_shape = tuple(int(v) for v in input_shape)
@@ -261,7 +267,7 @@ class NeuralNetwork(nn.Module):
             self.fc_widths = []
             self.conv_head = ConvMapHead(
                 n_filt0,
-                out_channels=2 if predict_variance else 1,
+                out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,
                 activation=block_activation,
                 dropout_rate=fc_dropout_rate,
@@ -287,9 +293,9 @@ class NeuralNetwork(nn.Module):
             if not fc_widths:
                 fc_layers.append(nn.Dropout(p=fc_dropout_rate))
             self.fc_hidden = nn.Sequential(*fc_layers)
-            self.fc_out_mean = nn.Linear(in_f, self.output_size)
+            self.fc_out_mean = nn.Linear(in_f, n_maps * self.output_size)
             if predict_variance:
-                self.fc_out_logvar = nn.Linear(in_f, self.output_size)
+                self.fc_out_logvar = nn.Linear(in_f, n_maps * self.output_size)
         self.out_activation = output_activation()
 
     def forward(self, x, save_latent_images=False):
@@ -302,8 +308,8 @@ class NeuralNetwork(nn.Module):
             encoder and after each Process block to LATENT_IMAGE_OUTPUT (see
             save_summed_spectral_channels in unet_diagnostics.py) - useful for visually debugging what the network
             is learning, not needed for normal training/inference.
-        Returns: if predict_variance=False (default), a tensor of shape (nBatch, output_size)
-            - the flattened predicted output map. If predict_variance=True, a (mean, logvar)
+        Returns: if predict_variance=False (default), a tensor of shape (nBatch, n_maps, output_size)
+            - the flattened predicted output maps. If predict_variance=True, a (mean, logvar)
             tuple of two such tensors - logvar is an unconstrained per-element log-variance
             (exp(logvar) to get the variance), with no output_activation applied.
         """
@@ -343,17 +349,19 @@ class NeuralNetwork(nn.Module):
         return mean
 
     def _run_head(self, x):
-        """Body features -> (mean, logvar), each flattened to (nBatch, output_size); logvar is None
-        unless predict_variance. 'conv': one output map channel each; 'fc': pool -> FC stack."""
+        """Body features -> (mean, logvar), each of shape (nBatch, n_maps, output_size); logvar is None
+        unless predict_variance. 'conv': n_maps output channels each; 'fc': pool -> FC stack."""
         if self.head_type == "conv":
-            out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, 1 or 2, H*W)
-            mean = self.out_activation(out[:, 0])
-            return mean, (out[:, 1] if self.predict_variance else None)
+            out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, n_maps or 2 * n_maps, H*W)
+            mean = self.out_activation(out[:, : self.n_maps])
+            return mean, (out[:, self.n_maps :] if self.predict_variance else None)
         x = self.avgpool0(x)
         x = torch.flatten(x, 1)
         x = self.fc_hidden(x)
-        mean = self.out_activation(self.fc_out_mean(x))
-        return mean, (self.fc_out_logvar(x) if self.predict_variance else None)
+        map_shape = (self.n_maps, self.output_size)
+        mean = self.out_activation(self.fc_out_mean(x).unflatten(1, map_shape))
+        logvar = self.fc_out_logvar(x).unflatten(1, map_shape) if self.predict_variance else None
+        return mean, logvar
 
     def stage_shapes(self):
         """Analytically compute the tensor shape at every stage (no forward pass).
@@ -391,7 +399,7 @@ class NeuralNetwork(nn.Module):
         model was trained.
 
         If predict_variance=False: returns (mean, epistemic_std), each of shape
-            (nBatch, output_size) - epistemic_std is the MC-Dropout spread across samples.
+            (nBatch, n_maps, output_size) - epistemic_std is the MC-Dropout spread across samples.
         If predict_variance=True: returns (mean, aleatoric_std, epistemic_std, total_std).
             aleatoric_std comes from averaging the network's own per-sample variance
             predictions (exp(logvar)); epistemic_std is the spread of the sampled means, as
@@ -472,10 +480,11 @@ class NeuralNetwork(nn.Module):
             f"{type(self).__name__}  |  {self.n_blocks} process blocks  |  "
             f"dilation_rates={self.dilation_rates}  |  kernel_stem={self.kernel_stem}  |  "
             f"kernel_coder={self.kernel_coder}  |  stem_stride={self.stem_stride}  |  "
-            f"predict_variance={self.predict_variance}  |  head={self.head_type!r}"
+            f"predict_variance={self.predict_variance}  |  head={self.head_type!r}  |  n_maps={self.n_maps}"
         )
         n_spec, n_x, n_y = self.input_shape
-        print_fn(f"input:  (nBatch, nSpec={n_spec}, nX={n_x}, nY={n_y})  ->  output: (nBatch, {self.output_size})")
+        output = f"(nBatch, {self.n_maps}, {self.output_size})"
+        print_fn(f"input:  (nBatch, nSpec={n_spec}, nX={n_x}, nY={n_y})  ->  output: {output}")
         print_fn(
             f"activations: encode={encode_act}  process blocks={block_act}  "
             f"decode={decode_act}  {head_act}  "
@@ -521,18 +530,18 @@ class NeuralNetwork(nn.Module):
                 print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
                 in_f = out_f
             print_fn(
-                f"  {'fc out (mean)':<{w}}   {in_f} -> {self.output_size}  "
+                f"  {'fc out (mean)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
                 f"params={params_col('fc out (mean)')}  activation={out_act}"
             )
             if self.predict_variance:
                 print_fn(
-                    f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.output_size}  "
+                    f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
                     f"params={params_col('fc out (logvar)')}  activation=None"
                 )
         else:
-            print_fn(f"  {'output (mean)':<{w}}   map -> (nBatch, {self.output_size})  activation={out_act}")
+            print_fn(f"  {'output (mean)':<{w}}   map -> {output}  activation={out_act}")
             if self.predict_variance:
-                print_fn(f"  {'output (logvar)':<{w}}   map -> (nBatch, {self.output_size})  activation=None")
+                print_fn(f"  {'output (logvar)':<{w}}   map -> {output}  activation=None")
         print_fn("-" * (w + 58))
         n_all = sum(p.numel() for p in self.parameters())
         n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)

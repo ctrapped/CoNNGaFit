@@ -183,7 +183,8 @@ def plot(model_path, output, figure_file, loss):
         key=lambda path: float(VOF_VIEW.search(Path(path).name)["position_angle"]),
     )
     predictions, maps_predicted = {}, {}
-    for path, (name, pred, std) in zip(test_files, predict(model, metadata, test_files, return_std=True)):
+    for path, (name, preds, stds) in zip(test_files, predict(model, metadata, test_files, return_std=True)):
+        pred, std = preds[0], stds[0]  # Predictions are stacked over targets
         if predicts_maps:
             maps_predicted[name] = (pred, std)
             predictions[name] = binned_curve(path, pred, std)

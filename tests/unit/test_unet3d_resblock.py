@@ -48,7 +48,7 @@ def test_rejects_unknown_upsample_mode(make_model):
 def test_conv_heads_predict_on_any_map_grid(make_model, make_cube, head, output_shape):
     model = make_model(unet, head=head, output_shape=output_shape)
     cube = make_cube()
-    assert model(cube).shape == (len(cube), output_shape[0] * output_shape[1])
+    assert model(cube).shape == (len(cube), 1, output_shape[0] * output_shape[1])
 
 
 @pytest.mark.parametrize("head", HEADS)
@@ -76,4 +76,4 @@ def test_stage_shapes_match_forward_pass(
         if not any(tag in label for tag in UNHOOKED_ROWS)
     ]
     assert recorded == expected  # every stage has the shape stage_shapes() reports
-    assert out.shape == (len(cube), input_shape[1] * input_shape[2])  # and the output is one value per pixel
+    assert out.shape == (len(cube), 1, input_shape[1] * input_shape[2])  # and the output is one value per pixel

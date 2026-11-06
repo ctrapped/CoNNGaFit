@@ -454,12 +454,12 @@ class ConvMapHead(nn.Module):
         if label.startswith("head: 2-d res block"):
             return f"activation={type(self.blocks[0].act1).__name__}"
         if label == "head: output conv":
-            return "channels: mean" + (" + logvar" if self.out_channels == 2 else "")
+            return f"{self.out_channels} channels"
         return None
 
 
 class HalfResConvHead(nn.Module):
-    """Predicts one value per map pixel from the decoder's half-resolution features.
+    """Predicts one value per map pixel, for each of n_maps maps, from the decoder's half-resolution features.
 
     The spectral axis is folded into channels, so each pixel's line-profile features are combined
     by learned weights rather than averaged away. A global summary of the galaxy (the deepest
@@ -473,7 +473,8 @@ class HalfResConvHead(nn.Module):
         head_channels: channel count of the two 3x3 convolutions.
         dropout_rate: probability for the channel-wise nn.Dropout2d before the output conv.
         activation: zero-arg callable returning an nn.Module; called once per 3x3 conv.
-        predict_variance: if True, a second 1x1 conv predicts a per-pixel log-variance.
+        predict_variance: if True, a second 1x1 conv predicts a per-pixel log-variance of every map.
+        n_maps: number of output maps.
     """
 
     def __init__(
@@ -484,6 +485,7 @@ class HalfResConvHead(nn.Module):
         dropout_rate=0.0,
         activation=nn.LeakyReLU,
         predict_variance=False,
+        n_maps=1,
     ):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels + global_channels, head_channels, kernel_size=3, padding=1)
@@ -491,14 +493,14 @@ class HalfResConvHead(nn.Module):
         self.conv2 = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
         self.act2 = activation()
         self.dropout = nn.Dropout2d(p=dropout_rate)
-        self.out_mean = nn.Conv2d(head_channels, 1, kernel_size=1)
-        self.out_logvar = nn.Conv2d(head_channels, 1, kernel_size=1) if predict_variance else None
+        self.out_mean = nn.Conv2d(head_channels, n_maps, kernel_size=1)
+        self.out_logvar = nn.Conv2d(head_channels, n_maps, kernel_size=1) if predict_variance else None
 
     def forward(self, x, bottleneck, map_shape):
         """x: (nBatch, C, nSpec, nX, nY) decoder features; bottleneck: the deepest encoder features.
 
-        Returns a list of flattened (nBatch, H*W) maps at map_shape: the mean, then the
-        log-variance if predict_variance.
+        Returns a list of (nBatch, n_maps, H*W) maps at map_shape, flattened per map: the mean,
+        then the log-variance if predict_variance.
         """
         n_batch, n_filt, n_spec, n_x, n_y = x.shape
         x = torch.reshape(x, (n_batch, n_filt * n_spec, n_x, n_y))  # fold the spectral axis into channels
@@ -511,6 +513,6 @@ class HalfResConvHead(nn.Module):
         if self.out_logvar is not None:
             outputs.append(self.out_logvar(x))
         return [
-            torch.flatten(F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False), 1)
+            torch.flatten(F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False), 2)
             for o in outputs
         ]

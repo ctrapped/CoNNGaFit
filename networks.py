@@ -29,9 +29,9 @@ OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"mass_weight_power"}, "ddpm": set()}
 CLIP_RANGE = (-1.0, 1.0)  # Where scaled labels lie; the ddpm network's samples are clipped to it
 
 
-def build_model(network, input_shape, hyperparams, output_size=None):
+def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
     """The network for cubes of input_shape (nSpec, nY, nX), predicting a map, or a radial curve of output_size bins
-    (resblock only)."""
+    (resblock only), for each of n_maps targets."""
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
     if network == "resblock":
@@ -46,6 +46,7 @@ def build_model(network, input_shape, hyperparams, output_size=None):
             head=hyperparams["output_head"],
             output_size=output_size,
             predict_variance=hyperparams["predict_variance"],
+            n_maps=n_maps,
         )
 
     if output_size is not None:
@@ -58,6 +59,7 @@ def build_model(network, input_shape, hyperparams, output_size=None):
         kernel_stem,
         kernel_coder,
         block_dropout_rate=hyperparams["block_dropout_rate"],
+        n_maps=n_maps,
     )
     return GaussianDiffusion(
         denoiser,
