@@ -35,17 +35,6 @@ def test_default_output_is_one_value_per_pixel(network, make_model, make_cube, h
     assert model(cube).shape == (len(cube), 1, n_x * n_y)
 
 
-@every_head
-@pytest.mark.parametrize("predict_variance", [False, True])
-def test_predicts_every_map(network, make_model, make_cube, head, predict_variance):
-    model = make_model(network, head=head, n_maps=N_MAPS, predict_variance=predict_variance)
-    cube = make_cube()
-    _, n_x, n_y = model.input_shape
-    outputs = model(cube) if predict_variance else (model(cube),)
-    for out in outputs:  # the mean, and the log-variance with predict_variance
-        assert out.shape == (len(cube), N_MAPS, n_x * n_y)
-
-
 def test_output_size_override(network, make_model, make_cube):
     cube = make_cube()
     assert make_model(network, output_size=OUTPUT_SIZE)(cube).shape == (len(cube), 1, OUTPUT_SIZE)
@@ -103,7 +92,9 @@ def test_training_loss_reaches_every_parameter(network, make_model, make_cube, h
         assert mean.shape == logvar.shape == target.shape  # one mean and log-variance per output
         loss = nn.GaussianNLLLoss()(mean, target, logvar.exp())
     else:
-        loss = nn.MSELoss()(model(cube), target)
+        mean = model(cube)
+        assert mean.shape == target.shape  # one value per output
+        loss = nn.MSELoss()(mean, target)
     loss.backward()
     for name, param in model.named_parameters():
         assert param.grad is not None, name  # parameter is connected to the loss
