@@ -1,4 +1,4 @@
-"""unet_blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
+"""blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
 
 import pytest
 import torch

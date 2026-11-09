@@ -7,7 +7,7 @@ from conngafit.use_model import read_image_list, run_inferences
 ####Runs inference with a network trained by train_model_unet.py on the validation set for a
 ####given sample, so predictions can be spot-checked against the known validation labels.
 #
-####Run as: python inference_test_validation_set.py [options]
+####Run as: python scripts/run_inference_validation.py [options]
 ####  Run with --help to see all options.
 
 

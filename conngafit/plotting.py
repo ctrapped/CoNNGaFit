@@ -446,7 +446,7 @@ def make_comp_image_1d(
         curves (unlike make_comp_image, these are not reshaped into a 2-d map here).
     data_image: (nBatch, nSpec, nX, nY) input datacube batch.
     output/index/sim_to_physical_units/param_label/unit_label: see make_comp_image above.
-    radii: the curves' ring centers in kpc (see ring_radii in conngafit_datasets.py); if None, plot against bin number.
+    radii: the curves' ring centers in kpc (see ring_radii in datasets.py); if None, plot against bin number.
     uncertainty: (nBatch, nRadialBins) predicted 1-sigma of each ring, in the same units as data_pred, or None.
     """
     image_pred = np.zeros((np.shape(data_pred)[1]))

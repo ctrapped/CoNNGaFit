@@ -6,7 +6,7 @@ from conngafit.use_model import read_image_list, run_inferences
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
 ####input datacubes. See use_model.run_inferences for the full parameter description.
 #
-####Run as: python inference_template.py [options]
+####Run as: python scripts/run_inference.py [options]
 ####  Run with --help to see all options.
 
 

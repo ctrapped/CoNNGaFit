@@ -28,13 +28,13 @@ from conngafit.plotting import (
     save_hdf5_1d,
 )
 
-####Trains the Unet read from unet3d_resblock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
-####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
+####Trains the network chosen by the hyperparameters file's network key (see conngafit/networks.py) on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
+####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see datasets.py).
 ####Hyperparameters were chosen based on paramter space optimization+trial and error.
 ####Hyperparameters and datasets (including the target annotations) are read from two parameter files,
-####configs/hyperparams_resblock.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in conngafit_datasets.py
+####configs/hyperparams_resblock.toml and configs/datasets.toml by default; plot labels per target are in TARGET_SETTINGS in datasets.py
 #
-####Run as: python train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
+####Run as: python scripts/train_model_unet.py [--hyperparams FILE] [--datasets FILE] [--run-name NAME] [options]
 ####  Run with --help to see all options. The two parameter files and --run-name are normally the
 ####  only options you need. The datasets file gives the path to each galaxy's VOF outputs, and by default:
 ####    NetworkWeights/    receives the trained model checkpoint (<run-name>.pt/.hdf5)
@@ -76,7 +76,7 @@ def load_parameter_file(path, keys, optional_keys=frozenset()):
 
 def dataset_sources(section, name, path, base_dir=None):
     """Check a datasets-file section ("VOF output directory" = snapshots lines) and resolve each
-    directory relative to base_dir (default: the datasets file's folder). Returns the dict conngafit_datasets.py expects."""
+    directory relative to base_dir (default: the datasets file's folder). Returns the dict datasets.py expects."""
     if not isinstance(section, dict):
         raise ValueError(f'{path}: write [{name}] as "/path/to/vof_outputs" = snapshots lines')
     # base_dir itself may be relative, to the datasets file's folder

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 ####Functions to run a network trained by train_model_unet.py on HI spectral datacubes: VOF outputs, or
-####real observations converted with fits_to_conngafit.py. See inference_template.py for an example.
+####real observations converted with fits_to_conngafit.py. See scripts/run_inference.py for an example.
 ####
 ####Written By Cameron Trapp (ctrapped@gmail.com)
 

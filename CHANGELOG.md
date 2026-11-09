@@ -55,6 +55,13 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- **Breaking:** the library modules are the installable `conngafit` package, with the networks in
+  `conngafit/models/`, and the command-line scripts are in `scripts/`; install with `pip install -e .`
+  before running them. Imports use the package paths (e.g. `from conngafit.use_model import predict`).
+  Renamed: `conngafit_datasets` → `datasets`, `plotting_functions` → `plotting`, `unet_blocks` → `blocks`,
+  `unet_diagnostics` → `diagnostics`, `inference_template.py` → `run_inference.py`,
+  `inference_test_validation_set.py` → `run_inference_validation.py`. The Quartz guide moved from
+  `Tutorials/Quartz/` to `docs/quartz/`.
 - The ResBlock U-Net and dilated ResNet return `(nBatch, n_maps, output_size)`, the DDPM's denoiser takes and
   returns `(nBatch, n_maps, H, W)` maps and samples `(n_samples, nBatch, n_maps, ...)`, and `use_model.predict`
   yields `(n_targets, ...)` arrays, also for a single target.

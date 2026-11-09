@@ -1,7 +1,7 @@
 """Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net, and one with
 several targets, trains on a single VOF image for two epochs, writes a valid checkpoint, and predicts outputs (and,
 with predict_variance, their 1-sigma uncertainties) of the expected size, both when training ends and when the
-checkpoint is reloaded by use_model.py. inference_template.py runs the committed demo network."""
+checkpoint is reloaded by use_model.py. run_inference.py runs the committed demo network."""
 
 import tomllib
 
@@ -14,7 +14,7 @@ from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, REPO, TARGET, expected_shap
 from conngafit.use_model import load_model, predict, run_inferences
 
 INFERENCE_SCRIPT = REPO / "scripts" / "run_inference.py"
-DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
+DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for run_inference.py
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
 SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")

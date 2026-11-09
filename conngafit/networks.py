@@ -65,6 +65,6 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
         denoiser,
         n_timesteps=hyperparams["n_timesteps"],
         schedule=hyperparams["schedule"],
-        flat_labels=True,  # Labels are flattened maps, as conngafit_datasets.py gives them
+        flat_labels=True,  # Labels are flattened maps, as datasets.py gives them
         clip_range=None if hyperparams["label_scaling"] == "none" else CLIP_RANGE,
     )

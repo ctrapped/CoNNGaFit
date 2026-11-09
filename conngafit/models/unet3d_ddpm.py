@@ -18,7 +18,7 @@ from conngafit.models.unet3d_resblock import _check_stage_compatibility
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
 # Learns p(maps | cube): one or more 2-d target maps (e.g. mass and rotational momentum) are diffused with
-# Gaussian noise and a 3-d residual U-Net, built from the shared blocks in unet_blocks.py, learns to remove it
+# Gaussian noise and a 3-d residual U-Net, built from the shared blocks in blocks.py, learns to remove it
 # while looking at the datacube. Sampling many maps per cube gives their joint posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
@@ -488,7 +488,7 @@ class GaussianDiffusion(nn.Module):
         n_timesteps: number of diffusion steps T.
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
         flat_labels: if True, labels may have each map flattened, (B, n_maps, H*W), as produced by
-            conngafit_datasets.py, and samples are flattened the same way; otherwise both are (B, n_maps, H, W).
+            datasets.py, and samples are flattened the same way; otherwise both are (B, n_maps, H, W).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
     """
@@ -513,7 +513,7 @@ class GaussianDiffusion(nn.Module):
         # buffers move with .to(device) and are saved in state_dict
         self.register_buffer("alpha_bar", alpha_bar.float())
 
-    # -- shape handling: accept flattened (B, n_maps, H*W) labels from conngafit_datasets.py --
+    # -- shape handling: accept flattened (B, n_maps, H*W) labels from datasets.py --
     def _to_map(self, y):
         if y.dim() == 4:
             return y

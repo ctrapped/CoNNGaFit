@@ -8,10 +8,10 @@ Training data comes from [VeryObservableFIRE](https://github.com/ctrapped/VeryOb
 
 ## Highlights
 
-- **Networks:** a 3-d residual U-Net (`unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve, optionally with each value's 1σ. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves. A conditional diffusion model (DDPM, `unet3d_ddpm.py`) instead samples maps from their posterior, giving each pixel's mean and standard deviation.
+- **Networks:** a 3-d residual U-Net (`conngafit/models/unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve, optionally with each value's 1σ. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves. A conditional diffusion model (DDPM, `conngafit/models/unet3d_ddpm.py`) instead samples maps from their posterior, giving each pixel's mean and standard deviation.
 - **Targets:** mass, radial / cylindrical-radial / rotational velocity, and radial / cylindrical-radial / rotational momentum (mass × velocity), all read from VOF's per-pixel annotations.
 - **Configuration:** hyperparameters and datasets live in two TOML files, so a training run is reproducible from its config, and every trained model stores both files alongside its weights.
-- **Development:** 239 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
+- **Development:** 278 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
 
 ## Installation
 
@@ -22,7 +22,9 @@ pip install -e .            # CoNNGaFit and its dependencies
 pip install -e ".[dev]"     # + development tools (pytest, ruff, pre-commit)
 ```
 
-To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)). Instructions for the Quartz cluster at IU are in [`Tutorials/Quartz`](Tutorials/Quartz/README.md).
+To train on a GPU, install a CUDA-enabled build of PyTorch first (see [pytorch.org](https://pytorch.org/get-started/locally/)). Instructions for the Quartz cluster at IU are in [`docs/quartz`](docs/quartz/README.md).
+
+The library code is the `conngafit` package (its networks are in `conngafit/models/`), and the command-line scripts for training, inference and converting FITS files are in `scripts/`. Installing the package makes it importable from the scripts, examples and tests, so run them from the repository root after installing.
 
 ## Demo
 
@@ -49,7 +51,7 @@ which runs the pre-trained demo network in [`examples/demo_model`](examples/demo
 ## Training
 
 ```bash
-python train_model_unet.py --run-name my_run
+python scripts/train_model_unet.py --run-name my_run
 ```
 
 Training is set by two parameter files, `configs/hyperparams_resblock.toml` and `configs/datasets.toml` by default; pass others with `--hyperparams` and `--datasets`. Every key is required unless marked optional.
@@ -149,19 +151,19 @@ Predictions, labels and uncertainties in every saved output are in physical unit
 
 | Module | Description |
 |---|---|
-| `networks.py` | Each network's hyperparameter keys, and `build_model`, which builds either network for `train_model_unet.py` and `use_model.py` |
-| `unet3d_resblock.py` | The residual U-Net, `network = "resblock"` |
-| `unet3d_dilated_resnet.py` | A dilated residual network with no downsampling, with the same interface |
-| `unet3d_ddpm.py` | A conditional diffusion model that samples maps from their posterior, `network = "ddpm"` |
-| `unet_blocks.py`, `unet_diagnostics.py` | Shared building blocks, and helpers for parameter counts and latent images |
+| `conngafit/networks.py` | Each network's hyperparameter keys, and `build_model`, which builds either network for `scripts/train_model_unet.py` and `conngafit/use_model.py` |
+| `conngafit/models/unet3d_resblock.py` | The residual U-Net, `network = "resblock"` |
+| `conngafit/models/unet3d_dilated_resnet.py` | A dilated residual network with no downsampling, with the same interface |
+| `conngafit/models/unet3d_ddpm.py` | A conditional diffusion model that samples maps from their posterior, `network = "ddpm"` |
+| `conngafit/models/blocks.py`, `conngafit/models/diagnostics.py` | Shared building blocks, and helpers for parameter counts and latent images |
 
 Every network has a `summary()` method that prints its stages, shapes and parameter counts. [`examples/model_summaries.ipynb`](examples/model_summaries.ipynb) builds each one and checks its summary against a real forward pass.
 
 ## Observed data and inference
 
-`fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
+`conngafit/fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `scripts/fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
 
-`use_model.py`, `inference_template.py` and `inference_test_validation_set.py` run a trained network on new datacubes. DDPMs, and ResBlock networks trained with `predict_variance`, also return (`use_model.predict(..., return_std=True)`) and save each prediction's 1σ. `inference_test_validation_set.py --save-latent-images` also saves PNGs of a ResBlock network's intermediate activations.
+`conngafit/use_model.py` runs a trained network on new datacubes; `scripts/run_inference.py` and `scripts/run_inference_validation.py` do so from the command line. DDPMs, and ResBlock networks trained with `predict_variance`, also return (`use_model.predict(..., return_std=True)`) and save each prediction's 1σ. `scripts/run_inference_validation.py --save-latent-images` also saves PNGs of a ResBlock network's intermediate activations.
 
 ## Development
 

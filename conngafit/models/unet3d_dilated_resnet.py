@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
 #
 # Written by Caleb Choban using Claude LLM, adapting unet3d_resblock.py's conventions.
-# DilatedResidualBlock lives in unet_blocks.py; latent-image diagnostics in unet_diagnostics.py.
+# DilatedResidualBlock lives in blocks.py; latent-image diagnostics in diagnostics.py.
 
 
 def _strided_out_shape(input_shape, stride):
@@ -104,7 +104,7 @@ class NeuralNetwork(nn.Module):
         `pool_output`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see unet_blocks.py) - spectral attention pool, bilinear resize to
+        'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
 
@@ -306,7 +306,7 @@ class NeuralNetwork(nn.Module):
             size 1 is inserted before the 3-d convolutions.
         save_latent_images: if True, dump PNGs of the spectrally-summed activations after the
             encoder and after each Process block to LATENT_IMAGE_OUTPUT (see
-            save_summed_spectral_channels in unet_diagnostics.py) - useful for visually debugging what the network
+            save_summed_spectral_channels in diagnostics.py) - useful for visually debugging what the network
             is learning, not needed for normal training/inference.
         Returns: if predict_variance=False (default), a tensor of shape (nBatch, n_maps, output_size)
             - the flattened predicted output maps. If predict_variance=True, a (mean, logvar)
