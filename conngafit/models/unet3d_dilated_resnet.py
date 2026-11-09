@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
 #
 # Written by Caleb Choban using Claude LLM, adapting unet3d_resblock.py's conventions.
-# DilatedResidualBlock lives in blocks.py; latent-image diagnostics in diagnostics.py.
 
 
 def _strided_out_shape(input_shape, stride):
