@@ -49,22 +49,40 @@ def save_summed_spectral_channels(x, step, save_itr):
 
 
 def count_params(modules):
-    """Number of parameters in a list of modules, counting each parameter once."""
-    return sum({id(p): p.numel() for m in modules for p in m.parameters()}.values())
+    """Number of parameters in a list of modules, counting each parameter once
+    (a parameter can appear more than once if the modules overlap or share it)."""
+    counted = set()
+    total = 0
+    for module in modules:
+        for param in module.parameters():
+            if id(param) not in counted:
+                counted.add(id(param))
+                total += param.numel()
+    return total
 
 
 def layer_param_lines(modules, indent="      "):
-    """One line per layer inside `modules` that owns parameters - dotted name, layer type and
-    parameter count - so summary() can break a block's total down layer by layer. A module that is
-    itself a single layer has nothing to break down and yields no lines."""
-    entries = []
-    for m in modules:
-        for name, layer in m.named_modules():
-            n = sum(p.numel() for p in layer.parameters(recurse=False))
-            if n and name:
-                entries.append((name, type(layer).__name__, n))
-    if not entries:
+    """Text lines breaking the modules' parameters down by layer, for summary().
+
+    One line per layer that has parameters, in aligned columns, e.g.
+        conv1     Conv2d     params=296
+        norm1     GroupNorm  params=16
+    A module that is a single layer (e.g. a bare Conv2d) gives no lines.
+    """
+    layers = []
+    for module in modules:
+        for name, layer in module.named_modules():
+            if name == "":  # named_modules() lists the module itself first, with an empty name
+                continue
+            n_params = sum(p.numel() for p in layer.parameters(recurse=False))  # this layer's own parameters
+            if n_params > 0:
+                layers.append((name, type(layer).__name__, n_params))
+    if not layers:
         return []
-    nw = max(len(e[0]) for e in entries)
-    tw = max(len(e[1]) for e in entries)
-    return [f"{indent}{name:<{nw}}  {kind:<{tw}}  params={n:,}" for name, kind, n in entries]
+
+    name_width = max(len(name) for name, _, _ in layers)
+    type_width = max(len(layer_type) for _, layer_type, _ in layers)
+    lines = []
+    for name, layer_type, n_params in layers:
+        lines.append(f"{indent}{name.ljust(name_width)}  {layer_type.ljust(type_width)}  params={n_params:,}")
+    return lines
