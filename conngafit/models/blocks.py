@@ -36,8 +36,7 @@ def _near_same_deconv_pad(kernel_size):
 
 
 def _ceil_conv_pad(kernel_size, stride):
-    """(before, after) padding per dim so a conv with any stride gives out = ceil(N/stride).
-    """
+    """(before, after) padding per dim so a conv with any stride gives out = ceil(N/stride)."""
     kernel_size, stride = tuple(kernel_size), tuple(stride)
     if len(kernel_size) != len(stride):
         raise ValueError(f"kernel_size {kernel_size} and stride {stride} must have the same length")
@@ -78,7 +77,7 @@ class Stem(nn.Module):
     stride-2 Conv3d followed by a stride-2 MaxPool3d and an activation.
 
     Each stage's padding comes from _ceil_conv_pad, so the conv brings every axis to exactly
-    ceil(N/2) and the pool then brings that to exactly ceil(N/4). 
+    ceil(N/2) and the pool then brings that to exactly ceil(N/4).
 
     Parameters:
         out_channels: number of filters (== n_filt0, the encoder's stage-0 channel count).
@@ -115,7 +114,7 @@ class ResidualBlock(nn.Module):
 
     Main path: conv1 -> BatchNorm -> activation -> conv2 -> BatchNorm -> activation
     A skip is added, followed by a final activation and channel-wise dropout
-    
+
      When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
     to ceil(N/2) and the skip is projected through a strided 1x1x1 conv + BatchNorm to match.
 
