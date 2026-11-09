@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-####Functions to run a network trained by train_model_unet.py on HI spectral datacubes: VOF outputs, or
-####real observations converted with fits_to_conngafit.py. See scripts/run_inference.py for an example.
-####
-####Written By Cameron Trapp (ctrapped@gmail.com)
+
+"""Functions to run a network trained by train_model_unet.py on HI spectral datacubes: VOF outputs, or
+real observations converted with fits_to_conngafit.py. See scripts/run_inference.py for an example.
+
+Written By Cameron Trapp (ctrapped@gmail.com)
+"""
 
 
 def load_model(model_path):
@@ -48,13 +50,21 @@ def load_model(model_path):
 
 
 def predict(model, metadata, image_paths, save_latent_images=False, return_std=False, return_samples=False):
-    """Yield (name, prediction) for each datacube in image_paths, in physical units: a 2-d map, or a radial curve, of
-    each target in metadata["target"], stacked along the first axis.
-    With return_std, yield (name, prediction, std): std is the ddpm network's posterior standard deviation, or the
-    resblock network's predicted 1-sigma, in the same units and shape; None for a resblock network trained without
-    predict_variance. With return_samples (ddpm only), yield (name, samples) instead: the network's n_samples joint
-    posterior samples of every target, shape (n_samples, *prediction shape), to propagate into quantities derived
-    from several targets. save_latent_images needs the resblock network."""
+    """Run the network on each datacube in image_paths.
+
+    Predictions are in physical units, with one map or radial curve per target in metadata["target"]:
+    shape (n_targets, nY, nX) for maps, or (n_targets, n_bins) for radial curves.
+
+    Yields:
+        (name, prediction) by default.
+        (name, prediction, std) with return_std. std is the ddpm network's
+            posterior standard deviation, or the predicted 1-sigma of a network trained with predict_variance.
+            Otherwise None.
+        (name, samples) with return_samples (ddpm only). samples are the n_samples joint posterior samples,
+            shape (n_samples, *prediction.shape), for propagating into quantities derived from several targets.
+
+    save_latent_images is not supported by the ddpm network.
+    """
     if save_latent_images and metadata["network"] == "ddpm":
         raise ValueError("save_latent_images needs the resblock network")
     if return_samples and metadata["network"] != "ddpm":
@@ -70,7 +80,7 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
     shape = (n_maps, -1) if "radial_bins" in metadata else (n_maps, n_y, n_x)
     for name, image in zip(dataset.names, dataset):
         cube = image[None].float().to(device)
-        with torch.no_grad():  # only around the forward pass, so the caller's code never runs with gradients off
+        with torch.no_grad():
             if return_samples:
                 samples = model.sample(cube, int(metadata["n_samples"]))[:, 0]  # (n_samples, n_maps, n_pixels)
             elif metadata["network"] == "ddpm":

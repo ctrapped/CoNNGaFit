@@ -26,8 +26,6 @@ HYPERPARAM_KEYS = {
 }
 OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"mass_weight_power"}, "ddpm": set()}
 
-CLIP_RANGE = (-1.0, 1.0)  # Where scaled labels lie; the ddpm network's samples are clipped to it
-
 
 def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
     """The network for cubes of input_shape (nSpec, nY, nX), predicting a map, or a radial curve of output_size bins
@@ -51,7 +49,7 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
 
     if output_size is not None:
         raise ValueError(
-            "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_shape must be set to None."
+            "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_size must be set to None."
         )
     denoiser = DenoisingUNet3d(
         input_shape,
@@ -66,5 +64,5 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
         n_timesteps=hyperparams["n_timesteps"],
         schedule=hyperparams["schedule"],
         flat_labels=True,  # Labels are flattened maps, as datasets.py gives them
-        clip_range=None if hyperparams["label_scaling"] == "none" else CLIP_RANGE,
+        clip_range=None if hyperparams["label_scaling"] == "none" else (-1.0, 1.0),
     )

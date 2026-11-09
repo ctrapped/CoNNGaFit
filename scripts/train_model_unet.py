@@ -408,7 +408,7 @@ def save_correlation_plots(all_pred, all_y, output_base, epoch):
     batches in physical units."""
     all_pred, all_y = np.concatenate(all_pred), np.concatenate(all_y)
     for m, target in enumerate(targets):
-        make_correlation_plot(all_pred[:, m], all_y[:, m], len(all_pred), f"{output_base}_{target}_Epoch{epoch}")
+        make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
 
 
 #### Define Training Loop ####
