@@ -8,7 +8,6 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 
 
-
 #### Plotting Functions ####
 def make_comp_image(
     data_pred,
@@ -188,6 +187,7 @@ def make_image(
         hf.create_dataset("uncertainty", data=sigma_map)
     hf.close()
 
+
 def save_hdf5(input_data, pred_data, output, index, uncertainty=None):
     """Reshape one snapshot's flattened prediction (and optionally its label and predicted
     1-sigma) into 2-d maps and save them to an hdf5 file for later re-plotting.
@@ -215,6 +215,7 @@ def save_hdf5(input_data, pred_data, output, index, uncertainty=None):
     if uncertainty is not None:
         hf.create_dataset("uncertainty", data=np.reshape(uncertainty[index, :], pred_image.shape))
     hf.close()
+
 
 def make_comp_image_1d(
     data_pred,
@@ -295,7 +296,6 @@ def save_hdf5_1d(input_data, pred_data, output, index, uncertainty=None):
     if uncertainty is not None:
         hf.create_dataset("uncertainty", data=uncertainty[index])
     hf.close()
-
 
 
 def rv2_coeff(data_list):
