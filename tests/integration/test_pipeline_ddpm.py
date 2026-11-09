@@ -11,7 +11,7 @@ import pytest
 import torch
 from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, TARGET, expected_shape, saved_test_outputs
 
-from use_model import load_model, predict, run_inferences
+from conngafit.use_model import load_model, predict, run_inferences
 
 # (run name, targets): one target, and two the demo images carry, predicted together
 RUNS = [("ddpm", [TARGET]), ("ddpm_two_targets", ["mass", "rotational_momentum"])]

@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 import demo  # examples/demo.py, on pytest's pythonpath
-from conngafit_datasets import radial_profile
-from use_model import load_model, predict
+from conngafit.datasets import radial_profile
+from conngafit.use_model import load_model, predict
 
 pytestmark = pytest.mark.slow
 

@@ -2,8 +2,8 @@ import logging
 
 import numpy as np
 
-from fits_to_conngafit import fits_to_conngafit
-from logging_setup import configure_logging
+from conngafit.fits_to_conngafit import fits_to_conngafit
+from conngafit.logging_setup import configure_logging
 
 ####Template for how to convert from fits to CoNNGaFit compatible hdf5 files using fits_to_conngafit.py
 ####image_dir should point to the FITS file

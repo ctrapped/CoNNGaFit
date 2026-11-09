@@ -11,9 +11,9 @@ import pytest
 import torch
 from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, REPO, TARGET, expected_shape, saved_test_outputs
 
-from use_model import load_model, predict, run_inferences
+from conngafit.use_model import load_model, predict, run_inferences
 
-INFERENCE_SCRIPT = REPO / "inference_template.py"
+INFERENCE_SCRIPT = REPO / "scripts" / "run_inference.py"
 DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU

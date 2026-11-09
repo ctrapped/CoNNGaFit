@@ -1,8 +1,8 @@
 import argparse
 import os
 
-from logging_setup import add_logging_arguments, configure_logging
-from use_model import read_image_list, run_inferences
+from conngafit.logging_setup import add_logging_arguments, configure_logging
+from conngafit.use_model import read_image_list, run_inferences
 
 ####Runs inference with a network trained by train_model_unet.py on the validation set for a
 ####given sample, so predictions can be spot-checked against the known validation labels.

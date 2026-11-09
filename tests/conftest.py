@@ -11,8 +11,7 @@ import h5py
 import pytest
 import torch
 
-import unet3d_dilated_resnet
-import unet3d_resblock
+from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
 
 INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
@@ -20,7 +19,7 @@ SEED = 0
 SCRIPT_TIMEOUT_S = 600
 
 REPO = Path(__file__).resolve().parents[1]
-TRAIN_SCRIPT = REPO / "train_model_unet.py"
+TRAIN_SCRIPT = REPO / "scripts" / "train_model_unet.py"
 CONFIG_DIR = REPO / "configs"
 
 # One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,

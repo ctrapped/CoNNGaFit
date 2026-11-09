@@ -4,9 +4,16 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from unet3d_resblock import _check_stage_compatibility
-from unet_blocks import DeconvBlock, ResidualBlock, SpectralAttentionPool, Stem, Upsample, _match_spatial
-from unet_diagnostics import count_params, layer_param_lines
+from conngafit.models.blocks import (
+    DeconvBlock,
+    ResidualBlock,
+    SpectralAttentionPool,
+    Stem,
+    Upsample,
+    _match_spatial,
+)
+from conngafit.models.diagnostics import count_params, layer_param_lines
+from conngafit.models.unet3d_resblock import _check_stage_compatibility
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).

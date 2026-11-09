@@ -5,7 +5,7 @@ import torch
 from conftest import BATCH_SIZE, INPUT_SHAPE
 from torch import nn
 
-import unet3d_ddpm as ddpm
+from conngafit.models import unet3d_ddpm as ddpm
 
 N_TIMESTEPS = 10
 N_SAMPLES = 3

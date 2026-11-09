@@ -5,9 +5,9 @@ import tomllib
 import pytest
 from conftest import CONFIG_DIR
 
-from networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
-from unet3d_ddpm import GaussianDiffusion
-from unet3d_resblock import NeuralNetwork
+from conngafit.models.unet3d_ddpm import GaussianDiffusion
+from conngafit.models.unet3d_resblock import NeuralNetwork
+from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
 
 CONFIG_FILES = sorted(CONFIG_DIR.glob("hyperparams_*.toml"))
 # Big enough for the default four encoder stages, which the config files don't override

@@ -4,7 +4,7 @@ from itertools import chain
 
 import pytest
 
-import unet3d_resblock as unet
+from conngafit.models import unet3d_resblock as unet
 
 HEADS = ["fc", "conv", "conv_halfres"]
 CONV_HEADS = ["conv", "conv_halfres"]

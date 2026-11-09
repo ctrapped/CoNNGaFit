@@ -21,10 +21,9 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
+from conngafit.logging_setup import add_logging_arguments, configure_logging
 
-from logging_setup import add_logging_arguments, configure_logging  # noqa: E402 - after the sys.path line above
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 logger = logging.getLogger(__name__)
 

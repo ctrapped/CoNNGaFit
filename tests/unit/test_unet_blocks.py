@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from unet_blocks import (
+from conngafit.models.blocks import (
     ConvMapHead,
     DilatedResidualBlock,
     HalfResConvHead,

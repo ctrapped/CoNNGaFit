@@ -3,8 +3,8 @@
 "ddpm"     - the conditional diffusion model in unet3d_ddpm.py, predicting maps
 """
 
-from unet3d_ddpm import DenoisingUNet3d, GaussianDiffusion
-from unet3d_resblock import NeuralNetwork
+from conngafit.models.unet3d_ddpm import DenoisingUNet3d, GaussianDiffusion
+from conngafit.models.unet3d_resblock import NeuralNetwork
 
 # Keys every hyperparameter file must have, and may have, for each network (see configs/hyperparams_<network>*.toml)
 SHARED_KEYS = {

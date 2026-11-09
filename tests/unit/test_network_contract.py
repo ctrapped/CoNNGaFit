@@ -4,8 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-import unet3d_dilated_resnet
-import unet3d_resblock
+from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
 
 HEADS = {
     unet3d_resblock: ("fc", "conv", "conv_halfres"),

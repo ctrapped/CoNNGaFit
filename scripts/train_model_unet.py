@@ -9,9 +9,9 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from conngafit_datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
-from logging_setup import add_logging_arguments, configure_logging
-from networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
+from conngafit.datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
+from conngafit.logging_setup import add_logging_arguments, configure_logging
+from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
 
 matplotlib.use("Agg")
 import argparse
@@ -20,7 +20,13 @@ import tomllib
 import h5py
 from matplotlib import pyplot as plt
 
-from plotting_functions import make_comp_image, make_comp_image_1d, make_correlation_plot, save_hdf5, save_hdf5_1d
+from conngafit.plotting import (
+    make_comp_image,
+    make_comp_image_1d,
+    make_correlation_plot,
+    save_hdf5,
+    save_hdf5_1d,
+)
 
 ####Trains the Unet read from unet3d_resblock.py on the given training data. Provides additional diagnostic plots and images on the validation and test datasets provided.
 ####Training, validation, and testing datasets are VOF optically thin outputs, chosen by galaxy and snapshot range (see conngafit_datasets.py).
@@ -53,7 +59,7 @@ DATASET_KEYS = {
     "testing",
 }
 OPTIONAL_DATASET_KEYS = {"base_dir", "suffix"}
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs")
 
 
 def load_parameter_file(path, keys, optional_keys=frozenset()):

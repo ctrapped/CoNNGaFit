@@ -2,7 +2,7 @@
 
 import pytest
 
-import unet3d_dilated_resnet as dilated
+from conngafit.models import unet3d_dilated_resnet as dilated
 
 
 def stage_modules(model):

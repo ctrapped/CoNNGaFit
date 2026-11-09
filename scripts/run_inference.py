@@ -1,7 +1,7 @@
 import argparse
 
-from logging_setup import add_logging_arguments, configure_logging
-from use_model import read_image_list, run_inferences
+from conngafit.logging_setup import add_logging_arguments, configure_logging
+from conngafit.use_model import read_image_list, run_inferences
 
 ####Template for running inference with a previously trained CoNNGaFit network on a list of
 ####input datacubes. See use_model.run_inferences for the full parameter description.

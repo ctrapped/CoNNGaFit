@@ -8,9 +8,9 @@ import torch
 from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from conngafit_datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
-from networks import build_model
-from plotting_functions import make_image
+from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
+from conngafit.networks import build_model
+from conngafit.plotting import make_image
 
 logger = logging.getLogger(__name__)
 

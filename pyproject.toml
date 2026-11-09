@@ -25,23 +25,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "pre-commit"]
 
-[tool.setuptools]
-py-modules = [
-    "conngafit_datasets",
-    "fits_to_conngafit",
-    "logging_setup",
-    "plotting_functions",
-    "unet3d_ddpm",
-    "unet3d_dilated_resnet",
-    "unet3d_resblock",
-    "unet_blocks",
-    "unet_diagnostics",
-    "use_model",
-]
+[tool.setuptools.packages.find]
+include = ["conngafit*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "examples"]
+pythonpath = ["examples"]  # demo.py, for test_demo.py; conngafit itself is installed
 addopts = "-ra"
 markers = ["slow: trains on the full demo data; skip with -m \"not slow\""]
 

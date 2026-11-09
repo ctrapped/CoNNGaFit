@@ -13,20 +13,17 @@ with fits_to_conngafit.py. Predicted maps are binned into the rotation curve to 
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 
+from conngafit.datasets import radial_profile
+from conngafit.logging_setup import add_logging_arguments, configure_logging
+from conngafit.use_model import run_inferences
+from demo import DATA_DIR, DATASETS, N_RINGS, SPLITS, binned_curve  # examples/demo.py
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
-
-from conngafit_datasets import radial_profile  # noqa: E402
-from demo import DATA_DIR, DATASETS, N_RINGS, SPLITS, binned_curve  # noqa: E402 - examples/demo.py
-from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
-from use_model import run_inferences  # noqa: E402
-
 MODEL_PATH = REPO_ROOT / "examples" / "demo_model" / "demo"
 
 

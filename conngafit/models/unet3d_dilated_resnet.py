@@ -5,8 +5,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from unet_blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
-from unet_diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
+from conngafit.models.blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
+from conngafit.models.diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
 

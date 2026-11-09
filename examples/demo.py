@@ -30,12 +30,10 @@ import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
 
+from conngafit.datasets import TARGETS, VOF_VIEW, radial_profile
+from conngafit.use_model import load_model, predict, ring_radii_kpc
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))  # So CoNNGaFit's modules import from examples/
-
-from conngafit_datasets import TARGETS, VOF_VIEW, radial_profile  # noqa: E402 - after the sys.path line above
-from use_model import load_model, predict, ring_radii_kpc  # noqa: E402
-
 DATA_DIR = REPO_ROOT / "examples" / "demo_data"
 RUN_NAME = "demo"
 DATASETS = {
@@ -134,7 +132,7 @@ def train(output, epochs, predict):
     subprocess.run(
         [
             sys.executable,
-            REPO_ROOT / "train_model_unet.py",
+            REPO_ROOT / "scripts" / "train_model_unet.py",
             "--hyperparams",
             hyperparams_file,
             "--datasets",
