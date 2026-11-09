@@ -21,11 +21,9 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
 
 from conngafit_datasets import ring_index  # noqa: E402 - after sys.path
-from demo import RUN_NAME  # noqa: E402 - this folder's demo.py
+from demo import CURVE_TARGET, N_RINGS, RUN_NAME  # noqa: E402 - this folder's demo.py
 from demo_common import (  # noqa: E402
-    CURVE_TARGET,
     DATA_DIR,
-    N_RINGS,
     SPLITS,
     curve_errors,
     load_images,

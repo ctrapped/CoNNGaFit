@@ -20,7 +20,8 @@ import numpy as np
 EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
 
-from demo_common import CURVE_TARGET, DATA_DIR, N_RINGS, SPLITS, curve_errors, load_images, testing_images  # noqa: E402
+from demo import CURVE_TARGET, N_RINGS  # noqa: E402 - this folder's demo.py
+from demo_common import DATA_DIR, SPLITS, curve_errors, load_images, testing_images  # noqa: E402
 from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from use_model import run_inferences  # noqa: E402
 

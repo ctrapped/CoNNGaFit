@@ -28,14 +28,11 @@ sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo 
 from conngafit_datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402 - after sys.path
 from demo_common import (  # noqa: E402
     COLUMN_DENSITY_LIMITS,
-    CURVE_TARGET,
     DATA_DIR,
     DATASETS,
     DETECTION,
-    HYPERPARAM_OVERRIDES,
     LOS_VELOCITY_LIMITS,
     MAP_PANELS,
-    N_RINGS,
     REPO_ROOT,
     SNAPSHOT,
     SNR_LIMITS,
@@ -54,10 +51,21 @@ from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot
 from use_model import load_model, predict  # noqa: E402
 
 RUN_NAME = "demo_ddpm_velocity"
+CURVE_TARGET = "rotational_velocity"  # The map the demo predicts, and the rotation curve it is checked against
+N_RINGS = 10  # Rings in the rotation curve
 CONFIG = REPO_ROOT / "configs" / "hyperparams_ddpm.toml"
-# Each prediction takes n_samples * n_timesteps denoiser passes per cube, so the training and validation sets are
-# predicted only every predict_every epochs
-HYPERPARAMS = {**HYPERPARAM_OVERRIDES, "n_timesteps": 50, "n_samples": 5, "predict_every": 50}
+HYPERPARAMS = {
+    # Small enough to train in a few minutes on a CPU
+    "n_filt0": 4,
+    "k0": 5,
+    "learning_rate": 1e-3,
+    "label_scaling": "one-sided",
+    "n_timesteps": 50,
+    "n_samples": 5,
+    # Each prediction takes n_samples * n_timesteps denoiser passes per cube, so the training and validation sets
+    # are predicted only every predict_every epochs
+    "predict_every": 50,
+}
 EPOCHS = 200
 # The training objective's title, axis label and scale
 LOSS = ("Denoising MSE", "MSE of the predicted noise", "log")

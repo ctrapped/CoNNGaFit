@@ -15,27 +15,10 @@ from conngafit_datasets import VOF_VIEW, label_map, radial_profile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "examples" / "demo_data"
-CURVE_TARGET = "rotational_velocity"  # The rotation curve every demo is checked against
-# The maps the map demos predict; the rotation curve is their ratio, summed in rings
-MAP_TARGETS = ["mass", "rotational_momentum"]
 DATASETS = {
     "augment": "major_axis",
     "inclinations": [45],
     "radial_projection": "sky",
-}
-N_RINGS = 10  # Rings in each rotation curve
-# cm^-2: about 5 sigma for VOF's demo noise; fainter pixels are hidden in the map panels but still used for training
-DETECTION = 1e20
-# Color limits of every demo's map panels, so each property is drawn on the same scale in every figure
-COLUMN_DENSITY_LIMITS = (1e19, 1e23)  # cm^-2, on a log scale
-LOS_VELOCITY_LIMITS = (-300, 300)  # km/s
-SNR_LIMITS = (0, 10)  # Predicted / 1-sigma
-# Each target map's panels: on a log or linear color scale, the values' limits, and the limit of their difference
-# (log10(predicted / true) in dex on a log scale, predicted - true otherwise)
-MAP_PANELS = {
-    "mass": {"log_scale": True, "value_limits": (1e5, 2e8), "difference_limit": 1.5},
-    "rotational_momentum": {"log_scale": True, "value_limits": (1e7, 2e10), "difference_limit": 1.5},
-    "rotational_velocity": {"log_scale": False, "value_limits": (-100, 300), "difference_limit": 100},
 }
 SPLITS = {
     "training": ["vflat120", "vflat160", "vflat240", "vflat280"],
@@ -43,17 +26,23 @@ SPLITS = {
     "testing": ["vflat220"],
 }
 SNAPSHOT = 600
-# Every demo's config file, made small enough to train in a few minutes on a CPU
-HYPERPARAM_OVERRIDES = {
-    "n_filt0": 4,
-    "k0": 5,
-    "learning_rate": 1e-3,
-    "label_scaling": "one-sided",
-}
-RESBLOCK_OVERRIDES = {
-    "n_fc": 64,
-    "dropout_rate": 0.0,
-    "predict_variance": True,  # Also predict each value's 1-sigma uncertainty
+# cm^-2: about 5 sigma for VOF's demo noise; fainter pixels are hidden in the map panels but still used for training
+DETECTION = 1e20
+# Color limits of every demo's map panels, so each property is drawn on the same scale in every figure
+COLUMN_DENSITY_LIMITS = (1e19, 1e23)  # cm^-2, on a log scale
+LOS_VELOCITY_LIMITS = (-300, 300)  # km/s
+SNR_LIMITS = (0, 10)  # Predicted / 1-sigma
+# Each target map's panels: on a log or linear color scale, the values' limits, and the limit of their difference
+# (log10(predicted / true) in dex on a log scale, predicted - true otherwise). Radial velocities and momenta change
+# sign between inflow and outflow, so they're on linear scales centered on zero
+MAP_PANELS = {
+    "mass": {"log_scale": True, "value_limits": (1e5, 2e8), "difference_limit": 1.5},
+    "rotational_velocity": {"log_scale": False, "value_limits": (-100, 300), "difference_limit": 100},
+    "rotational_momentum": {"log_scale": True, "value_limits": (1e7, 2e10), "difference_limit": 1.5},
+    "radial_velocity": {"log_scale": False, "value_limits": (-100, 100), "difference_limit": 50},
+    "cylindrical_radial_velocity": {"log_scale": False, "value_limits": (-100, 100), "difference_limit": 50},
+    "radial_momentum": {"log_scale": False, "value_limits": (-1e9, 1e9), "difference_limit": 5e8},
+    "cylindrical_radial_momentum": {"log_scale": False, "value_limits": (-1e9, 1e9), "difference_limit": 5e8},
 }
 
 

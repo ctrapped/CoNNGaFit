@@ -12,7 +12,7 @@ import pytest
 
 import demo  # examples/resnet_curve/demo.py, on pytest's pythonpath
 from conngafit_datasets import radial_profile
-from demo_common import CURVE_TARGET, DATA_DIR, N_RINGS, SPLITS, load_history
+from demo_common import DATA_DIR, SPLITS, load_history
 from use_model import load_model, predict
 
 pytestmark = pytest.mark.slow
@@ -38,7 +38,7 @@ MAX_MEDIAN_SIGMA_KMS = 20  # median 1-sigma over the test galaxy's rings
 def true_curve(path):
     """The rotation curve the network is trained to predict for the image at path."""
     with h5py.File(path, "r") as hf:
-        return radial_profile(hf, CURVE_TARGET, N_RINGS)
+        return radial_profile(hf, demo.CURVE_TARGET, demo.N_RINGS)
 
 
 def predict_curves(model_path, images):

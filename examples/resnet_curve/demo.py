@@ -26,14 +26,10 @@ sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo 
 from conngafit_datasets import ring_radii  # noqa: E402 - after sys.path
 from demo_common import (  # noqa: E402
     COLUMN_DENSITY_LIMITS,
-    CURVE_TARGET,
     DATA_DIR,
     DATASETS,
-    HYPERPARAM_OVERRIDES,
     LOS_VELOCITY_LIMITS,
-    N_RINGS,
     REPO_ROOT,
-    RESBLOCK_OVERRIDES,
     SNAPSHOT,
     SPLITS,
     curve_errors,
@@ -48,8 +44,20 @@ from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs  # no
 from use_model import load_model, predict  # noqa: E402
 
 RUN_NAME = "demo_resnet_curve"
+CURVE_TARGET = "rotational_velocity"  # The rotation curve the demo is checked against
+N_RINGS = 10  # Rings in the rotation curve
 CONFIG = REPO_ROOT / "configs" / "hyperparams_resblock_rc.toml"
-HYPERPARAMS = {**HYPERPARAM_OVERRIDES, **RESBLOCK_OVERRIDES, "output_head": "fc"}
+HYPERPARAMS = {
+    # Small enough to train in a few minutes on a CPU
+    "n_filt0": 4,
+    "k0": 5,
+    "learning_rate": 1e-3,
+    "label_scaling": "one-sided",
+    "n_fc": 64,
+    "dropout_rate": 0.0,
+    "predict_variance": True,  # Also predict each value's 1-sigma uncertainty
+    "output_head": "fc",
+}
 EPOCHS = 200
 # The training objective's title, axis label and scale: the Gaussian NLL can be < 0
 LOSS = ("Gaussian NLL", "NLL (training objective)", "linear")

@@ -27,16 +27,12 @@ sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo 
 from conngafit_datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402 - after sys.path
 from demo_common import (  # noqa: E402
     COLUMN_DENSITY_LIMITS,
-    CURVE_TARGET,
     DATA_DIR,
     DATASETS,
     DETECTION,
-    HYPERPARAM_OVERRIDES,
     LOS_VELOCITY_LIMITS,
     MAP_PANELS,
-    N_RINGS,
     REPO_ROOT,
-    RESBLOCK_OVERRIDES,
     SNAPSHOT,
     SNR_LIMITS,
     SPLITS,
@@ -54,10 +50,23 @@ from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot
 from use_model import load_model, predict  # noqa: E402
 
 RUN_NAME = "demo_resnet_velocity"
+CURVE_TARGET = "rotational_velocity"  # The map the demo predicts, and the rotation curve it is checked against
+N_RINGS = 10  # Rings in the rotation curve
 CONFIG = REPO_ROOT / "configs" / "hyperparams_resblock_rc.toml"
-# Weighting the loss by mass, as the rotation curve weights each pixel, keeps it off pixels with little gas, whose
-# velocity is noise
-HYPERPARAMS = {**HYPERPARAM_OVERRIDES, **RESBLOCK_OVERRIDES, "output_head": "conv", "mass_weight_power": 1}
+HYPERPARAMS = {
+    # Small enough to train in a few minutes on a CPU
+    "n_filt0": 4,
+    "k0": 5,
+    "learning_rate": 1e-3,
+    "label_scaling": "one-sided",
+    "n_fc": 64,
+    "dropout_rate": 0.0,
+    "predict_variance": True,  # Also predict each value's 1-sigma uncertainty
+    "output_head": "conv",
+    # Weighting the loss by mass, as the rotation curve weights each pixel, keeps it off pixels with little gas,
+    # whose velocity is noise
+    "mass_weight_power": 1,
+}
 EPOCHS = 200
 # The training objective's title, axis label and scale: the Gaussian NLL can be < 0
 LOSS = ("Gaussian NLL", "NLL (training objective)", "linear")
