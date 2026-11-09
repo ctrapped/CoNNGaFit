@@ -10,25 +10,25 @@ logger = logging.getLogger(__name__)
 # from torchvision.io import read_image
 DEG_TO_ARCSEC = 60 * 60
 
-####Function to convert a FITS file of a given resolution to a compatible hdf5 file to run inferences on with CoNNGaFit
-####Currently, this will reduce the resolution of the input image
-####Input parameter are:
-####    image_dir: path to the fits file you wish to convert
-####    output: path to where you want to write the converted files and images
-####    target_npix: Target spatial dimensionality for inferences (currently 40)
-####    target_nspec: Target spectral dimenionality
-####    distance: (Optional) Distance to observed galaxy for bookkeeping purposes
-####    save_images: (Optional) Save images of column densities for original and reduced images
-####
-####Written By Cameron Trapp (ctrapped@gmail.com)
-####Updated 11/21/2023
+"""Function to convert a FITS file of a given resolution to a compatible hdf5 file to run inferences on with CoNNGaFit
+Currently, this will reduce the resolution of the input image
+#Input parameter are:
+   image_dir: path to the fits file you wish to convert
+   output: path to where you want to write the converted files and images
+   target_npix: Target spatial dimensionality for inferences (currently 40)
+   target_nspec: Target spectral dimenionality
+    distance: (Optional) Distance to observed galaxy for bookkeeping purposes
+    save_images: (Optional) Save images of column densities for original and reduced images
+
+Written By Cameron Trapp (ctrapped@gmail.com)
+Updated 11/21/2023"""
 
 
 def fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1, save_images=False):
-    hdul = fits.open(image_dir)
-    original_pixel_res = np.abs(hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
-    logger.info("pixel res = %g arcsec", hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
-    rawdata = hdul[0].data
+    with fits.open(image_dir) as hdul:
+        original_pixel_res = np.abs(hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
+        logger.info("pixel res = %g arcsec", hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
+        rawdata = hdul[0].data.copy()  # copy, so the data doesn't depend on the closed file
 
     logger.debug("Shape of raw data: %s", np.shape(rawdata))
 
@@ -47,7 +47,7 @@ def fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1,
 
     newdata = rawdata[0, :, :, :]
     logger.debug("Shape of newdata: %s", np.shape(newdata))
-    all_but_first = tuple([1, 2])
+    all_but_first = (1, 2)
 
     n_spec, n_pix, tmp = np.shape(newdata)
 
@@ -100,9 +100,9 @@ def fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1,
     hf = h5py.File(output + ".hdf5", "w")
     hf.create_dataset("spectra", data=new_image)
     hf.create_dataset("pixel_res_arcsec", data=original_pixel_res * n_bin)
-    hf.create_dataset("pixel_res_kpc", data=original_pixel_res * n_bin / 60 / 60 * np.pi / 180 * distance)
+    hf.create_dataset("pixel_res_kpc", data=original_pixel_res * n_bin / DEG_TO_ARCSEC * np.pi / 180 * distance)
     hf.close()
 
     logger.info("n_bin = %d", n_bin)
     logger.info("newPixelRes = %g arcsec", original_pixel_res * n_bin)
-    logger.info("newPixelRes = %g kpc", original_pixel_res * n_bin / 60 / 60 * np.pi / 180 * distance)
+    logger.info("newPixelRes = %g kpc", original_pixel_res * n_bin / DEG_TO_ARCSEC * np.pi / 180 * distance)
