@@ -6,7 +6,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from conngafit.models.blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
-from conngafit.models.diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
+from conngafit.models.diagnostics import save_summed_spectral_channels
+from conngafit.models.summary import count_params, print_param_totals, print_stage_rows
 
 logger = logging.getLogger(__name__)
 
@@ -457,8 +458,8 @@ class NeuralNetwork(nn.Module):
         counts under the block's row.
         """
         rows = self.stage_shapes()
-        w = max(len(label) for label, _, _ in rows)
-        bar = "=" * (w + 58)
+        w = max(len(label) for label, _, _ in rows)  # label column width
+        bar_width = w + 58
 
         encode_act = type(self.layer_encode.act).__name__
         block_act = type(self.process[0].acts[0]).__name__  # same class at every block/site
@@ -474,7 +475,7 @@ class NeuralNetwork(nn.Module):
         else:
             head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
 
-        print_fn(bar)
+        print_fn("=" * bar_width)
         print_fn(
             f"{type(self).__name__}  |  {self.n_blocks} process blocks  |  "
             f"dilation_rates={self.dilation_rates}  |  kernel_stem={self.kernel_stem}  |  "
@@ -489,7 +490,7 @@ class NeuralNetwork(nn.Module):
             f"decode={decode_act}  {head_act}  "
             f"output={out_act}"
         )
-        print_fn("-" * (w + 58))
+        print_fn("-" * bar_width)
 
         def row_note(label):
             if label == "encode":
@@ -504,21 +505,7 @@ class NeuralNetwork(nn.Module):
 
         groups = dict(self._param_groups())
 
-        def params_col(label):
-            mods = groups.get(label, [])
-            return f"{count_params(mods):,}" if mods else "-"
-
-        def print_layers(label):
-            if layers:
-                for line in layer_param_lines(groups.get(label, [])):
-                    print_fn(line)
-
-        for label, feats, shape in rows:
-            dims = " x ".join(str(s) for s in shape)
-            note = row_note(label)
-            suffix = f" {note}" if note else ""
-            print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
-            print_layers(label)
+        print_stage_rows(rows, groups, row_note, w, print_fn, layers)
 
         if self.head_type == "fc":
             flat = self.n_filt0 * int(np.prod(self.pool_output))
@@ -526,25 +513,21 @@ class NeuralNetwork(nn.Module):
             in_f = flat
             for k, out_f in enumerate(self.fc_widths):
                 label = f"fc hidden {k}"
-                print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
+                print_fn(
+                    f"  {label:<{w}}   {in_f} -> {out_f}  params={count_params(groups[label]):,}  activation={fc_act}"
+                )
                 in_f = out_f
             print_fn(
                 f"  {'fc out (mean)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                f"params={params_col('fc out (mean)')}  activation={out_act}"
+                f"params={count_params(groups['fc out (mean)']):,}  activation={out_act}"
             )
             if self.predict_variance:
                 print_fn(
                     f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                    f"params={params_col('fc out (logvar)')}  activation=None"
+                    f"params={count_params(groups['fc out (logvar)']):,}  activation=None"
                 )
         else:
             print_fn(f"  {'output (mean)':<{w}}   map -> {output}  activation={out_act}")
             if self.predict_variance:
                 print_fn(f"  {'output (logvar)':<{w}}   map -> {output}  activation=None")
-        print_fn("-" * (w + 58))
-        n_all = sum(p.numel() for p in self.parameters())
-        n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print_fn(f"parameters: {n_all:,} total ({n_train:,} trainable)")
-        print_fn(bar)
-        print_fn(str(self))
-        print_fn(bar)
+        print_param_totals(self, bar_width, print_fn)

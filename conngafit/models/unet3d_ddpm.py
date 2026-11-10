@@ -13,7 +13,13 @@ from conngafit.models.blocks import (
     Upsample,
     _match_spatial,
 )
-from conngafit.models.diagnostics import count_params, layer_param_lines
+from conngafit.models.summary import (
+    count_params,
+    layer_param_lines,
+    print_param_totals,
+    print_stage_rows,
+    unet_stage_shapes,
+)
 from conngafit.models.unet3d_resblock import _check_stage_compatibility
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
@@ -258,23 +264,8 @@ class DenoisingUNet3d(nn.Module):
             ("stem (conv + maxpool)", self.n_filt0, stem),
         ]
 
-        enc_shapes, shape = [], stem
-        for i, ch in enumerate(self.enc_channels):
-            if i > 0:
-                shape = tuple(-(-s // 2) for s in shape)  # ceil(N/2) downsample
-            enc_shapes.append(shape)
-            rows.append((f"encoder stage {i}" + (" (no downsample)" if i == 0 else ""), ch, shape))
-
-        shape = enc_shapes[-1]
-        for j, up in enumerate(self.upsamples):
-            enc_idx = self.n_stages - 2 - j
-            out_ch = self.enc_channels[enc_idx]
-            up_shape = tuple((2 * s - 1 if up.mode == "conv_transpose" else 2 * s) for s in shape)
-            rows.append((f"decoder {j}: upsample", out_ch, up_shape))
-            skip = enc_shapes[enc_idx]
-            rows.append((f"decoder {j}: + skip(enc {enc_idx})", 2 * out_ch, skip))
-            rows.append((f"decoder {j}: deconv block", out_ch, skip))
-            shape = skip
+        rows += unet_stage_shapes(stem, self.enc_channels, [up.mode for up in self.upsamples])
+        shape = rows[-1][2]  # last decoder stage output
 
         c = self.n_filt0
         rows += [
@@ -302,18 +293,17 @@ class DenoisingUNet3d(nn.Module):
         return [(label, count_params(mods)) for label, mods in self._param_groups() if mods]
 
     def summary(self, print_fn=print, layers=True):
-        """Print the network structure for a cube of input_shape and n_maps maps of map_shape: input/output dimensions,
-        the data/feature-count
-        progression through every layer, the number of parameters in every block and layer, the
-        activation and time conditioning at each stage, and the decoder's upsample_mode.
-        `print_fn` lets output be redirected (e.g. to a logger). layers: if True (default), list
-        each block's layers and their parameter counts under the block's row.
+        """Print the network structure for a cube of input_shape and n_maps maps of map_shape: input/output
+        dimensions, the data/feature-count progression through every layer, the number of parameters in
+        every block and layer, the activation and time conditioning at each stage, and the decoder's
+        upsample_mode. `print_fn` lets output be redirected (e.g. to a logger). layers: if True (default),
+        list each block's layers and their parameter counts under the block's row.
         """
         rows = self.stage_shapes()
         n_spec, n_x, n_y = rows[0][2]
-        map_h, map_w = rows[-1][2]  # w is the label column width below
-        w = max(len(label) for label, _, _ in rows + [("timestep embedding", 0, ())])
-        bar = "=" * (w + 58)
+        map_h, map_w = rows[-1][2]
+        label_width = max(len(label) for label, _, _ in rows + [("timestep embedding", 0, ())])
+        bar_width = label_width + 58
 
         # Read activations and modes off the instantiated modules so this reflects what actually runs.
         stem_act = type(self.stem.act).__name__
@@ -322,7 +312,7 @@ class DenoisingUNet3d(nn.Module):
         time_act = type(self.time_embed.mlp[1]).__name__
         upsample_mode = self.upsamples[0].mode  # same mode at every decoder stage
 
-        print_fn(bar)
+        print_fn("=" * bar_width)
         print_fn(
             f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
             f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
@@ -339,7 +329,7 @@ class DenoisingUNet3d(nn.Module):
             f"-> {self.t_dim}; FiLM scale/shift into every encoder, decoder and head block"
         )
         print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  head blocks={head_act}")
-        print_fn("-" * (w + 58))
+        print_fn("-" * bar_width)
 
         def row_note(label):
             if label.startswith("stem"):
@@ -360,35 +350,17 @@ class DenoisingUNet3d(nn.Module):
 
         groups = dict(self._param_groups())
 
-        def params_col(label):
-            mods = groups.get(label, [])
-            return f"{count_params(mods):,}" if mods else "-"
-
-        def print_layers(label):
-            if layers:
-                for line in layer_param_lines(groups.get(label, [])):
-                    print_fn(line)
-
+        # The timestep embedding has no spatial dims, so it gets its own line above the stage rows.
         label = "timestep embedding"
         print_fn(
-            f"  {label:<{w}}   features={self.t_dim:<6} params={params_col(label):<11} "
+            f"  {label:<{label_width}}   features={self.t_dim:<6} params={count_params(groups[label]):<11,} "
             f"t (nBatch,) -> (nBatch, {self.t_dim})"
         )
-        print_layers(label)
-        for label, feats, shape in rows:
-            dims = " x ".join(str(s) for s in shape)
-            note = row_note(label)
-            suffix = f" {note}" if note else ""
-            print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
-            print_layers(label)
-
-        print_fn("-" * (w + 58))
-        n_all = sum(p.numel() for p in self.parameters())
-        n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print_fn(f"parameters: {n_all:,} total ({n_train:,} trainable)")
-        print_fn(bar)
-        print_fn(str(self))
-        print_fn(bar)
+        if layers:
+            for line in layer_param_lines(groups[label]):
+                print_fn(line)
+        print_stage_rows(rows, groups, row_note, label_width, print_fn, layers)
+        print_param_totals(self, bar_width, print_fn)
 
 
 #### Diffusion process ####
@@ -529,5 +501,4 @@ class GaussianDiffusion(nn.Module):
             )
         )
         print_fn(bar)
-        if hasattr(self.denoiser, "summary"):
-            self.denoiser.summary(print_fn=print_fn, layers=layers)
+        self.denoiser.summary(print_fn=print_fn, layers=layers)

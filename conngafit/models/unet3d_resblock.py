@@ -13,7 +13,8 @@ from conngafit.models.blocks import (
     Upsample,
     _match_spatial,
 )
-from conngafit.models.diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
+from conngafit.models.diagnostics import save_summed_spectral_channels
+from conngafit.models.summary import count_params, print_param_totals, print_stage_rows, unet_stage_shapes
 
 logger = logging.getLogger(__name__)
 
@@ -525,25 +526,8 @@ class NeuralNetwork(nn.Module):
         stem = _stem_out_shape(self.input_shape)
         rows.append(("stem (conv + maxpool)", self.n_filt0, stem))
 
-        enc_shapes, shape = [], stem
-        for i, ch in enumerate(self.enc_channels):
-            if i > 0:
-                shape = tuple(-(-s // 2) for s in shape)  # ceil(N/2) downsample
-            enc_shapes.append(shape)
-            tag = f"encoder stage {i}" + (" (no downsample)" if i == 0 else "")
-            rows.append((tag, ch, shape))
-
-        shape = enc_shapes[-1]
-        for j in range(self.n_stages - 1):
-            enc_idx = self.n_stages - 2 - j
-            out_ch = self.enc_channels[enc_idx]
-            up_mode = self.upsamples[j].mode
-            up_shape = tuple((2 * s - 1 if up_mode == "conv_transpose" else 2 * s) for s in shape)
-            rows.append((f"decoder {j}: upsample", out_ch, up_shape))
-            skip = enc_shapes[enc_idx]
-            rows.append((f"decoder {j}: + skip(enc {enc_idx})", 2 * out_ch, skip))
-            rows.append((f"decoder {j}: deconv block", out_ch, skip))
-            shape = skip
+        rows += unet_stage_shapes(stem, self.enc_channels, [up.mode for up in self.upsamples])
+        shape = rows[-1][2]  # last decoder stage output
 
         if self.head_type == "conv":
             rows += self.conv_head.stage_shapes(shape[1:], self.output_shape)
@@ -610,8 +594,8 @@ class NeuralNetwork(nn.Module):
         the block's row.
         """
         rows = self.stage_shapes()
-        w = max(len(label) for label, _, _ in rows)
-        bar = "=" * (w + 58)
+        w = max(len(label) for label, _, _ in rows)  # label column width
+        bar_width = w + 58
 
         # Pull the actual instantiated activation module for each of the four independently
         # configurable roles (stem_activation, block_activation, fc_activation,
@@ -637,7 +621,7 @@ class NeuralNetwork(nn.Module):
             head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
         upsample_mode = self.upsamples[0].mode  # same mode at every decoder stage
 
-        print_fn(bar)
+        print_fn("=" * bar_width)
         print_fn(
             f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
             f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
@@ -648,7 +632,7 @@ class NeuralNetwork(nn.Module):
         output = f"(nBatch, {self.n_maps}, {self.output_size})"
         print_fn(f"input:  (nBatch, nSpec={n_spec}, nX={n_x}, nY={n_y})  ->  output: {output}")
         print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  {head_act}  output={out_act}")
-        print_fn("-" * (w + 58))
+        print_fn("-" * bar_width)
 
         def row_note(label):
             # Only rows that actually apply an activation/resize get a note; concatenation/
@@ -667,21 +651,7 @@ class NeuralNetwork(nn.Module):
 
         groups = dict(self._param_groups())
 
-        def params_col(label):
-            mods = groups.get(label, [])
-            return f"{count_params(mods):,}" if mods else "-"
-
-        def print_layers(label):
-            if layers:
-                for line in layer_param_lines(groups.get(label, [])):
-                    print_fn(line)
-
-        for label, feats, shape in rows:
-            dims = " x ".join(str(s) for s in shape)
-            note = row_note(label)
-            suffix = f" {note}" if note else ""
-            print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
-            print_layers(label)
+        print_stage_rows(rows, groups, row_note, w, print_fn, layers)
 
         if self.head_type == "fc":
             flat = self.n_filt0 * int(np.prod(self.pool_output))
@@ -689,25 +659,21 @@ class NeuralNetwork(nn.Module):
             in_f = flat
             for k, out_f in enumerate(self.fc_widths):
                 label = f"fc hidden {k}"
-                print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
+                print_fn(
+                    f"  {label:<{w}}   {in_f} -> {out_f}  params={count_params(groups[label]):,}  activation={fc_act}"
+                )
                 in_f = out_f
             print_fn(
                 f"  {'fc out (mean)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                f"params={params_col('fc out (mean)')}  activation={out_act}"
+                f"params={count_params(groups['fc out (mean)']):,}  activation={out_act}"
             )
             if self.predict_variance:
                 print_fn(
                     f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                    f"params={params_col('fc out (logvar)')}  activation=None"
+                    f"params={count_params(groups['fc out (logvar)']):,}  activation=None"
                 )
         else:
             print_fn(f"  {'output (mean)':<{w}}   map -> {output}  activation={out_act}")
             if self.predict_variance:
                 print_fn(f"  {'output (logvar)':<{w}}   map -> {output}  activation=None")
-        print_fn("-" * (w + 58))
-        n_all = sum(p.numel() for p in self.parameters())
-        n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print_fn(f"parameters: {n_all:,} total ({n_train:,} trainable)")
-        print_fn(bar)
-        print_fn(str(self))
-        print_fn(bar)
+        print_param_totals(self, bar_width, print_fn)
