@@ -6,6 +6,7 @@ from torch import nn
 
 from conngafit.models.blocks import (
     DeconvBlock,
+    ResBlock2d,
     ResidualBlock,
     SpectralAttentionPool,
     Stem,
@@ -28,27 +29,7 @@ from conngafit.models.unet3d_resblock import _check_stage_compatibility
 # and number of maps.
 
 
-#### Small helpers ####
-def _film(h, scale_shift):
-    """FiLM: h * (1 + scale) + shift, with per-channel scale/shift broadcast over all spatial axes.
-    This is how the timestep tells each block how much noise to expect."""
-    scale, shift = scale_shift.chunk(2, dim=1)
-    view = scale.shape + (1,) * (h.dim() - 2)
-    return h * (1 + scale.view(view)) + shift.view(view)
-
-
-def _batch_to_group_norm(module, max_groups):
-    """Swap every BatchNorm3d in `module` for GroupNorm, in place.
-    BatchNorm statistics would mix samples at different noise levels within a batch and break at
-    batch size 1 during sampling; GroupNorm normalizes each sample independently."""
-    for name, child in module.named_children():
-        if isinstance(child, nn.BatchNorm3d):
-            c = child.num_features
-            setattr(module, name, nn.GroupNorm(math.gcd(c, max_groups), c))
-        else:
-            _batch_to_group_norm(child, max_groups)
-
-
+#### Noise schedule ####
 def make_beta_schedule(name, n_timesteps):
     """Per-step noise variances beta_t.
     'linear' - Ho et al. (2020). 'cosine' - Nichol & Dhariwal (2021); destroys signal more
@@ -88,7 +69,7 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
-#### Time-conditioned versions of the shared blocks ####
+#### Multi-channel input stem ####
 class ConditionalStem(Stem):
     """The shared Stem (ceil(N/4) per axis), but accepting several input channels:
     the datacube plus each noisy map broadcast along the spectral axis."""
@@ -98,62 +79,7 @@ class ConditionalStem(Stem):
         self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=2, padding=0)
 
 
-class TimeResidualBlock(ResidualBlock):
-    """Encoder ResidualBlock with GroupNorm and a FiLM time injection after the first conv."""
-
-    def __init__(
-        self, in_channels, out_channels, downsample, kernel1, t_dim, dropout_rate=0.0, activation=nn.SiLU, max_groups=8
-    ):
-        super().__init__(in_channels, out_channels, downsample, kernel1, dropout_rate, activation)
-        _batch_to_group_norm(self, max_groups)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-
-    def forward(self, x, t_emb):
-        shortcut = self.shortcut(x)
-        if self.downsample:
-            x = F.pad(x, self.down_pad)  # lands every axis on ceil(N/2)
-        x = self.act1(_film(self.bn1(self.conv1(x)), self.time_proj(t_emb)))
-        x = self.act2(self.bn2(self.conv2(x)))
-        return self.dropout(self.act3(x + shortcut))
-
-
-class TimeDeconvBlock(DeconvBlock):
-    """Decoder DeconvBlock with GroupNorm and a FiLM time injection after the first conv."""
-
-    def __init__(
-        self, in_channels, out_channels, upsample, kernel1, t_dim, dropout_rate=0.0, activation=nn.SiLU, max_groups=8
-    ):
-        super().__init__(in_channels, out_channels, upsample, kernel1, dropout_rate, activation)
-        _batch_to_group_norm(self, max_groups)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-
-    def forward(self, x, t_emb):
-        shortcut = self.shortcut(x)  # carries the target spatial shape
-        x = self.act1(_film(self.bn1(_match_spatial(self.convtran1(x), shortcut)), self.time_proj(t_emb)))
-        x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
-        return self.dropout(self.act3(x + shortcut))
-
-
 #### 3-d -> 2-d head ####
-class TimeResBlock2d(nn.Module):
-    """2-d residual block with GroupNorm + FiLM time conditioning, used at full map resolution."""
-
-    def __init__(self, in_channels, out_channels, t_dim, activation=nn.SiLU, max_groups=8):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
-        self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-        self.act1, self.act2 = activation(), activation()
-        self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
-
-    def forward(self, x, t_emb):
-        h = self.act1(_film(self.norm1(self.conv1(x)), self.time_proj(t_emb)))
-        h = self.act2(self.norm2(self.conv2(h)))
-        return h + self.shortcut(x)
-
-
 class MapHead(nn.Module):
     """Turn 3-d decoder features into 2-d noise predictions, one per map, at the target map resolution.
 
@@ -167,7 +93,7 @@ class MapHead(nn.Module):
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList(
             [
-                TimeResBlock2d(channels + n_maps if i == 0 else channels, channels, t_dim, activation, max_groups)
+                ResBlock2d(channels + n_maps if i == 0 else channels, channels, activation, max_groups, t_dim=t_dim)
                 for i in range(n_blocks)
             ]
         )
@@ -193,10 +119,12 @@ class DenoisingUNet3d(nn.Module):
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
       stem   - ConditionalStem, every axis -> ceil(N/4)
-      encoder- n_stages stages of 2 TimeResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
-      decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 TimeDeconvBlocks
+      encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
+      decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
-    Every block is FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
+    Every block uses GroupNorm and is FiLM-conditioned on the timestep embedding. GroupNorm normalizes
+    each sample on its own; BatchNorm would mix samples at different noise levels and break at batch
+    size 1 during sampling. The cube and map sizes are fixed at
     construction: input_shape is checked against n_stages (_check_stage_compatibility) and forward()
     rejects any other size. No weight depends on them, so a trained denoiser's state_dict loads into
     one built for another size (with the same n_maps).
@@ -253,10 +181,10 @@ class DenoisingUNet3d(nn.Module):
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
             kernel1=tuple(kernel_coder),
-            t_dim=t_dim,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
+            t_dim=t_dim,
         )
 
         self.time_embed = TimestepEmbedding(n_filt0, t_dim)
@@ -271,8 +199,8 @@ class DenoisingUNet3d(nn.Module):
             self.encoder.append(
                 nn.ModuleList(
                     [
-                        TimeResidualBlock(prev, ch, downsample=i > 0, **block_kw),
-                        TimeResidualBlock(ch, ch, downsample=False, **block_kw),
+                        ResidualBlock(prev, ch, downsample=i > 0, **block_kw),
+                        ResidualBlock(ch, ch, downsample=False, **block_kw),
                     ]
                 )
             )
@@ -287,8 +215,8 @@ class DenoisingUNet3d(nn.Module):
             self.decoder.append(
                 nn.ModuleList(
                     [
-                        TimeDeconvBlock(2 * out_ch, out_ch, upsample=True, **block_kw),
-                        TimeDeconvBlock(out_ch, out_ch, upsample=False, **block_kw),
+                        DeconvBlock(2 * out_ch, out_ch, upsample=True, **block_kw),
+                        DeconvBlock(out_ch, out_ch, upsample=False, **block_kw),
                     ]
                 )
             )
