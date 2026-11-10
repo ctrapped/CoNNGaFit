@@ -176,7 +176,7 @@ class DenoisingUNet3d(nn.Module):
         self.n_filt0, self.t_dim, self.max_groups = n_filt0, t_dim, max_groups
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
-            kernel1=tuple(kernel_coder),
+            kernel1=self.kernel_coder,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
@@ -184,14 +184,13 @@ class DenoisingUNet3d(nn.Module):
         )
 
         self.time_embed = TimestepEmbedding(n_filt0, t_dim)
-        self.stem = Stem(n_filt0, tuple(kernel_stem), stem_activation, in_channels=1 + n_maps)
+        self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
         # Encoder: stage 0 keeps the stem's shape, later stages halve every axis and double channels.
-        enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
-        self.enc_channels = list(enc_ch)
+        self.enc_channels = [n_filt0 * 2**i for i in range(n_stages)]
         self.encoder = nn.ModuleList()
         prev = n_filt0
-        for i, ch in enumerate(enc_ch):
+        for i, ch in enumerate(self.enc_channels):
             self.encoder.append(
                 nn.ModuleList(
                     [
@@ -206,8 +205,8 @@ class DenoisingUNet3d(nn.Module):
         self.upsamples = nn.ModuleList()
         self.decoder = nn.ModuleList()
         for j in range(n_stages - 1):
-            in_ch, out_ch = enc_ch[n_stages - 1 - j], enc_ch[n_stages - 2 - j]
-            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=tuple(kernel_coder), mode=upsample_mode))
+            in_ch, out_ch = self.enc_channels[n_stages - 1 - j], self.enc_channels[n_stages - 2 - j]
+            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=self.kernel_coder, mode=upsample_mode))
             self.decoder.append(
                 nn.ModuleList(
                     [
