@@ -5,6 +5,7 @@ Needs no simulation data and runs in a few minutes on a laptop CPU. From the rep
     python examples/demo.py                 # writes examples/demo_output/demo.png
     python examples/demo.py --predict map   # writes examples/demo_output/demo_map.png
     python examples/demo.py --epochs 10 --output DIR
+    python examples/demo.py --diagnostics   # also saves train_model_unet.py's snapshots and diagnostic plots
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic
 disk galaxies, each rotating at a different speed: four to train on, one to validate on, and one to test
@@ -106,9 +107,9 @@ def write_configs(output, epochs, predict):
     return hyperparams_file, datasets_file
 
 
-def train(output, epochs, predict):
+def train(output, epochs, predict, save_diagnostics=False):
     """Run train_model_unet.py on the demo data, exactly as you would from the command line; returns the network's
-    path."""
+    path. Without save_diagnostics, it saves only the network and its loss history."""
     run_name = MODES[predict]["run_name"]
     hyperparams_file, datasets_file = write_configs(output, epochs, predict)
     subprocess.run(
@@ -125,6 +126,7 @@ def train(output, epochs, predict):
             output / "NetworkWeights",
             "--output-dir",
             output / "DiagnosticOutputs",
+            *([] if save_diagnostics else ["--no-diagnostics"]),
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -285,13 +287,18 @@ def main():
         help="Train on the rotation curve, or on the velocity map binned into it (map). Default: %(default)s",
     )
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "examples" / "demo_output")
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Also save train_model_unet.py's final-epoch snapshots and diagnostic plots in OUTPUT/DiagnosticOutputs",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
 
     mode = MODES[args.predict]
     epochs = mode["epochs"] if args.epochs is None else args.epochs
-    model_path = train(output, epochs, args.predict)
+    model_path = train(output, epochs, args.predict, args.diagnostics)
     figure_file = output / f"{mode['run_name']}.png"
     rms, within_sigma, within_3sigma = plot(model_path, output, figure_file)
     print(f"Model:  {model_path}.pt\nFigure: {figure_file}\nRotation curve RMS error: {rms:.1f} km/s")  # noqa: T201

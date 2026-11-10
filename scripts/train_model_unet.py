@@ -125,6 +125,13 @@ def parse_args():
         "under <output-dir>/images/, and loss/accuracy curves and correlation plots under "
         "<output-dir>/diagnostics/. Default: %(default)s",
     )
+    io.add_argument(
+        "--no-diagnostics",
+        dest="save_diagnostics",
+        action="store_false",
+        help="Save only the checkpoint and the loss history (<output-dir>/diagnostics/<run-name>_LossesAndAccuracies.hdf5), "
+        "not the final-epoch snapshots, comparison images, or loss, accuracy and correlation plots.",
+    )
 
     training = parser.add_argument_group(
         "training options",
@@ -219,11 +226,13 @@ if not isinstance(suffix, str):
 #############################
 
 run_name = args.run_name or "_".join(targets)
+save_diagnostics = args.save_diagnostics
 
 
 ####  Set input/output directories ####
 os.makedirs(args.network_dir, exist_ok=True)
-os.makedirs(os.path.join(args.output_dir, "images"), exist_ok=True)
+if save_diagnostics:
+    os.makedirs(os.path.join(args.output_dir, "images"), exist_ok=True)
 os.makedirs(os.path.join(args.output_dir, "diagnostics"), exist_ok=True)
 
 image_output_training = os.path.join(args.output_dir, "images", run_name + "_training")
@@ -435,7 +444,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         if pred is not None:
             n_predicted += 1
             epoch_mse += mse_fn(pred, y.float()).item()
-        if final:
+        if final and save_diagnostics:
             save_batch_outputs(x, y, pred, sigma, idx, training_data, image_output_training, epoch, comp_images=False)
 
         # Backpropagation
@@ -494,7 +503,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
             correct += n_correct
             total += np.size(np_y)
 
-            if final:
+            if final and save_diagnostics:
                 save_batch_outputs(x, y, pred, sigma, idx, validation_data, image_output_validation, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
@@ -505,7 +514,7 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     validation_mse = validation_mse / num_batches if total else np.nan
     logger.info("Validation: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, validation_loss, validation_mse)
 
-    if final and radial_bins is None:
+    if final and save_diagnostics and radial_bins is None:
         save_correlation_plots(all_pred, all_y, diagnostic_output + "_ValidationCorrelationPlot", epoch)
 
     model.train()
@@ -542,7 +551,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
             correct += n_correct
             total += np.size(np_y)
 
-            if final:
+            if final and save_diagnostics:
                 save_batch_outputs(x, y, pred, sigma, idx, test_data, image_output_final_test, epoch)
                 all_pred.append(to_physical(np_pred))
                 all_y.append(to_physical(np_y))
@@ -552,7 +561,7 @@ def test_loop(dataloader, model, loss_fn, epoch):
     test_mse /= num_batches
     logger.info("Test: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, test_loss, test_mse)
 
-    if final and radial_bins is None:
+    if final and save_diagnostics and radial_bins is None:
         save_correlation_plots(all_pred, all_y, diagnostic_output + "_TestCorrelationPlot", epoch)
 
     model.train()
@@ -703,32 +712,32 @@ def plot_loss(losses, title, output):
     plt.close()
 
 
-plot_loss(training_losses, "Training Loss", diagnostic_output + "_trainingLoss.png")
-plot_loss(validation_losses, "Validation Loss", diagnostic_output + "_validationLoss.png")
+if save_diagnostics:
+    plot_loss(training_losses, "Training Loss", diagnostic_output + "_trainingLoss.png")
+    plot_loss(validation_losses, "Validation Loss", diagnostic_output + "_validationLoss.png")
 
-# Accuracies are NaN on the epochs between predict_every, so only the predicted epochs are plotted
-epoch_numbers = np.arange(1, epochs + 1)
-predicted = np.isfinite(validation_accuracies)
+    # Accuracies are NaN on the epochs between predict_every, so only the predicted epochs are plotted
+    epoch_numbers = np.arange(1, epochs + 1)
+    predicted = np.isfinite(validation_accuracies)
 
-fig3 = plt.figure()
-plt.plot(epoch_numbers[predicted], validation_accuracies[predicted], marker="o", ms=3)
-plt.title(f"Validation Accuracy (within {ACCURACY_TOLERANCE:g} label std. dev.)")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy [%]")
-plt.ylim([0, 101])
-plt.savefig(diagnostic_output + "_ValidationAccuracy.png")
+    fig3 = plt.figure()
+    plt.plot(epoch_numbers[predicted], validation_accuracies[predicted], marker="o", ms=3)
+    plt.title(f"Validation Accuracy (within {ACCURACY_TOLERANCE:g} label std. dev.)")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy [%]")
+    plt.ylim([0, 101])
+    plt.savefig(diagnostic_output + "_ValidationAccuracy.png")
 
-
-fig4 = plt.figure()
-for name, accuracies in zip(validation_names, specific_accuracies):
-    plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
-if len(validation_names) <= 10:  # Name each line, unless there are too many to read
-    plt.legend(fontsize=6)
-plt.title("Validation Accuracy for each Snapshot")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy [%]")
-plt.ylim([0, 101])
-plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
+    fig4 = plt.figure()
+    for name, accuracies in zip(validation_names, specific_accuracies):
+        plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
+    if len(validation_names) <= 10:  # Name each line, unless there are too many to read
+        plt.legend(fontsize=6)
+    plt.title("Validation Accuracy for each Snapshot")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy [%]")
+    plt.ylim([0, 101])
+    plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
 
 
 hf_diagnostic = h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w")

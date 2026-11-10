@@ -32,7 +32,7 @@ The library code is the `conngafit` package (its networks are in `conngafit/mode
 python examples/demo.py
 ```
 
-Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen, along with 1σ uncertainty. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png`:
+Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen, along with 1σ uncertainty. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png` (add `--diagnostics` to also save the training script's diagnostic images and plots):
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/demo.png)
 
@@ -121,6 +121,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `--run-name` | the targets, joined by `_` | Name of the checkpoint and every diagnostic output |
 | `--network-dir` | `NetworkWeights` | Where the trained model is written |
 | `--output-dir` | `DiagnosticOutputs` | Where diagnostic images and plots are written |
+| `--no-diagnostics` | | Save only the checkpoint and `diagnostics/<run-name>_LossesAndAccuracies.hdf5`, not the images and plots |
 | `--batch-size` | ~1/10 of the training set (at least 2) | Training batch size; `0` trains on the full set as one batch |
 | `--test-batch-size` | ~1/10 of the validation set | Validation/testing batch size |
 | `-v` / `-q` | | Show debug messages / only warnings and errors |

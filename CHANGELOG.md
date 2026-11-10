@@ -69,6 +69,8 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- The demo saves only its network, loss history and figure; `--diagnostics` also saves the training
+  script's snapshots and diagnostic plots, which `train_model_unet.py --no-diagnostics` turns off.
 - **Breaking:** the library modules are the installable `conngafit` package, with the networks in
   `conngafit/models/`, and the command-line scripts are in `scripts/`; install with `pip install -e .`
   before running them. Imports use the package paths (e.g. `from conngafit.use_model import predict`).
