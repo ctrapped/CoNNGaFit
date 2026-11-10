@@ -1,11 +1,62 @@
-"""Plotting functions shared by the scripts in experiments/. demo_figure lays out a script's figure, and each plot_
-function draws one part of it from arrays onto the axes it's given: the input maps, the rotation curves and their
-residuals, a training history, and the predicted maps."""
+"""Plotting functions shared by examples/demo.py and the scripts in experiments/. save_demo_figure draws and saves
+examples/demo.py's whole figure. demo_figure lays out a figure, and each plot_ function draws one part of it from
+arrays onto the axes it's given: the input maps, the rotation curves and their residuals, a training history, and
+the predicted maps."""
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
+
+from conngafit.datasets import TARGET_SETTINGS, ring_radii
+from demo_utils import COLUMN_DENSITY_LIMITS, DETECTION, LOS_VELOCITY_LIMITS, MAP_PANELS, SNR_LIMITS, moment_maps
+
+# The training objective's title, axis label and scale, for networks trained with predict_variance: the Gaussian NLL
+# can be < 0
+NLL_LOSS = ("Gaussian NLL", "NLL (training objective)", "linear")
+
+
+def save_demo_figure(
+    figure_file, images, position_angles, curves, sigmas, result, target, true_maps=None, maps=None, map_sigmas=None
+):
+    """Save examples/demo.py's figure to figure_file: the first test image's input maps, every test image's true and
+    predicted rotation curves and their residuals, with the predicted 1-sigma, and the training history; with maps,
+    also the first image's true and predicted maps of target, their difference and signal-to-noise.
+
+    images: the test images, from demo_utils.load_images; position_angles: theirs, in degrees.
+    curves, sigmas: (n_images, n_rings) predicted rotation curves and their 1-sigma.
+    result: the TrainingResult train() returned.
+    true_maps, maps, map_sigmas: (n_images, nY, nX) true and predicted maps of target and the predicted 1-sigma, for
+        a network that predicts maps.
+    """
+    fig, ((ax_density, ax_velocity, ax_curve), (ax_residual, ax_mse, ax_loss)), map_axes = demo_figure(
+        n_map_rows=0 if maps is None else 1
+    )
+    column_density, velocity = moment_maps(images["cubes"][0], images["channel_widths"][0])
+    half_width = images["fovs_kpc"][0] / 2
+    extent = [-half_width, half_width, -half_width, half_width]
+    plot_inputs((ax_density, ax_velocity), column_density, velocity, extent, COLUMN_DENSITY_LIMITS, LOS_VELOCITY_LIMITS)
+    radii = ring_radii(images["fovs_kpc"][0], curves.shape[1])
+    plot_curves(ax_curve, ax_residual, radii, images["true_curves"], curves, sigmas, position_angles)
+    # The MSE of the predicted mean is NaN on epochs whose predictions weren't scored
+    plot_history(ax_mse, result.training_mses, result.validation_mses, "MSE of the mean", "MSE (scaled labels)", "log")
+    plot_history(ax_loss, result.training_losses, result.validation_losses, *NLL_LOSS)
+    if maps is not None:
+        label = " ".join(TARGET_SETTINGS[target][:2])  # e.g. "Rot. Vel. [km s$^{-1}$]"
+        undetected = column_density < DETECTION  # Hidden in the map panels
+        plot_map(
+            map_axes[0],
+            label,
+            true_maps[0],
+            maps[0],
+            map_sigmas[0],
+            undetected,
+            extent,
+            SNR_LIMITS,
+            **MAP_PANELS[target],
+        )
+    fig.savefig(figure_file, dpi=110, bbox_inches="tight")
+    plt.close(fig)
 
 
 def demo_figure(n_map_rows=0, n_map_columns=4):

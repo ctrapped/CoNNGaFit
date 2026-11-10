@@ -1,17 +1,15 @@
-"""Settings, loaders and computations shared by the scripts in experiments/. The loaders are the only
-functions that read or write files; the computations take and return arrays. Scripts put experiments/ on sys.path
-before importing it."""
+"""Settings, loaders and computations shared by examples/demo.py and the scripts in experiments/. The loaders are
+the only functions that read or write files; the computations take and return arrays. The experiments put examples/
+on sys.path before importing it."""
 
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 
+from conngafit import train_model
 from conngafit.datasets import VOF_VIEW, label_map, radial_profile
+from conngafit.logging_setup import configure_logging
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "examples" / "demo_data"
@@ -47,48 +45,19 @@ MAP_PANELS = {
 
 
 #### Loaders ####
-def toml_lines(params):
-    """Flat key = value TOML lines (JSON literals are valid TOML for strings, numbers and lists)."""
-    return [f"{key} = {json.dumps(value)}" for key, value in params.items()]
-
-
-def write_configs(output, hyperparams, datasets, splits, snapshot, data_dir):
-    """Write hyperparams to output/hyperparams.toml, and the datasets settings with each split's galaxies (all at
-    snapshot) in data_dir to output/datasets.toml; returns their paths."""
-    hyperparams_file = output / "hyperparams.toml"
-    hyperparams_file.write_text("\n".join(toml_lines(hyperparams)) + "\n")
-
-    # Relative to the datasets file, so the copy saved in the checkpoint doesn't hold this computer's paths
-    lines = toml_lines({**datasets, "base_dir": os.path.relpath(data_dir, output)})
-    for split, galaxies in splits.items():
-        lines += [f"[{split}]"] + [f'"{galaxy}" = {snapshot}' for galaxy in galaxies]
-    datasets_file = output / "datasets.toml"
-    datasets_file.write_text("\n".join(lines) + "\n")
-    return hyperparams_file, datasets_file
-
-
-def train(output, run_name, hyperparams_file, datasets_file):
-    """Run train_model_unet.py on the config files, exactly as you would from the command line, saving into output;
-    returns the network's path."""
-    subprocess.run(
-        [
-            sys.executable,
-            REPO_ROOT / "scripts" / "train_model_unet.py",
-            "--hyperparams",
-            hyperparams_file,
-            "--datasets",
-            datasets_file,
-            "--run-name",
-            run_name,
-            "--network-dir",
-            output / "NetworkWeights",
-            "--output-dir",
-            output / "DiagnosticOutputs",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
+def train(output, run_name, hyperparams, datasets):
+    """Train on the demo data with conngafit.train_model.train, saving into output; returns the network's path.
+    datasets needs no galaxies or data_dir: every split's galaxies in SPLITS, at SNAPSHOT, are added."""
+    configure_logging()  # Show the training's progress
+    splits = {split: {galaxy: SNAPSHOT for galaxy in galaxies} for split, galaxies in SPLITS.items()}
+    result = train_model.train(
+        hyperparams,
+        {**datasets, **splits, "data_dir": DATA_DIR},
+        run_name=run_name,
+        network_dir=output / "NetworkWeights",
+        output_dir=output / "DiagnosticOutputs",
     )
-    return output / "NetworkWeights" / run_name
+    return Path(result.model_path)
 
 
 def testing_images(data_dir, galaxy):

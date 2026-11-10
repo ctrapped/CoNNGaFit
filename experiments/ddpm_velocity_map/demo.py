@@ -22,12 +22,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-EXPERIMENTS_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(EXPERIMENTS_DIR))  # demo_common and demo_plots
+EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
+sys.path.insert(0, str(EXAMPLES_DIR))  # demo_utils and demo_plots
 
 from conngafit.datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402
 from conngafit.use_model import load_model, predict  # noqa: E402
-from demo_common import (  # noqa: E402
+from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot_map  # noqa: E402
+from demo_utils import (  # noqa: E402
     COLUMN_DENSITY_LIMITS,
     DATA_DIR,
     DATASETS,
@@ -35,7 +36,6 @@ from demo_common import (  # noqa: E402
     LOS_VELOCITY_LIMITS,
     MAP_PANELS,
     REPO_ROOT,
-    SNAPSHOT,
     SNR_LIMITS,
     SPLITS,
     curve_errors,
@@ -46,9 +46,7 @@ from demo_common import (  # noqa: E402
     moment_maps,
     testing_images,
     train,
-    write_configs,
 )
-from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot_map  # noqa: E402
 
 RUN_NAME = "ddpm_velocity"
 CURVE_TARGET = "rotational_velocity"  # The map the experiment predicts, and the rotation curve it is checked against
@@ -83,8 +81,7 @@ def main():
     with open(CONFIG, "rb") as f:
         hyperparams = {**tomllib.load(f), **HYPERPARAMS, "epochs": args.epochs}
     datasets = {**DATASETS, "target": CURVE_TARGET, "radial_bins": 0}
-    config_files = write_configs(output, hyperparams, datasets, SPLITS, SNAPSHOT, DATA_DIR)
-    model_path = train(output, RUN_NAME, *config_files)
+    model_path = train(output, RUN_NAME, hyperparams, datasets)
 
     # Sample the test galaxy's velocity map from its posterior at every position angle
     paths, position_angles = testing_images(DATA_DIR, SPLITS["testing"][0])

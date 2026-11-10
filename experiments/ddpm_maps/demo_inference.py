@@ -18,14 +18,14 @@ from pathlib import Path
 
 import numpy as np
 
-EXPERIMENTS_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(EXPERIMENTS_DIR))  # demo_common and demo_plots
+EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
+sys.path.insert(0, str(EXAMPLES_DIR))  # demo_utils and demo_plots
 
 from conngafit.datasets import ring_index  # noqa: E402
 from conngafit.logging_setup import add_logging_arguments, configure_logging  # noqa: E402
 from conngafit.use_model import load_model, predict  # noqa: E402
 from demo import CURVE_TARGET, MAP_TARGETS, N_RINGS, RUN_NAME  # noqa: E402 - this folder's demo.py
-from demo_common import (  # noqa: E402
+from demo_utils import (  # noqa: E402
     DATA_DIR,
     SPLITS,
     curve_errors,
