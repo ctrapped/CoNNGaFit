@@ -4,7 +4,6 @@ Needs no simulation data and runs in a few minutes on a laptop CPU. From the rep
 
     python examples/demo.py                 # writes examples/demo_output/demo.png
     python examples/demo.py --predict map   # writes examples/demo_output/demo_map.png
-    python examples/demo.py --predict ddpm  # writes examples/demo_output/demo_ddpm.png
     python examples/demo.py --epochs 10 --output DIR
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic
@@ -12,8 +11,7 @@ disk galaxies, each rotating at a different speed: four to train on, one to vali
 on. The network learns each galaxy's rotation curve (its rotation speed in 10 rings out to the image edge)
 from the datacube's spectra, along with each ring's 1-sigma uncertainty (predict_variance). With --predict map
 it learns the rotational velocity map instead, with each pixel's 1-sigma, and the map is binned into the
-rotation curve afterwards. With --predict ddpm a conditional diffusion model samples the velocity map from its
-posterior instead: the mean and spread of its samples give each pixel's value and 1-sigma, binned the same way.
+rotation curve afterwards.
 """
 
 import argparse
@@ -53,50 +51,34 @@ SPLITS = {
     "testing": ["vflat220"],
 }
 SNAPSHOT = 600
-# Each mode's config file, made small enough to train in a few minutes on a CPU
+CONFIG = REPO_ROOT / "configs" / "hyperparams_resblock_rc.toml"
+# Changes to CONFIG, to train in a few minutes on a CPU
 HYPERPARAM_OVERRIDES = {
     "n_filt0": 4,
     "k0": 5,
     "learning_rate": 1e-3,
     "label_scaling": "one-sided",
-}
-RESBLOCK_OVERRIDES = {
     "n_fc": 64,
     "dropout_rate": 0.0,
     "predict_variance": True,  # Also predict each value's 1-sigma uncertainty
 }
-# The loss curve's title, axis label and scale for each network's training objective
-NLL_LOSS = ("Gaussian NLL", "NLL (training objective)", "linear")  # can be < 0
-DENOISING_LOSS = ("Denoising MSE", "MSE of the predicted noise", "log")
+# The loss curve's title, axis label and scale: the training objective is the Gaussian NLL, which can be < 0
+LOSS = ("Gaussian NLL", "NLL (training objective)", "linear")
 # What the network predicts: the rotation curve directly, or the velocity map, binned into the curve afterwards
 MODES = {
     "curve": dict(
         run_name=RUN_NAME,
         radial_bins=N_RINGS,
-        config="hyperparams_resblock_rc.toml",
-        hyperparams={**RESBLOCK_OVERRIDES, "output_head": "fc"},
+        hyperparams={"output_head": "fc"},
         epochs=200,
-        loss=NLL_LOSS,
     ),
     # Weighting the loss by mass, as the rotation curve weights each pixel, keeps it off pixels with little gas,
     # whose velocity is noise
     "map": dict(
         run_name=f"{RUN_NAME}_map",
         radial_bins=0,
-        config="hyperparams_resblock_rc.toml",
-        hyperparams={**RESBLOCK_OVERRIDES, "output_head": "conv", "mass_weight_power": 1},
+        hyperparams={"output_head": "conv", "mass_weight_power": 1},
         epochs=200,
-        loss=NLL_LOSS,
-    ),
-    # Each prediction takes n_samples * n_timesteps denoiser passes per cube, so the training and validation sets
-    # are predicted only every predict_every epochs
-    "ddpm": dict(
-        run_name=f"{RUN_NAME}_ddpm",
-        radial_bins=0,
-        config="hyperparams_ddpm.toml",
-        hyperparams={"n_timesteps": 50, "n_samples": 5, "predict_every": 50},
-        epochs=200,
-        loss=DENOISING_LOSS,
     ),
 }
 
@@ -110,7 +92,7 @@ def write_configs(output, epochs, predict):
     """Write the demo's hyperparameters and datasets files into output, for predict ("curve" or "map"); returns
     their paths."""
     mode = MODES[predict]
-    with open(REPO_ROOT / "configs" / mode["config"], "rb") as f:
+    with open(CONFIG, "rb") as f:
         hyperparams = {**tomllib.load(f), **HYPERPARAM_OVERRIDES, **mode["hyperparams"], "epochs": epochs}
     hyperparams_file = output / "hyperparams.toml"
     hyperparams_file.write_text("\n".join(toml_lines(hyperparams)) + "\n")
@@ -167,10 +149,9 @@ def binned_curve(path, prediction, sigma):
     return curve, np.sqrt(ring_variance)
 
 
-def plot(model_path, output, figure_file, loss):
+def plot(model_path, output, figure_file):
     """Plot a test image's velocity maps, its true and predicted rotation curves (with their predicted 1-sigma) at
-    every position angle, and the loss curves (loss: the training objective's title, axis label and scale); for a
-    network that predicts maps, also the test image's true and predicted velocity maps and its predicted 1-sigma
+    every position angle, and the loss curves; for a network that predicts maps, also the test image's true and predicted velocity maps and its predicted 1-sigma
     map. Returns (the RMS difference between the predicted and true
     curves in km/s, the fractions of rings whose prediction is within its predicted 1-sigma and 3-sigma of the
     truth)."""
@@ -275,7 +256,7 @@ def plot(model_path, output, figure_file, loss):
         (ax_mse, ax_loss),
         [
             (training_mses, validation_mses, "MSE of the mean", "MSE (scaled labels)", "log"),
-            (training_losses, validation_losses, *loss),
+            (training_losses, validation_losses, *LOSS),
         ],
     ):
         predicted = np.isfinite(training)
@@ -301,8 +282,7 @@ def main():
         "--predict",
         choices=sorted(MODES),
         default="curve",
-        help="Train the ResBlock network on the rotation curve, or on the velocity map binned into it (map), or the "
-        "diffusion model on the velocity map (ddpm). Default: %(default)s",
+        help="Train on the rotation curve, or on the velocity map binned into it (map). Default: %(default)s",
     )
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "examples" / "demo_output")
     args = parser.parse_args()
@@ -313,7 +293,7 @@ def main():
     epochs = mode["epochs"] if args.epochs is None else args.epochs
     model_path = train(output, epochs, args.predict)
     figure_file = output / f"{mode['run_name']}.png"
-    rms, within_sigma, within_3sigma = plot(model_path, output, figure_file, mode["loss"])
+    rms, within_sigma, within_3sigma = plot(model_path, output, figure_file)
     print(f"Model:  {model_path}.pt\nFigure: {figure_file}\nRotation curve RMS error: {rms:.1f} km/s")  # noqa: T201
     print(f"Within predicted 1σ: {within_sigma:.0%} of rings ({within_3sigma:.0%} within 3σ)")  # noqa: T201
 
