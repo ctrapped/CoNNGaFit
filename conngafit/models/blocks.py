@@ -105,19 +105,21 @@ class Stem(nn.Module):
         kernel_size: 3-tuple kernel size for the conv (the pool's kernel is fixed at 2).
         activation: zero-arg callable returning an nn.Module (see ResidualBlock's activation
             parameter for the accepted forms).
+        in_channels: input channels; 1 for a datacube alone, 1 + n_maps for the DDPM denoiser
+            (the datacube plus each noisy map tiled along the spectral axis).
     """
 
-    def __init__(self, out_channels, kernel_size, activation=nn.LeakyReLU):
+    def __init__(self, out_channels, kernel_size, activation=nn.LeakyReLU, in_channels=1):
         super().__init__()
         stride = (2, 2, 2)  # conv and pool each halve every axis -> ceil(N/4) overall
         self.conv_pad = _ceil_conv_pad(kernel_size, stride)
-        self.conv = nn.Conv3d(1, out_channels, kernel_size=kernel_size, stride=stride, padding=0)
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=0)
         self.pool_pad = _ceil_conv_pad((2, 2, 2), stride)
         self.pool = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=stride, padding=0)
         self.act = activation()
 
     def forward(self, x, return_half=False):
-        """x: (nBatch, 1, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4)).
+        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, ceil(D/4), ceil(H/4), ceil(W/4)).
 
         With return_half=True, also returns the activated conv output, at ceil(N/2) per axis
         (the last skip connection of head='conv_halfres').

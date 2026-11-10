@@ -69,16 +69,6 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
-#### Multi-channel input stem ####
-class ConditionalStem(Stem):
-    """The shared Stem (ceil(N/4) per axis), but accepting several input channels:
-    the datacube plus each noisy map broadcast along the spectral axis."""
-
-    def __init__(self, in_channels, out_channels, kernel_size, activation):
-        super().__init__(out_channels, kernel_size, activation)
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=2, padding=0)
-
-
 #### 3-d -> 2-d head ####
 class MapHead(nn.Module):
     """Turn 3-d decoder features into 2-d noise predictions, one per map, at the target map resolution.
@@ -118,7 +108,7 @@ class DenoisingUNet3d(nn.Module):
 
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
-      stem   - ConditionalStem, every axis -> ceil(N/4)
+      stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
       encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
       decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
@@ -188,7 +178,7 @@ class DenoisingUNet3d(nn.Module):
         )
 
         self.time_embed = TimestepEmbedding(n_filt0, t_dim)
-        self.stem = ConditionalStem(1 + n_maps, n_filt0, tuple(kernel_stem), stem_activation)
+        self.stem = Stem(n_filt0, tuple(kernel_stem), stem_activation, in_channels=1 + n_maps)
 
         # Encoder: stage 0 keeps the stem's shape, later stages halve every axis and double channels.
         enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
