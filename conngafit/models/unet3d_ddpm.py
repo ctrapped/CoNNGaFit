@@ -401,6 +401,9 @@ class GaussianDiffusion(nn.Module):
         alpha_bar = torch.cumprod(1 - make_beta_schedule(schedule, n_timesteps), dim=0)
         # buffers move with .to(device) and are saved in state_dict
         self.register_buffer("alpha_bar", alpha_bar.float())
+        # alpha_bar_{t-1} for every t, with alpha_bar_{-1} = 1 (no noise before the first step). Derived from
+        # alpha_bar, so it is not saved (persistent=False) and checkpoints only hold alpha_bar.
+        self.register_buffer("alpha_bar_prev", F.pad(self.alpha_bar[:-1], (1, 0), value=1.0), persistent=False)
 
     # -- shape handling: accept flattened (B, n_maps, H*W) labels from datasets.py --
     def _to_map(self, y):
@@ -452,16 +455,21 @@ class GaussianDiffusion(nn.Module):
         y = torch.randn(cube.shape[0], *shape, device=cube.device)
         for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
-            ab_prev = self.alpha_bar[t - 1] if t > 0 else torch.ones_like(ab)
-            alpha = ab / ab_prev
+            ab_prev = self.alpha_bar_prev[t]
+            alpha = ab / ab_prev  # alpha_t = 1 - beta_t
 
             eps = self.denoiser(cube, y, torch.full((cube.shape[0],), t, device=cube.device))
-            y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()  # current guess of the clean map
+            # Invert the forward process y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)
+            # for the current guess of the clean map.
+            y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()
             if self.clip_range is not None:
                 y0 = y0.clamp(*self.clip_range)
 
+            # Gaussian posterior q(y_{t-1} | y_t, y_0) (Ho et al. 2020, Eqs. 6-7): its mean weights y_0 and y_t,
+            # and its variance beta~_t = (1 - abar_{t-1}) / (1 - abar_t) * beta_t is 0 at t = 0, so the last
+            # step adds no noise.
             mean = ab_prev.sqrt() * (1 - alpha) / (1 - ab) * y0 + alpha.sqrt() * (1 - ab_prev) / (1 - ab) * y
-            variance = (1 - ab_prev) / (1 - ab) * (1 - alpha)  # 0 at t = 0, so the last step adds no noise
+            variance = (1 - ab_prev) / (1 - ab) * (1 - alpha)
             y = mean + variance.sqrt() * torch.randn_like(y)
         return y
 
@@ -469,7 +477,8 @@ class GaussianDiffusion(nn.Module):
         """Posterior mean and standard deviation per pixel of each map from n_samples draws. sample_kw goes to
         sample()."""
         samples = self.sample(cube, n_samples=n_samples, **sample_kw)
-        return samples.mean(dim=0), samples.std(dim=0)
+        std, mean = torch.std_mean(samples, dim=0)  # std uses the unbiased (n_samples - 1) estimator
+        return mean, std
 
     def summary(self, print_fn=print, layers=True):
         """Print the diffusion settings (T, noise schedule, map shape, clipping, how much signal
