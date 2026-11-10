@@ -11,7 +11,8 @@ from torch import nn
 #   ResBlock2d                                 - ConvMapHead and unet3d_ddpm's MapHead
 #   ConvMapHead                                - head='conv' option of both regression networks
 #   HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
-# plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
+# plus the padding/alignment helpers these blocks need to keep every axis exact for any input size, and the
+# input-shape checks for the Stem and encoder.
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
 
@@ -90,6 +91,43 @@ def _match_spatial(x, ref):
         start = (xs - rs) // 2
         slices.append(slice(start, start + rs))
     return x[tuple(slices)]
+
+
+#### Input-shape checks ####
+def _check_stage_compatibility(input_shape, n_stages):
+    """Raise ValueError unless the input survives n_stages-1 halvings after the stem.
+
+    The encoder has n_stages stages: the first keeps its shape, each later one
+    downsamples every axis to ceil(N/2). So after the stem there are n_stages-1
+    halvings, and an axis that reaches 1 before they are all done cannot be
+    downsampled again. The message reports the tightest axis and the largest
+    n_stages that axis allows. Returns the post-stem (nSpec, nX, nY) shape on success.
+    """
+    # The Stem is a stride-2 conv then a stride-2 maxpool, each padded by _ceil_conv_pad to give exactly
+    # ceil(N/2). Ceiling division composes, ceil(ceil(N/2)/2) = ceil(N/4), so every axis ends at ceil(N/4)
+    # for any kernel size. -(-n // 4) is integer ceil(n/4): floor division of -n rounds toward -inf.
+    stem_shape = tuple(-(-n // 4) for n in input_shape)
+    n_halvings = n_stages - 1
+    tightest = (1 << 30, "", 0, 0)  # (max_halvings, axis_name, input_len, post_stem_len)
+    for name, n0, n_stem in zip(("spectral", "x", "y"), input_shape, stem_shape):
+        if n_stem < 1:
+            raise ValueError(
+                f"input {name} axis = {n0} is too small: the stem reduces it to {n_stem} (< 1). Enlarge that axis."
+            )
+        cap, n = 0, n_stem  # count ceil-halvings this axis can take before hitting 1
+        while n >= 2:
+            n = -(-n // 2)  # ceil(n/2), the encoder's downsample
+            cap += 1
+        if cap < tightest[0]:
+            tightest = (cap, name, n0, n_stem)
+    if tightest[0] < n_halvings:
+        cap, name, n0, n_stem = tightest
+        raise ValueError(
+            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the "
+            f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
+            f"Use n_stages <= {cap + 1} or enlarge that axis."
+        )
+    return stem_shape
 
 
 #### Input stem ####

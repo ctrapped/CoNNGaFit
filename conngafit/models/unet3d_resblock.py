@@ -11,6 +11,7 @@ from conngafit.models.blocks import (
     ResidualBlock,
     Stem,
     Upsample,
+    _check_stage_compatibility,
     _match_spatial,
 )
 from conngafit.models.diagnostics import save_summed_spectral_channels
@@ -24,47 +25,6 @@ logger = logging.getLogger(__name__)
 #
 # Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
 # Building blocks live in blocks.py; latent-image diagnostics in diagnostics.py.
-
-
-#### Input-shape checks ####
-def _stem_out_shape(input_shape):
-    """(nSpec, nX, nY) shape after layer_stem: a stride-2 conv then a stride-2 maxpool, each
-    exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4) -
-    true for any kernel size (ceiling division composes exactly: ceil(ceil(n/2)/2) = ceil(n/4))."""
-    return tuple(-(-n // 4) for n in input_shape)
-
-
-def _check_stage_compatibility(input_shape, n_stages):
-    """Raise ValueError unless the input survives n_stages-1 halvings after the stem.
-
-    The encoder has n_stages stages: the first keeps its shape, each later one
-    downsamples every axis to ceil(N/2). So after the stem there are n_stages-1
-    halvings, and an axis that reaches 1 before they are all done cannot be
-    downsampled again. The message reports the tightest axis and the largest
-    n_stages that axis allows. Returns the post-stem (nSpec, nX, nY) shape on success.
-    """
-    stem_shape = _stem_out_shape(input_shape)
-    n_halvings = n_stages - 1
-    tightest = (1 << 30, "", 0, 0)  # (max_halvings, axis_name, input_len, post_stem_len)
-    for name, n0, n_stem in zip(("spectral", "x", "y"), input_shape, stem_shape):
-        if n_stem < 1:
-            raise ValueError(
-                f"input {name} axis = {n0} is too small: the stem reduces it to {n_stem} (< 1). Enlarge that axis."
-            )
-        cap, n = 0, n_stem  # count ceil-halvings this axis can take before hitting 1
-        while n >= 2:
-            n = -(-n // 2)
-            cap += 1
-        if cap < tightest[0]:
-            tightest = (cap, name, n0, n_stem)
-    if tightest[0] < n_halvings:
-        cap, name, n0, n_stem = tightest
-        raise ValueError(
-            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the "
-            f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
-            f"Use n_stages <= {cap + 1} or enlarge that axis."
-        )
-    return stem_shape
 
 
 #### Full network ####
@@ -523,7 +483,7 @@ class NeuralNetwork(nn.Module):
         """
         rows = [("input datacube", 1, self.input_shape)]
 
-        stem = _stem_out_shape(self.input_shape)
+        stem = self.stem_out_shape
         rows.append(("stem (conv + maxpool)", self.n_filt0, stem))
 
         rows += unet_stage_shapes(stem, self.enc_channels, [up.mode for up in self.upsamples])

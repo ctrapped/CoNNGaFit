@@ -11,6 +11,7 @@ from conngafit.models.blocks import (
     SpectralAttentionPool,
     Stem,
     Upsample,
+    _check_stage_compatibility,
     _match_spatial,
 )
 from conngafit.models.summary import (
@@ -20,7 +21,6 @@ from conngafit.models.summary import (
     print_stage_rows,
     unet_stage_shapes,
 )
-from conngafit.models.unet3d_resblock import _check_stage_compatibility
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
