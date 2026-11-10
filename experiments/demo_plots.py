@@ -1,6 +1,6 @@
-"""Plotting functions shared by the demos in examples/. demo_figure lays out a demo's figure, and each plot_ function
-draws one part of it from arrays onto the axes it's given: the input maps, the rotation curves and their residuals,
-a training history, and the predicted maps."""
+"""Plotting functions shared by the scripts in experiments/. demo_figure lays out a script's figure, and each plot_
+function draws one part of it from arrays onto the axes it's given: the input maps, the rotation curves and their
+residuals, a training history, and the predicted maps."""
 
 import matplotlib.pyplot as plt
 import numpy as np

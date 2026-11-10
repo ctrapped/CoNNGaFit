@@ -1,10 +1,10 @@
-"""Demo: train a conditional diffusion model (DDPM) to sample a galaxy's mass and rotational momentum maps from their
+"""Experiment: train a conditional diffusion model (DDPM) to sample a galaxy's mass and rotational momentum maps from their
 joint posterior given its datacube, then sample one it hasn't seen and derive its rotation curve.
 
 Needs no simulation data and runs in several minutes on a laptop CPU. From the repository root:
 
-    python examples/ddpm_maps/demo.py            # writes examples/ddpm_maps/output/demo_ddpm.png
-    python examples/ddpm_maps/demo.py --epochs 10 --output DIR
+    python experiments/ddpm_maps/demo.py            # writes experiments/ddpm_maps/output/ddpm.png
+    python experiments/ddpm_maps/demo.py --epochs 10 --output DIR
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic disk
 galaxies, each rotating at a different speed: four to train on, one to validate on, and one to test on. The model
@@ -22,10 +22,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
+EXPERIMENTS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(EXPERIMENTS_DIR))  # demo_common and demo_plots
 
-from conngafit_datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402 - after sys.path
+from conngafit.datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402
+from conngafit.use_model import load_model, predict  # noqa: E402
 from demo_common import (  # noqa: E402
     COLUMN_DENSITY_LIMITS,
     DATA_DIR,
@@ -48,11 +49,10 @@ from demo_common import (  # noqa: E402
     write_configs,
 )
 from demo_plots import demo_figure, plot_curves, plot_history, plot_inputs, plot_map  # noqa: E402
-from use_model import load_model, predict  # noqa: E402
 
-RUN_NAME = "demo_ddpm"
-CURVE_TARGET = "rotational_velocity"  # The rotation curve the demo is checked against
-# The maps the demo predicts; the rotation curve is their ratio, summed in rings
+RUN_NAME = "ddpm"
+CURVE_TARGET = "rotational_velocity"  # The rotation curve the experiment is checked against
+# The maps the experiment predicts; the rotation curve is their ratio, summed in rings
 MAP_TARGETS = ["mass", "rotational_momentum"]
 N_RINGS = 10  # Rings in the rotation curve
 CONFIG = REPO_ROOT / "configs" / "hyperparams_ddpm.toml"

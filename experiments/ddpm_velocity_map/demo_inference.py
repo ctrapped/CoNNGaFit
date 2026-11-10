@@ -1,9 +1,9 @@
-"""Demo: sample a trained diffusion model's rotational velocity map for the demo's test galaxy, with no training.
+"""Experiment: sample a trained diffusion model's rotational velocity map for the demo data's test galaxy, with no training.
 
-Runs the model trained by examples/ddpm_velocity_map/demo.py in under a minute. From the repository root:
+Runs the model trained by experiments/ddpm_velocity_map/demo.py in under a minute. From the repository root:
 
-    python examples/ddpm_velocity_map/demo_inference.py
-    python examples/ddpm_velocity_map/demo_inference.py --model-path DIR/NetworkWeights/demo_ddpm_velocity
+    python experiments/ddpm_velocity_map/demo_inference.py
+    python experiments/ddpm_velocity_map/demo_inference.py --model-path DIR/NetworkWeights/ddpm_velocity
 
 use_model.predict(..., return_samples=True) draws n_samples velocity maps from their posterior for each datacube, as
 it would for a real observation converted with fits_to_conngafit.py. Each sample's rotation curve is each ring's
@@ -17,10 +17,12 @@ from pathlib import Path
 
 import numpy as np
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(EXAMPLES_DIR), str(EXAMPLES_DIR.parent)]  # The shared demo modules, and CoNNGaFit's
+EXPERIMENTS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(EXPERIMENTS_DIR))  # demo_common and demo_plots
 
-from conngafit_datasets import ring_index  # noqa: E402 - after sys.path
+from conngafit.datasets import ring_index  # noqa: E402
+from conngafit.logging_setup import add_logging_arguments, configure_logging  # noqa: E402
+from conngafit.use_model import load_model, predict  # noqa: E402
 from demo import CURVE_TARGET, N_RINGS, RUN_NAME  # noqa: E402 - this folder's demo.py
 from demo_common import (  # noqa: E402
     DATA_DIR,
@@ -31,8 +33,6 @@ from demo_common import (  # noqa: E402
     map_errors,
     testing_images,
 )
-from logging_setup import add_logging_arguments, configure_logging  # noqa: E402
-from use_model import load_model, predict  # noqa: E402
 
 MODEL_PATH = Path(__file__).resolve().parent / "output" / "NetworkWeights" / RUN_NAME
 

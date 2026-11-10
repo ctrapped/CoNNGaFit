@@ -1,6 +1,6 @@
-"""Settings, loaders and computations shared by the demos in examples/. The loaders are the only functions that read
-or write files; the computations take and return arrays. The demos put examples/ and the repository root on
-sys.path before importing it."""
+"""Settings, loaders and computations shared by the scripts in experiments/. The loaders are the only
+functions that read or write files; the computations take and return arrays. Scripts put experiments/ on sys.path
+before importing it."""
 
 import json
 import os
@@ -11,7 +11,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from conngafit_datasets import VOF_VIEW, label_map, radial_profile
+from conngafit.datasets import VOF_VIEW, label_map, radial_profile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "examples" / "demo_data"
@@ -73,7 +73,7 @@ def train(output, run_name, hyperparams_file, datasets_file):
     subprocess.run(
         [
             sys.executable,
-            REPO_ROOT / "train_model_unet.py",
+            REPO_ROOT / "scripts" / "train_model_unet.py",
             "--hyperparams",
             hyperparams_file,
             "--datasets",
@@ -135,7 +135,7 @@ def moment_maps(cube, channel_width):
 
 def map_curve(ring, mass, momentum, n_rings, mass_var=None, momentum_var=None):
     """The velocity (rotational or radial) curve in n_rings rings from mass and momentum maps, given each pixel's ring (see
-    conngafit_datasets.ring_index): each ring's total momentum divided by its total mass, the mass-weighted mean
+    conngafit.datasets.ring_index): each ring's total momentum divided by its total mass, the mass-weighted mean
     velocity. With the maps' per-pixel variances, also the curve's 1-sigma, propagated through the ratio assuming
     every pixel's errors are independent (None otherwise)."""
     inside = ring < n_rings  # Pixels in the corners, beyond the image edge, are left out
