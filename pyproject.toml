@@ -30,12 +30,12 @@ include = ["conngafit*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "examples", "examples/resnet_curve"]
+pythonpath = ["examples"]  # demo.py, for test_demo.py; conngafit itself is installed
 addopts = "-ra"
 markers = ["slow: trains on the full demo data; skip with -m \"not slow\""]
 
 [tool.ruff]
-src = [".", "examples", "examples/resnet_curve"]  # first-party modules, for import sorting
+src = [".", "examples", "experiments"]  # first-party modules, for import sorting
 line-length = 120
 target-version = "py311"
 

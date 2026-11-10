@@ -1,7 +1,7 @@
-"""Accuracy tests on the demo data: examples/resnet_curve/demo.py trains the network on every demo galaxy at its
-default settings, and the training must converge, predict the unseen test galaxy's rotation curve accurately, and
-give 1-sigma uncertainties that are calibrated on the galaxies it was trained on. The network committed in
-examples/resnet_curve/model/ must still load and predict as accurately with the current code.
+"""Accuracy tests on the demo data: examples/demo.py trains the network on every demo galaxy at its default settings,
+and the training must converge, predict the unseen test galaxy's rotation curve accurately, and give 1-sigma
+uncertainties that are calibrated on the galaxies it was trained on. The network committed in examples/demo_model/ must still load and predict as accurately with the current
+code.
 
 These train for a few minutes, so they're marked slow: run them with `pytest`, skip them with `pytest -m "not slow"`.
 """
@@ -16,11 +16,12 @@ from conngafit.use_model import load_model, predict
 
 pytestmark = pytest.mark.slow
 
-DEMO_DIR = demo.EXAMPLES_DIR / "resnet_curve"
-INFERENCE_DEMO = DEMO_DIR / "demo_inference.py"
-COMMITTED_MODEL = DEMO_DIR / "model" / "demo"
-TEST_IMAGES = sorted((DATA_DIR / SPLITS["testing"][0]).rglob("*.hdf5"))
-TRAINING_IMAGES = sorted(path for galaxy in SPLITS["training"] for path in (DATA_DIR / galaxy).rglob("*.hdf5"))
+INFERENCE_DEMO = demo.REPO_ROOT / "examples" / "demo_inference.py"
+COMMITTED_MODEL = demo.REPO_ROOT / "examples" / "demo_model" / "demo"
+TEST_IMAGES = sorted((demo.DATA_DIR / demo.SPLITS["testing"][0]).rglob("*.hdf5"))
+TRAINING_IMAGES = sorted(
+    path for galaxy in demo.SPLITS["training"] for path in (demo.DATA_DIR / galaxy).rglob("*.hdf5")
+)
 
 # Limits for training and validation loss and rotation curve RMS error. Demo tests should be at least this accurate to pass.
 MIN_TRAINING_LOSS_DROP = 20  # first epoch's training MSE of the mean / last epoch's
@@ -37,7 +38,7 @@ MAX_MEDIAN_SIGMA_KMS = 20  # median 1-sigma over the test galaxy's rings
 def true_curve(path):
     """The rotation curve the network is trained to predict for the image at path."""
     with h5py.File(path, "r") as hf:
-        return radial_profile(hf, demo.CURVE_TARGET, demo.N_RINGS)
+        return radial_profile(hf, demo.DATASETS["target"], demo.N_RINGS)
 
 
 def predict_curves(model_path, images):
@@ -72,27 +73,31 @@ def check_calibration(model_path):
 
 @pytest.fixture(scope="module")
 def demo_run(tmp_path_factory, run_script):
-    """Run examples/resnet_curve/demo.py once at its default settings; returns its output folder."""
+    """Run examples/demo.py once at its default settings; returns its output folder."""
     output = tmp_path_factory.mktemp("demo")
-    run_script(DEMO_DIR / "demo.py", "--output", output)
+    run_script(demo.REPO_ROOT / "examples" / "demo.py", "--output", output)
     return output
 
 
 @pytest.fixture(scope="module")
 def losses(demo_run):
     """Each epoch's Gaussian NLL (the training objective) and MSE of the mean, keyed by their names in the hdf5."""
-    return load_history(demo_run / "DiagnosticOutputs" / "diagnostics" / f"{demo.RUN_NAME}_LossesAndAccuracies.hdf5")
+    path = demo_run / "DiagnosticOutputs" / "diagnostics" / f"{demo.RUN_NAME}_LossesAndAccuracies.hdf5"
+    with h5py.File(path, "r") as hf:
+        return {
+            key: hf[key][()] for key in ("training_losses", "validation_losses", "training_mses", "validation_mses")
+        }
 
 
 @pytest.fixture(scope="module")
 def committed_outputs(tmp_path_factory, run_script):
     """The committed network's predicted rotation curves of the test galaxy and their 1-sigma uncertainties, keyed by
-    image name, as written by examples/resnet_curve/demo_inference.py."""
+    image name, as written by examples/demo_inference.py."""
     output = tmp_path_factory.mktemp("committed")
     run_script(INFERENCE_DEMO, "--model-path", COMMITTED_MODEL, "--output", output)
     predictions, uncertainties = {}, {}
     for path in TEST_IMAGES:
-        with h5py.File(output / f"{path.stem}_{demo.CURVE_TARGET}_radialPlot.hdf5", "r") as hf:
+        with h5py.File(output / f"{path.stem}_{demo.DATASETS['target']}_radialPlot.hdf5", "r") as hf:
             predictions[path.stem] = hf["prediction"][()]
             uncertainties[path.stem] = hf["uncertainty"][()]
     return predictions, uncertainties
@@ -113,7 +118,7 @@ def test_validation_loss_decreases(losses):
 
 
 def test_trained_network_predictions(demo_run):
-    assert (demo_run / f"{demo.RUN_NAME}.png").is_file()  # the demo also plots its results
+    assert (demo_run / "demo.png").is_file()  # the demo also plots its results
     model_path = demo_run / "NetworkWeights" / demo.RUN_NAME
     check_test_galaxy(*predict_curves(model_path, TEST_IMAGES))
     check_calibration(model_path)
