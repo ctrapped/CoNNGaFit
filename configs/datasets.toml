@@ -21,7 +21,7 @@ radial_projection = "face_on"
 suffix = ""  # Optional
 
 #Base directory for relative paths below
-base_dir = "/N/project/choban_group/CONGA_project/VOF_outputs/FIRE-2"  # Optional
+data_dir = "/N/project/choban_group/CONGA_project/VOF_outputs/FIRE-2"  # Optional
 
 #Directories for the training data and snapshots to load
 [training]

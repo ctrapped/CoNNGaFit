@@ -24,8 +24,8 @@ All notable changes to this project are documented here. The format follows
 - `examples/demo_inference.py`: runs the committed, pre-trained demo network (`examples/demo_model/`)
   on the demo's test galaxy with `use_model.run_inferences`, in a few seconds.
 - `examples/demo.py --predict map`: trains the demo network on the rotational velocity map (with a mass-weighted
-  loss) and bins the predicted map into the rotation curve; its figure adds the true, predicted and residual
-  velocity maps and the predicted 1σ map. `examples/demo_inference.py` runs map networks too.
+  loss) and bins the predicted map into the rotation curve; its figure adds the true and predicted velocity maps,
+  their difference and the prediction's signal-to-noise. `examples/demo_inference.py` runs map networks too.
 - `experiments/`: scripts on the demo data for trying out newer features, which don't yet predict as well as the
   demo:
   - `resnet_maps/`: the ResBlock U-Net predicts mass and rotational momentum maps, and the curve is each ring's
@@ -36,8 +36,9 @@ All notable changes to this project are documented here. The format follows
 
   The map figures add each map's true and predicted values, how they differ (log10(predicted / true), or
   predicted − true for velocity) and signal-to-noise, and every figure draws each property within the same color
-  limits. `experiments/demo_common.py` holds their shared settings, loaders and computations, and
-  `experiments/demo_plots.py` their plotting functions.
+  limits.
+- `examples/demo_utils.py` and `examples/demo_plots.py`: the settings, loaders, computations and plotting functions
+  shared by the demo and the experiments.
 - `mass_weight_power` hyperparameter: weights each pixel's (or ring's) loss by mass to that power,
   so velocity networks aren't dominated by faint halo gas. 0 (the default) is the unweighted loss,
   and 0.5 a good start. With `predict_variance` it weights the Gaussian NLL.
@@ -69,6 +70,13 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- **Breaking:** the datasets file's optional `base_dir` key is renamed `data_dir`.
+- Training is the function `conngafit.train_model.train(hyperparams, datasets, ...)`, taking the parameters as dicts
+  and returning the network's path and loss history; `scripts/train_model_unet.py` loads the two files and calls it.
+  Checkpoints save the parameters as TOML written from the dicts (`hyperparams_text`, `datasets_text`), without the
+  files' comments.
+- `examples/demo.py` walks through training from Python: it sets every hyperparameter and the datasets as dicts and
+  calls `train`, instead of writing parameter files and running the training script.
 - The demo saves only its network, loss history and figure; `--diagnostics` also saves the training
   script's snapshots and diagnostic plots, which `train_model_unet.py --no-diagnostics` turns off.
 - **Breaking:** the library modules are the installable `conngafit` package, with the networks in

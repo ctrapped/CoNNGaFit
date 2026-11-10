@@ -29,7 +29,7 @@ def load_model(model_path):
     Returns (model in eval mode, dict of the checkpoint's metadata)."""
     with h5py.File(model_path + ".hdf5", "r") as hf:
         if "hyperparams_text" not in hf:
-            raise ValueError(f"{model_path}.hdf5 wasn't written by train_model_unet.py (no hyperparams_text)")
+            raise ValueError(f"{model_path}.hdf5 wasn't written by conngafit.train_model (no hyperparams_text)")
         metadata = {key: hf[key][()] for key in hf}
         # The targets in the order of the network's output maps
         targets = hf["target"].asstr()[()]  # One name (older checkpoints) or an array of names
