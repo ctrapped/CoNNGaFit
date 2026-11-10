@@ -58,7 +58,11 @@ def make_beta_schedule(name, n_timesteps):
 #### Timestep embedding ####
 class TimestepEmbedding(nn.Module):
     """Sinusoidal encoding of t (as in Transformers) followed by an MLP.
-    Gives the network a smooth, learnable representation of the noise level."""
+    Gives the network a smooth, learnable representation of the noise level.
+
+    dim // 2 frequencies are spaced geometrically from 1 down to 1/10000; each contributes sin(t*f)
+    and cos(t*f), so low frequencies separate distant timesteps and high ones separate neighbours.
+    An odd dim gets one zero-padded entry. out_dim: width of the embedding passed to every block."""
 
     def __init__(self, dim, out_dim, activation=nn.SiLU):
         super().__init__()
@@ -68,7 +72,7 @@ class TimestepEmbedding(nn.Module):
     def forward(self, t):
         half = self.dim // 2
         freqs = torch.exp(-math.log(10000.0) * torch.arange(half, device=t.device) / half)
-        args = t.float()[:, None] * freqs[None]
+        args = t.float()[:, None] * freqs[None]  # (B, dim // 2): every timestep times every frequency
         emb = torch.cat([args.sin(), args.cos()], dim=1)
         if self.dim % 2:  # pad odd dims
             emb = F.pad(emb, (0, 1))
@@ -230,12 +234,14 @@ class DenoisingUNet3d(nn.Module):
         _, n_spec, n_x, n_y = cube.shape
         t_emb = self.time_embed(t)
 
-        # Put the noisy maps on the cube grid and tile them along the spectral axis.
-        # Interpolate noisy maps to the cube's spatial resolution if resolutions differ.
+        # Put the noisy maps on the cube grid (a no-op when map_shape == (nX, nY)) and tile them along
+        # the spectral axis, so the stem sees the cube and the current maps at every voxel.
         y_vol = F.interpolate(y_t, size=(n_x, n_y), mode="bilinear", align_corners=False)
         y_vol = y_vol.unsqueeze(2).expand(-1, -1, n_spec, -1, -1)
         h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
 
+        # Keep every encoder output except the deepest; the decoder pops them in reverse order, so each
+        # decoder stage pairs with the encoder stage at the same resolution.
         skips = []
         for i, (b1, b2) in enumerate(self.encoder):
             h = b2(b1(h, t_emb), t_emb)
@@ -380,6 +386,9 @@ class GaussianDiffusion(nn.Module):
             datasets.py, and samples are flattened the same way; otherwise both are (B, n_maps, H, W).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
+
+    alpha_bar is a buffer saved in state_dict, so a checkpoint only loads into a model built with the
+    same schedule and n_timesteps (a different n_timesteps raises a size mismatch on load).
     """
 
     def __init__(
@@ -418,7 +427,8 @@ class GaussianDiffusion(nn.Module):
         return self.alpha_bar[t].view(-1, *([1] * (like.dim() - 1)))
 
     def q_sample(self, y0, t, noise):
-        """Forward process: jump straight from y_0 to y_t in closed form."""
+        """Forward process: jump straight from y_0 to y_t in closed form,
+        y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)."""
         ab = self._gather(t, y0)
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
@@ -443,7 +453,9 @@ class GaussianDiffusion(nn.Module):
         """
         n_batch = cube.shape[0]
         shape = (self.n_maps, *self.map_shape)
-        cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
+        # Tile the whole batch n_samples times: [cube_0..cube_B-1, cube_0..cube_B-1, ...], so the view
+        # below puts the sample index first. Each copy starts from independent noise in _reverse.
+        cubes = cube.float().repeat(n_samples, 1, 1, 1)
         chunk = max_batch or cubes.shape[0]
         out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
         out = out.view(n_samples, n_batch, *shape)
