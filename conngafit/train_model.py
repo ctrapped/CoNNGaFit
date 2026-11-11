@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
-from conngafit.datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
+from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
 matplotlib.use("Agg")
@@ -177,11 +177,6 @@ def train(
     datasets_text = to_toml(datasets)  # Saved with the model
     # One target name, or a list of them: the network predicts a map (or radial curve) of each
     targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
-    if not targets:
-        raise ValueError("datasets: target is empty; name at least one annotation")
-    for target in targets:
-        if target not in TARGETS:
-            raise ValueError(f"datasets: unknown target {target!r}; choose from {sorted(TARGETS)}")
     n_maps = len(targets)
     training_sources = dataset_sources(datasets["training"], "training", datasets.get("data_dir"))
     validation_sources = dataset_sources(datasets["validation"], "validation", datasets.get("data_dir"))
@@ -390,12 +385,10 @@ def train(
         n_predicted = 0  # Batches with predictions, made every predict_every epochs
         num_batches = len(dataloader)
         is_final_epoch = epoch >= epochs - 1
-        if is_final_epoch or (epoch + 1) % predict_every == 0: #ddpm does not predict every epoch
+        if is_final_epoch or (epoch + 1) % predict_every == 0:  # ddpm does not predict every epoch
             predict = True
         else:
             predict = False
-
-
 
         for batch, (x, y, w, idx) in enumerate(dataloader):
             x = x.to(device)
@@ -535,8 +528,6 @@ def train(
     )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
     model = build_model(network, input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps).to(device)
     logger.info("Network:\n%s", model_summary(model, input_shape))  # Layers, output shapes and parameter counts
-    validation_names = validation_data.names
-    training_names = training_data.names
 
     #### Define Loss Function and Optimizer ####
     def weighted_mse_loss(pred, y, w):
@@ -677,17 +668,19 @@ def train(
         plt.ylabel("Accuracy [%]")
         plt.ylim([0, 101])
         plt.savefig(diagnostic_output + "_ValidationAccuracy.png")
+        plt.close()
 
         plt.figure()
-        for name, accuracies in zip(validation_names, specific_accuracies):
+        for name, accuracies in zip(validation_data.names, specific_accuracies):
             plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
-        if len(validation_names) <= 10:  # Name each line, unless there are too many to read
+        if len(validation_data.names) <= 10:  # Name each line, unless there are too many to read
             plt.legend(fontsize=6)
         plt.title("Validation Accuracy for each Snapshot")
         plt.xlabel("Epoch")
         plt.ylabel("Accuracy [%]")
         plt.ylim([0, 101])
         plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
+        plt.close()
 
     with h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w") as hf_diagnostic:
         hf_diagnostic.create_dataset("training_losses", data=training_losses)
@@ -696,8 +689,8 @@ def train(
         hf_diagnostic.create_dataset("validation_mses", data=validation_mses)
         hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
         hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
-        hf_diagnostic.create_dataset("training_names", data=training_names)
-        hf_diagnostic.create_dataset("validation_names", data=validation_names)
+        hf_diagnostic.create_dataset("training_names", data=training_data.names)
+        hf_diagnostic.create_dataset("validation_names", data=validation_data.names)
         hf_diagnostic.create_dataset("testing_names", data=testing_names)
         hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
         hf_diagnostic.create_dataset("final_test_mse", data=final_test_mse)
