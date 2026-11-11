@@ -21,7 +21,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def load_model(model_path):
-    """Rebuild a network from train_model_unet.py's <model_path>.hdf5 and load <model_path>.pt.
+    """Rebuild a network from conngafit.train_model's <model_path>.hdf5 and load <model_path>.pt.
     Returns (model in eval mode, dict of the checkpoint's metadata)."""
     with h5py.File(model_path + ".hdf5", "r") as hf:
         if "hyperparams_text" not in hf:

@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         required=True,
-        help="Path to a checkpoint written by train_model_unet.py, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
+        help="Path to a checkpoint written by conngafit.train_model, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
     )
     add_logging_arguments(parser)
     return parser.parse_args()

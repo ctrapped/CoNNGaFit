@@ -84,7 +84,7 @@ def load_images(paths, curve_target, map_targets, n_rings):
 
 
 def load_history(path):
-    """The training and validation losses and MSEs of the predicted mean, per epoch, from train_model_unet.py's
+    """The training and validation losses and MSEs of the predicted mean, per epoch, from conngafit.train_model's
     LossesAndAccuracies file at path."""
     keys = ["training_losses", "validation_losses", "training_mses", "validation_mses"]
     with h5py.File(path) as f:
