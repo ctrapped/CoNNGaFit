@@ -65,18 +65,17 @@ class NeuralNetwork(nn.Module):
     `output_size` (default nX*nY).
 
     Architecture:
-      - Stem (layer_stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing every
-        axis to exactly ceil(N/4) (see Stem).
+      - Stem (blocks.Stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing
+        every axis to exactly ceil(N/4).
       - Encoder: `n_stages` stages of two ResidualBlocks each. Stage 0 keeps the stem's
         shape and channel count; every later stage brings each axis to ceil(N/2) and
         doubles the channel count (n_filt0 * 2**i at stage i).
-      - Decoder: `n_stages - 1` stages. Each runs Upsample (~2x per axis; see Upsample for
-        `upsample_mode`'s two implementations), realigns the result to the matching encoder
-        skip map with _match_spatial (center-crop/pad), concatenates channel-wise, then a
-        DeconvBlock pair halves the channel count.
+      - Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
+        `upsample_mode`), realigns the result to the matching encoder skip map with _match_spatial,
+        concatenates channel-wise, then a DeconvBlock pair halves the channel count.
       - Head, chosen by `head`:
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
-        `pool_output`, so the flattened size is fixed regardless of input shape or depth; then
+        `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
         'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
@@ -113,55 +112,44 @@ class NeuralNetwork(nn.Module):
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
             layer predicts every map: n_maps output channels for the conv heads, or
             n_maps * output_size outputs for the fc head.
-        pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
-            n_filt0 * prod(pool_output); the default (8, 8, 8) gives 512 * n_filt0.
-        fc_dropout_rate: dropout probability after every hidden FC layer's activation (and,
-            when there are no hidden layers, once before the output Linear); for the conv heads,
-            a channel-wise Dropout2d before the output conv. 0.0 disables. Active in training
-            mode only.
+        fc_pool_shape: (nSpec, nX, nY) grid the fc head averages the decoder's features down to, with
+            nn.AdaptiveAvgPool3d. This fixes the fc layers' input size at n_filt0 * prod(fc_pool_shape).
+        head_dropout_rate: dropout probability in the output head: after every hidden FC layer's activation
+            (or once before the output Linear, with no hidden layers) for the fc head, and a channel-wise
+            Dropout2d before the output conv for the conv heads. 0.0 disables. Active in training mode only.
         block_dropout_rate: probability for a channel-wise nn.Dropout3d (drops whole feature
             channels) inside every ResidualBlock/DeconvBlock, after the residual add + final
-            activation. 0.0 disables. Broader than fc_dropout_rate: it touches every stage
-            and, since skip maps are captured straight after their stage, also regularizes
-            the skip connections. Enable it only if fc_dropout_rate alone leaves a
-            train/validation gap, and start low (~0.1-0.15) - the deepest stage is tiny, so
-            dropping whole channels there removes a large fraction of its information.
+            activation. 0.0 disables. Enable it only if head_dropout_rate alone leaves a
+            train/validation gap, and start low (~0.1-0.15).
         stem_activation: activation for the stem (default nn.LeakyReLU).
         block_activation: activation at all three sites in every ResidualBlock/DeconvBlock
             (post-conv1, post-conv2, post residual-add; default nn.ReLU).
-        fc_activation: activation between hidden fully-connected layers, or after each of the
-            conv head's 3x3 convolutions (default nn.LeakyReLU).
+        head_activation: activation in the output head: between the fc head's hidden layers, in the conv
+            head's 2-d residual blocks, and after each of conv_halfres's 3x3 convolutions. Default: nn.ReLU for
+            head='conv', nn.LeakyReLU otherwise.
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
-        upsample_mode: how every decoder Upsample resizes spatially - 'conv_transpose'
-            (default, a learned stride-2 ConvTranspose3d) or 'trilinear' (nn.Upsample's 3-d
-            interpolation mode, followed by a 1x1x1 Conv3d channel projection). See Upsample
-            for the tradeoffs.
+        upsample_mode: how each decoder stage upsamples (blocks.Upsample): 'conv_transpose' (default, a
+            learned stride-2 ConvTranspose3d) or 'trilinear' (trilinear interpolation, then a 1x1x1 Conv3d).
         predict_variance: if False (default), the head has a single output Linear and
             forward() returns one tensor of shape (nBatch, n_maps, output_size). If True,
             a second output Linear is added predicting a per-element log-variance, and
-            forward() returns (mean, logvar) - train against a heteroscedastic loss such as
-            nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE. logvar has
-            no output_activation applied (it must stay unconstrained for exp() to reach any
-            positive variance). With a conv head the log-variances are n_maps more output
+            forward() returns (mean, logvar). Train against a heteroscedastic loss such as
+            nn.GaussianNLLLoss()(mean, target, logvar.exp()) rather than plain MSE.
+            With a conv head the log-variances are n_maps more output
             channels from the head's output conv instead of a second Linear.
-        head: 'fc' (default) - adaptive average pool -> flatten -> fully-connected layers, as
-            set by pool_output/n_fc/n_fc_layers; its output Linear has
-            n_filt0 * prod(pool_output) * n_maps * output_size weights, so it grows with the map
-            size and number of maps.
-            'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
-            n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
-            the input and map size (pool_output, n_fc and n_fc_layers are then unused).
-            'conv_halfres' - half-resolution decoder stage -> HalfResConvHead (see the
-            Architecture entry above); pool_output, n_fc and n_fc_layers are also unused.
+        head: the output head that turns the decoder's features into maps (see Architecture above):
+            'fc' (default) - pooled to fc_pool_shape, then the fully connected layers set by n_fc and
+                n_fc_layers. Its output Linear has (n_fc, or n_filt0 * prod(fc_pool_shape) with no hidden
+                layers) * n_maps * output_size weights, so it grows with the map size: best for radial curves
+                and small images.
+            'conv' - ConvMapHead, with n_head_blocks 2-d residual blocks.
+            'conv_halfres' - one more decoder stage to half resolution, then HalfResConvHead with head_channels.
+            The conv heads' sizes don't depend on the map size, and they ignore fc_pool_shape, n_fc and
+            n_fc_layers.
         output_shape: (H, W) of the predicted map. Required grid for head='conv' (default
             (nX, nY)) and head='conv_halfres'; for head='fc' it only sets the default output_size = H*W.
         n_head_blocks: number of 2-d residual blocks in head='conv' (>= 0; default 2).
         head_channels: channel count of head='conv_halfres''s two 3x3 convolutions (default 64).
-
-        Each *_activation is a zero-arg callable returning an nn.Module - the activation
-        class itself (nn.ReLU, nn.GELU, nn.Tanh, ...) or a lambda for non-default arguments
-        (e.g. lambda: nn.LeakyReLU(0.2)). It is called once per site, so every layer gets
-        its own module.
     """
 
     def __init__(
@@ -174,12 +162,12 @@ class NeuralNetwork(nn.Module):
         n_stages=4,
         n_fc_layers=1,
         output_size=None,
-        pool_output=(8, 8, 8),
-        fc_dropout_rate=0.0,
+        fc_pool_shape=(8, 8, 8),
+        head_dropout_rate=0.0,
         block_dropout_rate=0.0,
         stem_activation=nn.LeakyReLU,
         block_activation=nn.ReLU,
-        fc_activation=nn.LeakyReLU,
+        head_activation=None,
         output_activation=nn.Identity,
         upsample_mode="conv_transpose",
         predict_variance=False,
@@ -202,6 +190,8 @@ class NeuralNetwork(nn.Module):
         if head not in ("fc", "conv", "conv_halfres"):
             raise ValueError(f"unknown head {head!r}; use 'fc', 'conv' or 'conv_halfres'")
         self.head_type = head
+        if head_activation is None:  # ReLU for the conv head's residual blocks, LeakyReLU otherwise
+            head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
         # Map grid of the prediction: required by the conv head, optional for the fc head.
         self.output_shape = (
             tuple(int(v) for v in output_shape)
@@ -313,7 +303,7 @@ class NeuralNetwork(nn.Module):
         # swapped for a learned transform without touching forward().
         self.feature_forwarding = nn.Sequential()
 
-        self.pool_output = tuple(pool_output)
+        self.fc_pool_shape = tuple(fc_pool_shape)
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.fc_widths = []
@@ -321,8 +311,8 @@ class NeuralNetwork(nn.Module):
                 n_filt0,
                 out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,
-                activation=block_activation,
-                dropout_rate=fc_dropout_rate,
+                activation=head_activation,
+                dropout_rate=head_dropout_rate,
             )
         elif head == "conv_halfres":
             # Head: fold the half-resolution spectral axis into channels -> HalfResConvHead
@@ -333,15 +323,15 @@ class NeuralNetwork(nn.Module):
                 n_filt0 * self.half_shape[0],
                 enc_channels[-1],
                 head_channels,
-                dropout_rate=fc_dropout_rate,
-                activation=fc_activation,
+                dropout_rate=head_dropout_rate,
+                activation=head_activation,
                 predict_variance=predict_variance,
                 n_maps=n_maps,
             )
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
-            self.avgpool0 = nn.AdaptiveAvgPool3d(self.pool_output)
-            flat_features = n_filt0 * int(np.prod(self.pool_output))
+            self.avgpool0 = nn.AdaptiveAvgPool3d(self.fc_pool_shape)
+            flat_features = n_filt0 * int(np.prod(self.fc_pool_shape))
 
             # Resolve the hidden-layer widths: a scalar n_fc repeated n_fc_layers times, or an
             # explicit sequence of widths. Empty -> no hidden layers (a dropout still precedes
@@ -356,10 +346,10 @@ class NeuralNetwork(nn.Module):
 
             fc_layers, in_f = [], flat_features
             for w in fc_widths:
-                fc_layers += [nn.Linear(in_f, w), fc_activation(), nn.Dropout(p=fc_dropout_rate)]
+                fc_layers += [nn.Linear(in_f, w), head_activation(), nn.Dropout(p=head_dropout_rate)]
                 in_f = w
             if not fc_widths:
-                fc_layers.append(nn.Dropout(p=fc_dropout_rate))
+                fc_layers.append(nn.Dropout(p=head_dropout_rate))
             self.fc_hidden = nn.Sequential(*fc_layers)
             self.fc_out_mean = nn.Linear(in_f, n_maps * self.output_size)
             if predict_variance:
@@ -446,12 +436,15 @@ class NeuralNetwork(nn.Module):
         return mean
 
     def _run_head(self, x):
-        """Body features -> (mean, logvar), each of shape (nBatch, n_maps, output_size); logvar is None
-        unless predict_variance. 'conv': n_maps output channels each; 'fc': pool -> FC stack."""
+        """Run the 'fc' or 'conv' head on the decoder's output x. Returns (mean, logvar), each of shape
+        (nBatch, n_maps, output_size); logvar is None unless predict_variance."""
         if self.head_type == "conv":
+            # One output channel per map's mean, followed (with predict_variance) by one per map's log-variance
             out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, n_maps or 2 * n_maps, H*W)
             mean = self.out_activation(out[:, : self.n_maps])
             return mean, (out[:, self.n_maps :] if self.predict_variance else None)
+        # fc head: pool to fc_pool_shape and flatten, then run the hidden layers, then separate output layers for the
+        # means and log-variances
         x = self.avgpool0(x)
         x = torch.flatten(x, 1)
         x = self.fc_hidden(x)
@@ -461,27 +454,21 @@ class NeuralNetwork(nn.Module):
         return mean, logvar
 
     def _enable_mc_dropout(self):
-        """Put every Dropout/Dropout2d/Dropout3d submodule into train mode while leaving BatchNorm3d
-        (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
-        sample, but BatchNorm3d in train mode would normalize against a single-sample batch
-        at inference (run_inferences in use_model.py runs batch_size=1)."""
+        """Switch only the dropout layers back to training mode, so they keep dropping random channels. Every other
+        layer stays in eval mode: BatchNorm keeps using the statistics stored during training, rather than
+        normalizing by the statistics of the batch it is given."""
         for m in self.modules():
             if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
                 m.train()
 
-    def predict_with_uncertainty(self, x, n_samples=30, save_latent_images=False):
-        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed).
-        Call model.eval() first as usual; this only re-enables dropout for the duration of the
-        call, then restores plain eval mode. Only informative if dropout is enabled when the
-        model was trained.
+    def predict_with_mc_dropout(self, x, n_samples=30, save_latent_images=False):
+        """Estimate how uncertain the trained network is about x with Monte Carlo dropout: run it n_samples times
+        with dropout left on, so each pass drops different channels, and take the mean and spread of the results.
 
-        If predict_variance=False: returns (mean, epistemic_std), each of shape
-            (nBatch, n_maps, output_size) - epistemic_std is the MC-Dropout spread across samples.
-        If predict_variance=True: returns (mean, aleatoric_std, epistemic_std, total_std).
-            aleatoric_std comes from averaging the network's own per-sample variance
-            predictions (exp(logvar)); epistemic_std is the spread of the sampled means, as
-            above; total_std combines the two via the law of total variance
-            (total_var = aleatoric_var + epistemic_var).
+        Returns (mean, epistemic_std), each (nBatch, n_maps, output_size). With predict_variance, returns
+        (mean, aleatoric_std, epistemic_std, total_std): aleatoric_std is the network's predicted 1-sigma
+        averaged over the passes, and total_std = sqrt(aleatoric_std**2 + epistemic_std**2).
+        Leaves the network in eval mode.
         """
         self._enable_mc_dropout()
         with torch.no_grad():
@@ -550,7 +537,7 @@ class NeuralNetwork(nn.Module):
             rows.append(("conv head: 2x 3x3 conv", self.head_channels, self.half_shape[1:]))
             rows.append(("conv head: 1x1 conv + resize", self.n_maps, self.output_shape))
         else:
-            rows.append(("adaptive avg pool", self.n_filt0, self.pool_output))
+            rows.append(("adaptive avg pool", self.n_filt0, self.fc_pool_shape))
         return rows
 
     def _param_groups(self):
@@ -606,7 +593,7 @@ class NeuralNetwork(nn.Module):
         bar = "=" * (w + 58)
 
         # Pull the actual instantiated activation module for each of the four independently
-        # configurable roles (stem_activation, block_activation, fc_activation,
+        # configurable roles (stem_activation, block_activation, head_activation,
         # output_activation), rather than re-deriving them from the constructor args, so
         # this always reflects what the model is really running. Same idea for the decoder's
         # upsample_mode - read straight off a real Upsample instance.
@@ -676,7 +663,7 @@ class NeuralNetwork(nn.Module):
             print_layers(label)
 
         if self.head_type == "fc":
-            flat = self.n_filt0 * int(np.prod(self.pool_output))
+            flat = self.n_filt0 * int(np.prod(self.fc_pool_shape))
             print_fn(f"  {'flatten':<{w}}   features={flat}")
             in_f = flat
             for k, out_f in enumerate(self.fc_widths):

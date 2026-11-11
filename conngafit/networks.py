@@ -39,7 +39,7 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
             kernel_stem,
             kernel_coder,
             hyperparams["n_fc"],
-            fc_dropout_rate=hyperparams["dropout_rate"],
+            head_dropout_rate=hyperparams["dropout_rate"],
             block_dropout_rate=hyperparams["block_dropout_rate"],
             head=hyperparams["output_head"],
             output_size=output_size,

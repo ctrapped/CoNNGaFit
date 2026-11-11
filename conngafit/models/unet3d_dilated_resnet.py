@@ -138,10 +138,9 @@ class NeuralNetwork(nn.Module):
             n_maps * output_size outputs for head='fc'.
         pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
             n_filt0 * prod(pool_output); the default (8, 8, 8) gives 512 * n_filt0.
-        fc_dropout_rate: dropout probability after every hidden FC layer's activation (and,
-            when there are no hidden layers, once before the output Linear); for head='conv',
-            a channel-wise Dropout2d before the output conv. 0.0 disables. Active in training
-            mode only.
+        head_dropout_rate: dropout probability in the output head: after every hidden FC layer's activation
+            (or once before the output Linear, with no hidden layers) for head='fc', and a channel-wise
+            Dropout2d before the output conv for head='conv'. 0.0 disables. Active in training mode only.
         block_dropout_rate: probability for a channel-wise nn.Dropout3d (drops whole feature
             channels) inside every DilatedResidualBlock, after the residual add + final
             activation. 0.0 disables.
@@ -151,7 +150,8 @@ class NeuralNetwork(nn.Module):
             but the chain's last, and once more after the residual add (default nn.ReLU).
         decode_activation: activation after the Decoder conv (default None, i.e. no
             activation).
-        fc_activation: activation between hidden fully-connected layers (default nn.LeakyReLU).
+        head_activation: activation in the output head: between the fc head's hidden layers, or in the conv
+            head's 2-d residual blocks. Default: nn.ReLU for head='conv', nn.LeakyReLU for head='fc'.
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         predict_variance: if False (default), the head has a single output Linear and
             forward() returns one tensor of shape (nBatch, n_maps, output_size). If True,
@@ -191,12 +191,12 @@ class NeuralNetwork(nn.Module):
         n_fc_layers=1,
         output_size=None,
         pool_output=(8, 8, 8),
-        fc_dropout_rate=0.0,
+        head_dropout_rate=0.0,
         block_dropout_rate=0.0,
         encode_activation=None,
         block_activation=nn.ReLU,
         decode_activation=None,
-        fc_activation=nn.LeakyReLU,
+        head_activation=None,
         output_activation=nn.Identity,
         predict_variance=False,
         head="fc",
@@ -216,6 +216,8 @@ class NeuralNetwork(nn.Module):
         if head not in ("fc", "conv"):
             raise ValueError(f"unknown head {head!r}; use 'fc' or 'conv'")
         self.head_type = head
+        if head_activation is None:  # ReLU for the conv head's residual blocks, LeakyReLU otherwise
+            head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
         # Map grid of the prediction: required by the conv head, optional for the fc head.
         self.output_shape = (
             tuple(int(v) for v in output_shape)
@@ -268,8 +270,8 @@ class NeuralNetwork(nn.Module):
                 n_filt0,
                 out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,
-                activation=block_activation,
-                dropout_rate=fc_dropout_rate,
+                activation=head_activation,
+                dropout_rate=head_dropout_rate,
             )
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
@@ -287,10 +289,10 @@ class NeuralNetwork(nn.Module):
 
             fc_layers, in_f = [], flat_features
             for w in fc_widths:
-                fc_layers += [nn.Linear(in_f, w), fc_activation(), nn.Dropout(p=fc_dropout_rate)]
+                fc_layers += [nn.Linear(in_f, w), head_activation(), nn.Dropout(p=head_dropout_rate)]
                 in_f = w
             if not fc_widths:
-                fc_layers.append(nn.Dropout(p=fc_dropout_rate))
+                fc_layers.append(nn.Dropout(p=head_dropout_rate))
             self.fc_hidden = nn.Sequential(*fc_layers)
             self.fc_out_mean = nn.Linear(in_f, n_maps * self.output_size)
             if predict_variance:
@@ -348,12 +350,15 @@ class NeuralNetwork(nn.Module):
         return mean
 
     def _run_head(self, x):
-        """Body features -> (mean, logvar), each of shape (nBatch, n_maps, output_size); logvar is None
-        unless predict_variance. 'conv': n_maps output channels each; 'fc': pool -> FC stack."""
+        """Run the 'fc' or 'conv' head on the decoder's output x. Returns (mean, logvar), each of shape
+        (nBatch, n_maps, output_size); logvar is None unless predict_variance."""
         if self.head_type == "conv":
+            # One output channel per map's mean, followed (with predict_variance) by one per map's log-variance
             out = self.conv_head(x, self.output_shape).flatten(2)  # (nBatch, n_maps or 2 * n_maps, H*W)
             mean = self.out_activation(out[:, : self.n_maps])
             return mean, (out[:, self.n_maps :] if self.predict_variance else None)
+        # fc head: pool to pool_output and flatten, then the hidden layers, then separate output layers for the
+        # means and log-variances
         x = self.avgpool0(x)
         x = torch.flatten(x, 1)
         x = self.fc_hidden(x)
@@ -383,27 +388,27 @@ class NeuralNetwork(nn.Module):
         return rows
 
     def _enable_mc_dropout(self):
-        """Put every Dropout/Dropout2d/Dropout3d submodule into train mode while leaving BatchNorm3d
-        (and everything else) in eval mode - MC Dropout needs stochastic dropout masks per
-        sample, but BatchNorm3d in train mode would normalize against a single-sample batch
-        at inference (run_inferences in use_model.py runs batch_size=1)."""
+        """Switch only the dropout layers back to training mode, so they keep dropping random channels. Every other
+        layer stays in eval mode: BatchNorm keeps using the statistics stored during training, rather than
+        normalizing by the statistics of the (often single-cube) batch it is given."""
         for m in self.modules():
             if isinstance(m, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
                 m.train()
 
-    def predict_with_uncertainty(self, x, n_samples=30, save_latent_images=False):
-        """Run n_samples stochastic forward passes (dropout active, BatchNorm fixed).
-        Call model.eval() first as usual; this only re-enables dropout for the duration of the
-        call, then restores plain eval mode. Only informative if dropout is enabled when the
-        model was trained.
+    def predict_with_mc_dropout(self, x, n_samples=30, save_latent_images=False):
+        """Estimate how uncertain the trained network is about x with Monte Carlo dropout: run it n_samples times
+        with dropout left on, so each pass drops different channels, and take the mean and spread of the results.
 
-        If predict_variance=False: returns (mean, epistemic_std), each of shape
-            (nBatch, n_maps, output_size) - epistemic_std is the MC-Dropout spread across samples.
-        If predict_variance=True: returns (mean, aleatoric_std, epistemic_std, total_std).
-            aleatoric_std comes from averaging the network's own per-sample variance
-            predictions (exp(logvar)); epistemic_std is the spread of the sampled means, as
-            above; total_std combines the two via the law of total variance
-            (total_var = aleatoric_var + epistemic_var).
+        This is separate from predict_variance. predict_variance trains the network to predict each value's
+        1-sigma, the noise in the data (aleatoric uncertainty). The spread here measures how much the prediction
+        depends on which channels dropout removes, the network's own uncertainty (epistemic). It needs a network
+        trained with dropout (head_dropout_rate or block_dropout_rate > 0); otherwise every pass is identical and
+        the spread is 0.
+
+        Returns (mean, epistemic_std), each (nBatch, n_maps, output_size). With predict_variance, returns
+        (mean, aleatoric_std, epistemic_std, total_std): aleatoric_std is the network's predicted 1-sigma
+        averaged over the passes, and total_std = sqrt(aleatoric_std**2 + epistemic_std**2).
+        Leaves the network in eval mode.
         """
         self._enable_mc_dropout()
         with torch.no_grad():

@@ -108,26 +108,26 @@ def test_output_activation_bounds_predictions(network, make_model, make_cube, he
 
 @every_head
 def test_eval_mode_is_deterministic(network, make_model, make_cube, head):
-    model = make_model(network, head=head, fc_dropout_rate=DROPOUT, block_dropout_rate=DROPOUT).eval()
+    model = make_model(network, head=head, head_dropout_rate=DROPOUT, block_dropout_rate=DROPOUT).eval()
     cube = make_cube()
     with torch.no_grad():
         torch.testing.assert_close(model(cube), model(cube))
 
 
 @every_head
-def test_predict_with_uncertainty_samples_dropout(network, make_model, make_cube, head):
-    model = make_model(network, head=head, fc_dropout_rate=DROPOUT).eval()
+def test_predict_with_mc_dropout_samples_dropout(network, make_model, make_cube, head):
+    model = make_model(network, head=head, head_dropout_rate=DROPOUT).eval()
     cube = make_cube()
-    mean, std = model.predict_with_uncertainty(cube, n_samples=N_SAMPLES)
+    mean, std = model.predict_with_mc_dropout(cube, n_samples=N_SAMPLES)
     assert mean.shape == std.shape == (len(cube), 1, model.output_size)  # one mean and spread per output
     assert (std > 0).any()  # dropout was active, so the samples differ
     assert not any(module.training for module in model.modules())  # model left fully in eval mode
 
 
 @every_head
-def test_predict_with_uncertainty_combines_variances(network, make_model, make_cube, head):
-    model = make_model(network, head=head, fc_dropout_rate=DROPOUT, predict_variance=True).eval()
-    _, aleatoric, epistemic, total = model.predict_with_uncertainty(make_cube(), n_samples=N_SAMPLES)
+def test_predict_with_mc_dropout_combines_variances(network, make_model, make_cube, head):
+    model = make_model(network, head=head, head_dropout_rate=DROPOUT, predict_variance=True).eval()
+    _, aleatoric, epistemic, total = model.predict_with_mc_dropout(make_cube(), n_samples=N_SAMPLES)
     torch.testing.assert_close(total**2, aleatoric**2 + epistemic**2)
 
 

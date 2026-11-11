@@ -45,7 +45,7 @@ HYPERPARAMS = {
     "k1": 3,  # Kernel size of the residual blocks
     "output_head": "fc",  # A fully connected head, for radial curves and small images
     "n_fc": 64,  # Width of the fully connected head
-    "dropout_rate": 0.0,  # Dropout before the output layer
+    "dropout_rate": 0.0,  # Dropout in the output head
     "block_dropout_rate": 0.0,  # Channel-wise dropout in every residual block
     "predict_variance": True,  # Also predict each value's 1-sigma uncertainty, trained with a Gaussian NLL
     "label_scaling": "one-sided",  # Scale the labels' [min, max] to [-1, 1]
