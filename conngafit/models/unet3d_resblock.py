@@ -162,12 +162,12 @@ class NeuralNetwork(nn.Module):
             head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
 
         # Map grid of the prediction: required by the conv head, optional for the fc head.
-        if self.output_shape is not None:
+        if output_shape is not None:
             self.output_shape = tuple(int(v) for v in output_shape)
         elif head != "fc":
             self.output_shape = input_shape[1:]
         else:
-            output_shape=None
+            self.output_shape = None
 
         map_size = int(np.prod(self.output_shape)) if self.output_shape is not None else input_shape[1] * input_shape[2]
         if head != "fc" and output_size is not None and int(output_size) != map_size:
