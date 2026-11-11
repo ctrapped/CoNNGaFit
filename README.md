@@ -32,7 +32,7 @@ The library code is the `conngafit` package (its networks are in `conngafit/mode
 python examples/demo.py
 ```
 
-Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen, along with 1σ uncertainty. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png` (add `--diagnostics` to also save the training script's diagnostic images and plots):
+Trains a small network on VOF observations of six synthetic disk galaxies, each rotating at a different speed ([`examples/demo_data`](examples/demo_data), ~10 MB), then predicts the rotation curve of a galaxy it hasn't seen, along with 1σ uncertainty. It needs no simulation data, takes a few minutes on a laptop CPU, and writes `examples/demo_output/demo.png`:
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/demo.png)
 
@@ -48,10 +48,6 @@ which runs the pre-trained demo network in [`examples/demo_model`](examples/demo
 
 [`examples/make_demo_data.py`](examples/make_demo_data.py) regenerates the data with VOF.
 
-### Experiments
-
-[`experiments/`](experiments) holds scripts that try newer features on the demo data, such as predicting several maps at once or sampling maps with the DDPM. They run like the demo but don't yet predict as well.
-
 ## Training
 
 ```bash
@@ -65,7 +61,7 @@ The hyperparameters file's `network` key chooses the network, and so which other
 | `network` | Starting points | Predicts |
 |---|---|---|
 | `"resblock"` | `configs/hyperparams_resblock.toml` (radial momentum), `configs/hyperparams_resblock_rc.toml` (rotational velocity) | maps or radial curves, with each value's 1σ if `predict_variance = true` |
-| `"ddpm"` | `configs/hyperparams_ddpm.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples, drawn jointly for every target |
+| `"ddpm"` | `configs/hyperparams_ddpm.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples |
 
 ### Datasets file
 
@@ -130,7 +126,7 @@ Both output directories are created if missing. Run with `--help` for details.
 
 ### Training from Python
 
-The script runs `conngafit.train_model.train`, which takes the two parameter sets as dicts with the same keys as the files. [`examples/demo.py`](examples/demo.py) walks through it:
+Training can also be run in a script with `conngafit.train_model.train`, which takes the two parameter sets as dicts with the same keys as the files. See [`examples/demo.py`](examples/demo.py) for an example:
 
 ```python
 from conngafit.train_model import train
@@ -139,8 +135,6 @@ result = train(hyperparams, datasets, run_name="my_run", save_diagnostics=False)
 result.model_path  # NetworkWeights/my_run, for conngafit.use_model.load_model
 result.validation_losses  # and the other per-epoch losses, MSEs and accuracies
 ```
-
-Galaxy directories in `datasets` are relative to its `data_dir` if given, otherwise to the current directory. The keyword arguments match the command-line options, and `load_hyperparams(path)` / `load_datasets(path)` read the files into dicts.
 
 ### Outputs
 
