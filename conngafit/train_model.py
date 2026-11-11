@@ -12,6 +12,7 @@ import os
 import random
 import tomllib
 from dataclasses import dataclass
+from functools import partial
 
 import h5py
 import matplotlib
@@ -23,6 +24,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
+from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
 matplotlib.use("Agg")
@@ -110,6 +112,207 @@ class TrainingResult:
     final_test_loss: float
     final_test_mse: float
     final_test_accuracy: float
+
+
+def weighted_mse_loss(pred, y, w):
+    """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
+    return torch.mean(w * nn.functional.mse_loss(pred, y, reduction="none"))
+
+
+def weighted_gaussian_nll_loss(pred, y, logvar, w):
+    """Gaussian NLL of (pred, exp(logvar)), each pixel (or ring) weighted by w; all ones is nn.GaussianNLLLoss."""
+    return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
+
+
+def compute_loss(model, x, y, w, predict=True, n_samples=None):
+    """
+    Returns (loss, prediction, 1-sigma) for a batch of cubes x and labels y, with weights by w. The
+    prediction and 1-sigma are None unless predict=True.
+
+    resblock: If the network predicts its variance, use Gaussian NLL of (mean, exp(logvar)) with sigma = exp(logvar / 2)
+              Otherwise, use MSE loss, with sigma = None.
+    ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
+    samples, which are only drawn if predict since this has high compute cost.
+    """
+    if isinstance(model, GaussianDiffusion):
+        loss = model(x, y)
+        if not predict:
+            return loss, None, None
+        pred, sigma = model.predict_with_uncertainty(x, n_samples)
+        return loss, pred, sigma
+
+    output = model(x)
+    if model.predict_variance:
+        pred, logvar = output
+        loss, sigma = weighted_gaussian_nll_loss(pred, y, logvar, w), torch.exp(0.5 * logvar)
+    else:
+        pred, sigma = output, None
+        loss = weighted_mse_loss(pred, y, w)
+    if not predict:
+        return loss, None, None
+    return loss, pred, sigma
+
+
+def count_accurate(pred, y, tolerance):
+    """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels:
+    the values within tolerance of their label."""
+    within = np.abs(pred - y) < tolerance
+    return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
+
+
+def save_batch_outputs(
+    x,
+    y,
+    pred,
+    sigma,
+    idx,
+    dataset,
+    image_output,
+    epoch,
+    targets,
+    to_physical,
+    label_scale,
+    radial_bins,
+    comp_images=True,
+    saved=None,
+):
+    """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and, with comp_images, a
+    comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
+    batches, after the target and after the epoch.
+
+    x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see compute_loss, or None), in
+        scaled label units; to_physical and label_scale (see train) convert them back to physical units.
+    saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
+        save_correlation_plots.
+    """
+    np_x = x.cpu().float().detach().numpy()
+    np_y = to_physical(y.cpu().float().detach().numpy())
+    np_pred = to_physical(pred.cpu().detach().numpy())
+    # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
+    np_sigma = None if sigma is None else sigma.cpu().detach().numpy() * label_scale
+    # Radial curves are plotted as curves, not maps
+    make_comp_image = plotting.make_comp_image_1d if radial_bins is not None else plotting.make_comp_image
+    for m, target in enumerate(targets):
+        param_label, unit_label, bin_op = TARGET_SETTINGS[target]
+        target_sigma = None if np_sigma is None else np_sigma[:, m]
+        for tt in range(len(idx)):
+            output_name = f"{image_output}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
+            if comp_images:
+                # Radial curves are plotted against the radius of each ring, from the image's field of view
+                radii = {"radii": dataset.radii(int(idx[tt]))} if radial_bins is not None else {}
+                make_comp_image(
+                    np_pred[:, m],
+                    np_y[:, m],
+                    np_x,
+                    output_name + ".png",
+                    tt,
+                    sim_to_physical_units=1,
+                    param_label=param_label,
+                    unit_label=unit_label,
+                    bin_op=bin_op,
+                    uncertainty=target_sigma,
+                    **radii,
+                )  # Labels are already in physical units
+            plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
+    if saved is not None:
+        saved.append((np_pred, np_y))
+
+
+def save_correlation_plots(saved, targets, output_base, epoch):
+    """Write a correlation plot of each target's predicted and true maps, from the (predictions, labels) batches
+    save_batch_outputs collected in saved, in physical units."""
+    all_pred = np.concatenate([batch_pred for batch_pred, _ in saved])
+    all_y = np.concatenate([batch_y for _, batch_y in saved])
+    for m, target in enumerate(targets):
+        plotting.make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
+
+
+def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, save_batch=None):
+    """Run one training epoch: iterate the dataloader and backprop compute_loss each batch.
+
+    predict: also predict each batch, to score the MSE of the predicted mean (made every predict_every epochs).
+    save_batch: if given, called with each batch's (x, y, pred, sigma, idx) to save its outputs (see
+        save_batch_outputs).
+    Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
+    batch was predicted.
+    """
+    model.train()
+    size = len(dataloader.dataset)
+    epoch_loss, epoch_mse = 0.0, 0.0
+    n_predicted = 0  # Batches with predictions, made every predict_every epochs
+    num_batches = len(dataloader)
+
+    for batch, (x, y, w, idx) in enumerate(dataloader):
+        x = x.to(device)
+        y = y.to(device)
+        w = w.to(device)
+
+        loss, pred, sigma = compute_loss(model, x.float(), y.float(), w.float(), predict, n_samples)
+        epoch_loss += loss.item()
+        if pred is not None:
+            n_predicted += 1
+            epoch_mse += nn.functional.mse_loss(pred, y.float()).item()
+        if save_batch is not None:
+            save_batch(x, y, pred, sigma, idx)
+
+        # Backpropagation
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if batch % 100 == 0:
+            current = batch * len(x)
+            logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
+
+    return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
+
+
+def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None):
+    """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy": the
+    percentage of values within accuracy_tolerance of their label. name ("Validation" or "Test") labels the log line.
+
+    predict: also predict each batch, to score the MSE of the predicted mean and the accuracy (made every
+        predict_every epochs and on the final epoch).
+    save_batch: if given, called with each batch's (x, y, pred, sigma, idx) to save its outputs (see
+        save_batch_outputs).
+    Returns (loss, mse, accuracy, specific_accuracy) where mse is the MSE of the predicted mean and
+    specific_accuracy is the accuracy of every sample in the set. The mse and accuracies are NaN without predict.
+    """
+    model.eval()
+    num_batches = len(dataloader)
+    summed_loss, summed_mse, correct = 0, 0, 0
+    total = 0
+    specific_accuracy = np.full(len(dataloader.dataset), np.nan)
+
+    with torch.no_grad():
+        for x, y, w, idx in dataloader:
+            x = x.to(device)
+            y = y.to(device)
+            w = w.to(device)
+
+            loss, pred, sigma = compute_loss(model, x.float(), y.float(), w.float(), predict, n_samples)
+            summed_loss += loss.item()
+            if pred is None:  # Predictions are made every predict_every epochs
+                continue
+            summed_mse += nn.functional.mse_loss(pred, y.float()).item()
+
+            np_pred = pred.cpu().float().detach().numpy()
+            np_y = y.cpu().float().detach().numpy()
+
+            specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
+            correct += n_correct
+            total += np.size(np_y)
+
+            if save_batch is not None:
+                save_batch(x, y, pred, sigma, idx)
+
+    accuracy = correct / total * 100 if total else np.nan
+    mean_loss = summed_loss / num_batches
+    mse = summed_mse / num_batches if total else np.nan
+    logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
+
+    model.train()
+    return mean_loss, mse, accuracy, specific_accuracy
 
 
 def train(
@@ -334,153 +537,6 @@ def train(
 
     logger.info("Data loaded")
 
-    # Radial curves are plotted as curves rather than maps
-    make_comp_image = plotting.make_comp_image_1d if radial_bins is not None else plotting.make_comp_image
-
-    #### Save final-epoch outputs ####
-    def save_batch_outputs(x, y, pred, sigma, idx, dataset, output_base, epoch, comp_images=True):
-        """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and a comparison image),
-        named after its image via its dataset index (idx), so names stay correct with shuffled or multiple batches,
-        and after the target. sigma is each prediction's 1-sigma (see compute_loss), saved and plotted too, or None."""
-        np_x = x.cpu().float().detach().numpy()
-        np_y = to_physical(y.cpu().float().detach().numpy())
-        np_pred = to_physical(pred.cpu().detach().numpy())
-        # 1-sigma in physical units: a spread, so scaled by label_scale but not offset
-        np_sigma = None if sigma is None else sigma.cpu().detach().numpy() * label_scale
-        for m, target in enumerate(targets):
-            param_label, unit_label, bin_op = TARGET_SETTINGS[target]
-            target_sigma = None if np_sigma is None else np_sigma[:, m]
-            for tt in range(len(idx)):
-                output_name = f"{output_base}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
-                if comp_images:
-                    # Radial curves are plotted against the radius of each ring, from the image's field of view
-                    radii = {"radii": dataset.radii(int(idx[tt]))} if radial_bins is not None else {}
-                    make_comp_image(
-                        np_pred[:, m],
-                        np_y[:, m],
-                        np_x,
-                        output_name + ".png",
-                        tt,
-                        sim_to_physical_units=1,
-                        param_label=param_label,
-                        unit_label=unit_label,
-                        bin_op=bin_op,
-                        uncertainty=target_sigma,
-                        **radii,
-                    )  # Labels are already in physical units
-                plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
-
-    def save_correlation_plots(all_pred, all_y, output_base, epoch):
-        """Write a correlation plot of each target's predicted and true maps, from lists of (nBatch, n_maps, nY, nX)
-        batches in physical units."""
-        all_pred, all_y = np.concatenate(all_pred), np.concatenate(all_y)
-        for m, target in enumerate(targets):
-            plotting.make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
-
-    #### Define Training Loop ####
-    def train_loop(dataloader, model, loss_fn, optimizer, epoch):
-        """Run one training epoch: iterate the dataloader, backprop loss_fn (see compute_loss) each batch, and on
-        the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
-        Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
-        batch was predicted.
-        """
-        model.train()
-        size = len(dataloader.dataset)
-        epoch_loss, epoch_mse = 0.0, 0.0
-        n_predicted = 0  # Batches with predictions, made every predict_every epochs
-        num_batches = len(dataloader)
-        is_final_epoch = epoch >= epochs - 1
-        if is_final_epoch or (epoch + 1) % predict_every == 0:  # ddpm does not predict every epoch
-            predict = True
-        else:
-            predict = False
-
-        for batch, (x, y, w, idx) in enumerate(dataloader):
-            x = x.to(device)
-            y = y.to(device)
-            w = w.to(device)
-
-            loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
-            epoch_loss += loss.item()
-            if pred is not None:
-                n_predicted += 1
-                epoch_mse += mse_fn(pred, y.float()).item()
-            if is_final_epoch and save_diagnostics:
-                save_batch_outputs(
-                    x, y, pred, sigma, idx, training_data, image_output_training, epoch, comp_images=False
-                )
-
-            # Backpropagation
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            if batch % 100 == 0:
-                current = batch * len(x)
-                logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
-
-        return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
-
-    def count_accurate(pred, y):
-        """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels."""
-        within = np.abs(pred - y) < accuracy_tolerance
-        return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
-
-    #### Define Evaluation Loop ####
-    def evaluate(dataloader, model, loss_fn, epoch, name, image_output):
-        """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy".
-        name ("Validation" or "Test") labels the log line and the correlation plot. On the final epoch, also writes
-        per-sample comparison images/hdf5 snapshots under image_output, and correlation plots.
-
-        Returns (loss, mse, accuracy, specific_accuracy) where mse is the MSE of the predicted mean and
-        specific_accuracy is the accuracy of every sample in the set. The mse and accuracies are NaN on the epochs
-        between predict_every, which make no predictions.
-        """
-        model.eval()
-        num_batches = len(dataloader)
-        summed_loss, summed_mse, correct = 0, 0, 0
-        total = 0
-        final = epoch >= epochs - 1
-        predict = final or (epoch + 1) % predict_every == 0
-        all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
-        specific_accuracy = np.full(len(dataloader.dataset), np.nan)
-
-        with torch.no_grad():
-            for x, y, w, idx in dataloader:
-                x = x.to(device)
-                y = y.to(device)
-                w = w.to(device)
-
-                loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
-                summed_loss += loss.item()
-                if pred is None:  # Predictions are made every predict_every epochs
-                    continue
-                summed_mse += mse_fn(pred, y.float()).item()
-
-                np_pred = pred.cpu().float().detach().numpy()
-                np_y = y.cpu().float().detach().numpy()
-
-                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y)
-                correct += n_correct
-                total += np.size(np_y)
-
-                if final and save_diagnostics:
-                    # dataloader.dataset is the WithIndices wrapper; its .dataset has the sample names
-                    save_batch_outputs(x, y, pred, sigma, idx, dataloader.dataset.dataset, image_output, epoch)
-                    all_pred.append(to_physical(np_pred))
-                    all_y.append(to_physical(np_y))
-
-        accuracy = correct / total * 100 if total else np.nan
-        mean_loss = summed_loss / num_batches
-        mse = summed_mse / num_batches if total else np.nan
-        logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
-
-        if final and save_diagnostics and radial_bins is None:
-            save_correlation_plots(all_pred, all_y, f"{diagnostic_output}_{name}CorrelationPlot", epoch)
-
-        model.train()
-        return mean_loss, mse, accuracy, specific_accuracy
-
     #### Define the Model ####
     input_shape = tuple(
         training_data[0][0].shape
@@ -489,48 +545,14 @@ def train(
     logger.info("Network:\n%s", model_summary(model, input_shape))  # Layers, output shapes and parameter counts
 
     #### Define Loss Function and Optimizer ####
-    def weighted_mse_loss(pred, y, w):
-        """Mean squared error, each pixel (or ring) weighted by w; all ones is plain MSE."""
-        return torch.mean(w * nn.functional.mse_loss(pred, y, reduction="none"))
-
-    def weighted_gaussian_nll_loss(pred, y, logvar, w):
-        """Gaussian NLL of (pred, exp(logvar)), each pixel (or ring) weighted by w; all ones is nn.GaussianNLLLoss."""
-        return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
-
-    loss_fn = weighted_gaussian_nll_loss if predict_variance else weighted_mse_loss  # The training objective
-    mse_fn = nn.MSELoss()  # MSE of the predicted mean, logged for every run so runs can be compared
+    n_samples = hyperparams.get("n_samples")  # ddpm only: posterior samples per prediction
     if network == "ddpm":
         loss_label = "Denoising MSE"
     else:
         loss_label = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
-    def compute_loss(model, x, y, w, predict=True):
-        """
-        Returns (loss, prediction, 1-sigma) for a batch of cubes x and labels y, with weights by w. The
-        prediction and 1-sigma are None unless predict=True.
-
-        resblock: If predict_variance=True, use Gaussian NLL of (mean, exp(logvar)) with sigma = exp(logvar / 2)
-                  Otherwise, use MSE loss, with sigma = None.
-        ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
-        samples, which are only drawn if predict since this has high compute cost.
-        """
-        if network == "ddpm":
-            loss = model(x, y)
-            if not predict:
-                return loss, None, None
-            pred, sigma = model.predict_with_uncertainty(x, hyperparams["n_samples"])
-            return loss, pred, sigma
-
-        output = model(x)
-        if predict_variance:
-            pred, logvar = output
-            loss, sigma = loss_fn(pred, y, logvar, w), torch.exp(0.5 * logvar)
-        else:
-            pred, sigma = output, None
-            loss = loss_fn(pred, y, w)
-        if not predict:
-            return loss, None, None
-        return loss, pred, sigma
+    # What save_batch_outputs needs to name every output and convert it back to physical units
+    output_settings = dict(targets=targets, to_physical=to_physical, label_scale=label_scale, radial_bins=radial_bins)
 
     optimizer = torch.optim.Adam(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
@@ -547,10 +569,35 @@ def train(
     #### Perform Training Loop ####
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
-        training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t)
-        validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = evaluate(
-            validation_dataloader, model, compute_loss, t, "Validation", image_output_validation
+        final = t == epochs - 1
+        predict = final or (t + 1) % predict_every == 0  # The ddpm doesn't predict every epoch: sampling is slow
+        save_training = save_validation = None
+        validation_outputs = []  # The final epoch's validation predictions and labels, for the correlation plots
+        if final and save_diagnostics:  # Save every sample's prediction/label snapshot of the final epoch
+            save_training = partial(
+                save_batch_outputs,
+                dataset=training_data,
+                image_output=image_output_training,
+                epoch=t,
+                comp_images=False,
+                **output_settings,
+            )
+            save_validation = partial(
+                save_batch_outputs,
+                dataset=validation_data,
+                image_output=image_output_validation,
+                epoch=t,
+                saved=validation_outputs,
+                **output_settings,
+            )
+        training_losses[t], training_mses[t] = train_loop(
+            model, train_dataloader, optimizer, device, predict, n_samples, save_training
         )
+        validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = evaluate(
+            model, validation_dataloader, device, predict, accuracy_tolerance, "Validation", n_samples, save_validation
+        )
+        if validation_outputs and radial_bins is None:  # Correlation plots compare maps
+            save_correlation_plots(validation_outputs, targets, diagnostic_output + "_ValidationCorrelationPlot", t)
 
     # Save the Trained Model
     torch.save(model.state_dict(), model_output_path + ".pt")
@@ -590,9 +637,22 @@ def train(
     test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
     testing_names = test_data.names
 
+    save_test = None
+    test_outputs = []  # The test predictions and labels, for the correlation plots
+    if save_diagnostics:
+        save_test = partial(
+            save_batch_outputs,
+            dataset=test_data,
+            image_output=image_output_final_test,
+            epoch=epochs - 1,
+            saved=test_outputs,
+            **output_settings,
+        )
     final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = evaluate(
-        test_dataloader, model, compute_loss, t, "Test", image_output_final_test
+        model, test_dataloader, device, True, accuracy_tolerance, "Test", n_samples, save_test
     )
+    if test_outputs and radial_bins is None:  # Correlation plots compare maps
+        save_correlation_plots(test_outputs, targets, diagnostic_output + "_TestCorrelationPlot", epochs - 1)
     logger.info("Testing set loss = %g", final_test_loss)
     logger.info("Testing set MSE = %g", final_test_mse)
     logger.info("Testing set accuracy = %g", final_test_accuracy)
