@@ -336,8 +336,6 @@ class GaussianDiffusion(nn.Module):
             n_maps maps are sampled together at its map_shape (H, W).
         n_timesteps: number of diffusion steps T.
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
-        flat_labels: if True, labels may have each map flattened, (B, n_maps, H*W), as produced by
-            datasets.py, and samples are flattened the same way; otherwise both are (B, n_maps, H, W).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
     """
@@ -347,7 +345,6 @@ class GaussianDiffusion(nn.Module):
         denoiser,
         n_timesteps=1000,
         schedule="cosine",
-        flat_labels=False,
         clip_range=(-1.0, 1.0),
     ):
         super().__init__()
@@ -355,19 +352,10 @@ class GaussianDiffusion(nn.Module):
         self.n_timesteps = n_timesteps
         self.map_shape = tuple(denoiser.map_shape)
         self.n_maps = denoiser.n_maps
-        self.flat_labels = flat_labels
         self.clip_range = clip_range
         alpha_bar = torch.cumprod(1 - make_beta_schedule(schedule, n_timesteps), dim=0)
         # buffers move with .to(device) and are saved in state_dict
         self.register_buffer("alpha_bar", alpha_bar.float())
-
-    # -- shape handling: accept flattened (B, n_maps, H*W) labels from datasets.py --
-    def _to_map(self, y):
-        if y.dim() == 4:
-            return y
-        if not self.flat_labels:
-            raise ValueError("flattened labels need flat_labels=True")
-        return y.view(y.shape[0], self.n_maps, *self.map_shape)
 
     def _gather(self, t, like):
         """abar_t reshaped to broadcast against (B, n_maps, H, W) maps."""
@@ -379,8 +367,9 @@ class GaussianDiffusion(nn.Module):
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
     def forward(self, cube, y0):
-        """Training loss for a batch: MSE between true and predicted noise."""
-        y0 = self._to_map(y0.float())
+        """Training loss for a batch of cubes and their (B, n_maps, H, W) maps y0: MSE between true and predicted
+        noise."""
+        y0 = y0.float()
         t = torch.randint(0, self.n_timesteps, (y0.shape[0],), device=y0.device)
         noise = torch.randn_like(y0)
         return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
@@ -395,15 +384,14 @@ class GaussianDiffusion(nn.Module):
 
         cube: (B, nSpec, nX, nY).
         max_batch: cap on cubes per denoiser call to bound memory.
-        Returns (n_samples, B, n_maps, H, W), or (n_samples, B, n_maps, H*W) if flat_labels, with (H, W) = map_shape.
+        Returns (n_samples, B, n_maps, H, W), with (H, W) = map_shape.
         """
         n_batch = cube.shape[0]
         shape = (self.n_maps, *self.map_shape)
         cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
         chunk = max_batch or cubes.shape[0]
         out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
-        out = out.view(n_samples, n_batch, *shape)
-        return out.flatten(3) if self.flat_labels else out
+        return out.view(n_samples, n_batch, *shape)
 
     def _reverse(self, cube, shape):
         """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step

@@ -196,8 +196,8 @@ class CoNNGaFitImageDataset:
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
         {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600}
     targets: which annotations to learn, a list of TARGETS keys (e.g. ["mass", "rotational_momentum"]).
-        Labels are returned as an (n_targets, n_pixels) array, one flattened map per target in this
-        order
+        Labels are returned as an (n_targets, nY, nX) array, one map per target in this order (or
+        (n_targets, radial_bins), one radial curve per target)
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize for the image, label scaling for the label).
     augment: None (default), "major_axis", or "all" (see AUGMENTATIONS):
@@ -288,13 +288,14 @@ class CoNNGaFitImageDataset:
             return np.array(hf["spectra"]).astype("float")
 
     def label(self, file_idx):
-        """The (n_targets, n_pixels) label of image file_idx before augmentation and target_transform (e.g. to compute
-        label scaling)."""
+        """The (n_targets, nY, nX) or (n_targets, radial_bins) label of image file_idx before augmentation and
+        target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
-            return self._label(hf, file_idx).reshape(len(self.targets), -1).astype("float")
+            return self._label(hf, file_idx).astype("float")
 
     def mass_weights(self, idx, power):
-        """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image."""
+        """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image, shaped
+        (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve)."""
         file_idx, aug_idx = divmod(idx, len(self.augmentations))
         if file_idx not in self.masses:
             if self.radial_bins is None:
@@ -306,7 +307,7 @@ class CoNNGaFitImageDataset:
         weights = self.masses[file_idx] ** power
         if self.radial_bins is None:
             weights = augment_array(weights, *self.augmentations[aug_idx])  # Rotated/flipped like the label
-        weights = weights.reshape(1, -1).astype("float")
+        weights = weights[None].astype("float")
         # Mean 1, so every image counts equally however massive; an image with no mass is weighted uniformly
         return weights / weights.mean() if weights.mean() > 0 else np.ones_like(weights)
 
@@ -332,7 +333,7 @@ class CoNNGaFitImageDataset:
             if label.shape[1:] != image.shape[:2]:
                 raise ValueError(f"{path}: {self.targets} maps are {label.shape[1:]}, but the image is {image.shape}")
             label = np.stack([augment_array(target_map, rotations, flip) for target_map in label])
-        label = label.reshape(len(self.targets), -1).astype("float")
+        label = label.astype("float")
 
         if self.transform:
             image = self.transform(image)

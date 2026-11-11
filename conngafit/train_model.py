@@ -240,11 +240,11 @@ def train(
         cube = training_data.image(i)
         cube_means.append(cube.mean(dtype=np.float64))
         cube_mean_squares.append(np.square(cube, dtype=np.float64).mean())
-        labels.append(training_data.label(i))  # (n_maps, n_pixels or n_rings)
+        labels.append(training_data.label(i))  # (n_maps, nY, nX), or (n_maps, n_rings) for radial curves
     training_mean = np.mean(cube_means)
     training_stdv = np.sqrt(np.mean(cube_mean_squares) - training_mean**2)  # var = E[x²] - E[x]²
     logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
-    all_labels = np.concatenate(labels, axis=1)  # (n_maps, every training pixel or ring)
+    all_labels = np.concatenate([label.reshape(n_maps, -1) for label in labels], axis=1)  # (n_maps, every value)
 
     # Labels are scaled to (label - label_offset) / label_scale for training; predictions and labels are
     # scaled back to physical units for every saved output and plot. Both have shape (n_maps, 1), one per target.
@@ -271,6 +271,11 @@ def train(
     for target, tolerance in zip(targets, (accuracy_tolerance * label_scale)[:, 0]):
         logger.info("Accuracy tolerance of %s = %.4g (physical units)", target, tolerance)
     del all_labels
+
+    # Shape each target's statistics, (n_maps, 1) so far, to broadcast over its map (or curve): (n_maps, 1, 1) for maps
+    per_target = (n_maps,) + (1,) * (labels[0].ndim - 1)
+    label_offset, label_scale = label_offset.reshape(per_target), label_scale.reshape(per_target)
+    accuracy_tolerance = accuracy_tolerance.reshape(per_target)
 
     def scale_labels(label):
         return (label - label_offset) / label_scale
@@ -328,9 +333,8 @@ def train(
 
     logger.info("Data loaded")
 
-    # Radial curves are plotted and saved as curves rather than maps
+    # Radial curves are plotted as curves rather than maps
     make_comp_image = plotting.make_comp_image_1d if radial_bins is not None else plotting.make_comp_image
-    save_hdf5 = plotting.save_hdf5_1d if radial_bins is not None else plotting.save_hdf5
 
     #### Save final-epoch outputs ####
     def save_batch_outputs(x, y, pred, sigma, idx, dataset, output_base, epoch, comp_images=True):
@@ -363,10 +367,10 @@ def train(
                         uncertainty=target_sigma,
                         **radii,
                     )  # Labels are already in physical units
-                save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
+                plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
 
     def save_correlation_plots(all_pred, all_y, output_base, epoch):
-        """Write a correlation plot of each target's predicted and true maps, from lists of (nBatch, n_maps, n_pixels)
+        """Write a correlation plot of each target's predicted and true maps, from lists of (nBatch, n_maps, nY, nX)
         batches in physical units."""
         all_pred, all_y = np.concatenate(all_pred), np.concatenate(all_y)
         for m, target in enumerate(targets):
@@ -419,7 +423,7 @@ def train(
     def count_accurate(pred, y):
         """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels."""
         within = np.abs(pred - y) < accuracy_tolerance
-        return within.mean(axis=(1, 2)) * 100, within.sum()
+        return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
 
     #### Define Validation Loop ####
     def validation_loop(dataloader, model, loss_fn, epoch):
@@ -599,7 +603,7 @@ def train(
     with h5py.File(model_output_path + ".hdf5", "w") as hf_norm:
         hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
         hf_norm.create_dataset(
-            "label_stats", data=np.stack([label_offset[:, 0], label_scale[:, 0]])
+            "label_stats", data=np.stack([label_offset.ravel(), label_scale.ravel()])
         )  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
         for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
             hf_norm.create_dataset(key, data=value)

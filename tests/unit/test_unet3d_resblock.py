@@ -28,4 +28,4 @@ def test_rejects_unknown_upsample_mode(make_model):
 def test_conv_heads_predict_on_any_map_grid(make_model, make_cube, head, output_shape):
     model = make_model(unet, head=head, output_shape=output_shape)
     cube = make_cube()
-    assert model(cube).shape == (len(cube), 1, output_shape[0] * output_shape[1])
+    assert model(cube).shape == (len(cube), 1, *output_shape)

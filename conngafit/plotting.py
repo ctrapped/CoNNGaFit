@@ -25,8 +25,7 @@ def make_comp_image(
     input/prediction curves, and the summed input datacube) for one snapshot in a batch.
     With uncertainty, a fifth panel shows the predicted 1-sigma map, next to the prediction.
 
-    data_pred / data_input: (nBatch, model_size) flattened prediction/label maps,
-        or (nBatch, 1, npix, npix) maps.
+    data_pred / data_input: (nBatch, nY, nX) prediction/label maps.
     data_image: (nBatch, nSpec, nX, nY) input datacube batch.
     output: path to save the PNG to.
     index: index of the sample within the batch to plot.
@@ -34,23 +33,11 @@ def make_comp_image(
     param_label/unit_label: axis/colorbar labels for the parameter being plotted.
     bin_op: statistic passed to scipy.stats.binned_statistic_dd for the radial profile
         ("sum" for mass flux, "mean" for velocity/inclination, etc.).
-    uncertainty: the predicted 1-sigma of each value, in the same units and either layout as
-        data_pred, or None (the default) for the 4-panel figure.
+    uncertainty: (nBatch, nY, nX) predicted 1-sigma maps in the same units as data_pred, or None (the default) for
+        the 4-panel figure.
     """
-    try:
-        image_pred = np.zeros((np.shape(data_pred)[1]))
-        image_pred[:] = data_pred[index, :]
-
-        image_input = np.zeros((np.shape(data_input)[1]))
-        image_input[:] = data_input[index, :]
-
-        npix = int(np.round(np.sqrt(np.size(image_pred))))
-        image_pred = np.reshape(image_pred, [npix, npix])
-        image_input = np.reshape(image_input, [npix, npix])
-    except ValueError:  # data_pred/data_input were already (nBatch,1,npix,npix) rather than flattened
-        image_pred = data_pred[index, 0, :, :]
-        image_input = data_input[index, 0, :, :]
-        npix = int(np.round(np.sqrt(np.size(image_pred))))
+    image_pred, image_input = data_pred[index], data_input[index]
+    npix = image_pred.shape[0]
 
     # Maps along the top row (input, prediction, and the 1-sigma map if given), curve and summed cube below
     n_cols = 2 if uncertainty is None else 3
@@ -116,7 +103,7 @@ def make_comp_image(
 
     if uncertainty is not None:
         plt.subplot(2, n_cols, panel["sigma"])
-        sigma_map = np.reshape(np.asarray(uncertainty)[index], np.shape(image_pred))
+        sigma_map = uncertainty[index]
         plt.imshow(sigma_map * sim_to_physical_units, cmap="viridis", vmin=0)  # sequential: sigma is >= 0
         plt.colorbar(label=unit_label)
         plt.gca().axes.xaxis.set_ticks([])
@@ -131,30 +118,20 @@ def make_image(
     output,
     vmin=None,
     vmax=None,
-    target_shape=None,
     sim_to_physical_units=1,
     param_label="Radial Momentum",
     unit_label=r"[M$_{\odot}$ km s$^{-1}$]",
     uncertainty=None,
 ):
-    """Reshape a single flattened prediction into a 2-d map, save it as a PNG (with a
-    physical-units colorbar) and an accompanying hdf5 file. With uncertainty, the predicted
-    1-sigma map is plotted beside the prediction and saved too.
+    """Save a predicted map as a PNG (with a physical-units colorbar) and an accompanying hdf5 file. With
+    uncertainty, the predicted 1-sigma map is plotted beside the prediction and saved too.
 
-    data: 1-d array of length npix*npix (a single sample's flattened prediction)
+    data: the (nY, nX) predicted map.
     output: path prefix; writes output+"projectionMap.png"/".hdf5".
     vmin/vmax: fixed color limits; Defaults to symmetric limits.
-    target_shape: (nY, nX) shape to reshape the flat data into
-    uncertainty: the predicted 1-sigma of each value
+    uncertainty: the (nY, nX) predicted 1-sigma map, or None.
     """
-    image = np.zeros((np.shape(data)[1]))
-    image[:] = data[:]
-
-    if target_shape is None:
-        npix = int(np.round(np.sqrt(np.size(image))))
-        target_shape = [npix, npix]
-
-    image = np.reshape(image, target_shape)  # make into 2d image
+    image = data
 
     n_cols = 1 if uncertainty is None else 2
     plt.figure(figsize=(6.4 * n_cols, 4.8))  # matplotlib's default size per panel
@@ -173,7 +150,7 @@ def make_image(
     plt.colorbar(label=param_label + " " + unit_label)
 
     if uncertainty is not None:
-        sigma_map = np.reshape(uncertainty, image.shape)
+        sigma_map = uncertainty
         plt.subplot(1, n_cols, 2)
         plt.imshow(sigma_map * sim_to_physical_units, cmap="viridis", vmin=0)  # sequential: sigma is >= 0
         plt.colorbar(label=r"Predicted 1$\sigma$ " + unit_label)
@@ -189,31 +166,22 @@ def make_image(
 
 
 def save_hdf5(input_data, pred_data, output, index, uncertainty=None):
-    """Reshape one snapshot's flattened prediction (and optionally its label and predicted
-    1-sigma) into 2-d maps and save them to an hdf5 file for later re-plotting.
+    """Save one snapshot's prediction (and optionally its label and predicted 1-sigma), maps or radial curves, to an
+    hdf5 file for later re-plotting.
 
-    input_data: (nBatch, model_size) flattened label maps, or None to skip saving the label
+    input_data: (nBatch, nY, nX) label maps or (nBatch, n_bins) curves, or None to skip saving the label
         (e.g. when running inference with no ground truth available).
-    pred_data: (nBatch, model_size) flattened prediction maps.
+    pred_data: predictions, shaped like input_data.
     output: full path to the hdf5 file to write (datasets 'input', 'prediction' and 'uncertainty').
     index: index of the sample within the batch to save.
-    uncertainty: (nBatch, model_size) flattened predicted 1-sigma maps, or None (the default) to skip it.
+    uncertainty: predicted 1-sigma, shaped like pred_data, or None (the default) to skip it.
     """
-    pred_image = np.zeros((np.shape(pred_data)[1]))
-    pred_image[:] = pred_data[index, :]
-    npix = int(np.round(np.sqrt(np.size(pred_image))))
-    pred_image = np.reshape(pred_image, [npix, npix])
-
     hf = h5py.File(output, "w")
     if input_data is not None:
-        input_image = np.zeros((np.shape(input_data)[1]))
-        input_image[:] = input_data[index, :]
-        npix = int(np.round(np.sqrt(np.size(input_image))))
-        input_image = np.reshape(input_image, [npix, npix])
-        hf.create_dataset("input", data=input_image)
-    hf.create_dataset("prediction", data=pred_image)
+        hf.create_dataset("input", data=input_data[index])
+    hf.create_dataset("prediction", data=pred_data[index])
     if uncertainty is not None:
-        hf.create_dataset("uncertainty", data=np.reshape(uncertainty[index, :], pred_image.shape))
+        hf.create_dataset("uncertainty", data=uncertainty[index])
     hf.close()
 
 
@@ -287,17 +255,6 @@ def make_comp_image_1d(
     plt.close()
 
 
-def save_hdf5_1d(input_data, pred_data, output, index, uncertainty=None):
-    """1-d analog of save_hdf5: save sample index's radial curves (and optionally their
-    predicted 1-sigma) from (nBatch, n_bins) arrays to an hdf5 file."""
-    hf = h5py.File(output, "w")
-    hf.create_dataset("input", data=input_data[index])
-    hf.create_dataset("prediction", data=pred_data[index])
-    if uncertainty is not None:
-        hf.create_dataset("uncertainty", data=uncertainty[index])
-    hf.close()
-
-
 def rv2_coeff(data_list):
     """Compute the pairwise RV coefficient matrix (a multivariate generalization of squared
     correlation, in [0, 1]) between a list of 2-d arrays of the same shape - used by
@@ -331,11 +288,10 @@ def make_correlation_plot(pred_image, input_image, output):
     """Score prediction-vs-truth agreement across a batch of snapshots and save a histogram
     of two correlation metrics, plus the raw per-snapshot values to an hdf5 file.
 
-    pred_image / input_image: (n_snaps, model_size) flattened prediction/label maps.
-    n_snaps: number of snapshots (rows) to score.
+    pred_image / input_image: (n_snaps, nY, nX) prediction/label maps.
     output: path prefix; writes output+".png"/".pdf"/".hdf5".
 
-    For each snapshot, reshapes to a 2-d npix x npix map and computes:
+    For each snapshot, computes:
       corr2d - the RV coefficient (see rv2_coeff) between the full 2-d prediction and truth maps.
       corr1d - the Pearson correlation between the two maps' radially-binned 1-d profiles.
     """
@@ -347,12 +303,8 @@ def make_correlation_plot(pred_image, input_image, output):
     corr1d = np.zeros((n_snaps))
     corr2d = np.zeros((n_snaps))
     for i in range(0, n_snaps):
-        pred_snap = pred_image[i, :]
-        input_snap = input_image[i, :]
-
-        npix = int(np.round(np.sqrt(np.size(pred_snap))))
-        pred_snap = np.reshape(pred_snap, [npix, npix])
-        input_snap = np.reshape(input_snap, [npix, npix])
+        pred_snap, input_snap = pred_image[i], input_image[i]
+        npix = pred_snap.shape[0]
 
         rv2_mat = rv2_coeff([input_snap, pred_snap])
         corr2d[i] = rv2_mat[0, 1]

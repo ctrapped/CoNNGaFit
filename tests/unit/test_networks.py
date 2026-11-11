@@ -33,7 +33,6 @@ def test_build_model_matches_network(path):
     model = build_model(hyperparams["network"], BUILD_SHAPE, hyperparams)
     assert isinstance(model, NETWORK_CLASSES[hyperparams["network"]])
     if isinstance(model, GaussianDiffusion):
-        assert model.flat_labels  # samples and labels are flattened maps, as datasets.py gives them
         assert model.denoiser.input_shape == BUILD_SHAPE  # built for the cube
 
 

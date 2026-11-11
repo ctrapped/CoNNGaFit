@@ -460,8 +460,8 @@ class HalfResConvHead(nn.Module):
     def forward(self, x, bottleneck, map_shape):
         """x: (nBatch, C, nSpec, nX, nY) decoder features; bottleneck: the deepest encoder features.
 
-        Returns a list of (nBatch, n_maps, H*W) maps at map_shape, flattened per map: the mean,
-        then the log-variance if predict_variance.
+        Returns a list of (nBatch, n_maps, H, W) maps at map_shape: the mean, then the log-variance if
+        predict_variance.
         """
         n_batch, n_filt, n_spec, n_x, n_y = x.shape
         x = torch.reshape(x, (n_batch, n_filt * n_spec, n_x, n_y))  # fold the spectral axis into channels
@@ -473,7 +473,4 @@ class HalfResConvHead(nn.Module):
         outputs = [self.out_mean(x)]
         if self.out_logvar is not None:
             outputs.append(self.out_logvar(x))
-        return [
-            torch.flatten(F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False), 2)
-            for o in outputs
-        ]
+        return [F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False) for o in outputs]

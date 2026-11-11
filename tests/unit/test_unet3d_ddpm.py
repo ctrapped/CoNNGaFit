@@ -168,33 +168,26 @@ def test_q_sample_mixes_signal_and_noise(make_diffusion):
     torch.testing.assert_close(diffusion.q_sample(y0, t, noise), ab.sqrt() * y0 + (1 - ab).sqrt() * noise)
 
 
-@pytest.mark.parametrize("flatten", [False, True])
 @pytest.mark.parametrize("n_maps", [1, N_MAPS])
-def test_training_loss_is_a_finite_scalar(make_diffusion, flatten, n_maps):
-    diffusion = make_diffusion(n_maps=n_maps, flat_labels=flatten)
+def test_training_loss_is_a_finite_scalar(make_diffusion, n_maps):
+    diffusion = make_diffusion(n_maps=n_maps)
     y0 = torch.randn(BATCH_SIZE, n_maps, *MAP_SHAPE)
-    loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0.flatten(2) if flatten else y0)
+    loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0)
     assert loss.shape == ()  # a single scalar to backpropagate
     assert torch.isfinite(loss)  # no NaN/inf from the noising or denoiser
 
 
-def test_flattened_labels_need_flat_labels(make_diffusion):
-    with pytest.raises(ValueError, match="flat_labels"):
-        make_diffusion()(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.randn(BATCH_SIZE, 1, MAP_SHAPE[0] * MAP_SHAPE[1]))
-
-
 @pytest.mark.parametrize(
-    "map_shape, n_maps, flat_labels, expected",
+    "map_shape, n_maps, expected",
     [
-        (None, 1, False, (N_SAMPLES, BATCH_SIZE, 1, *MAP_SHAPE)),
-        ((8, 8), 1, False, (N_SAMPLES, BATCH_SIZE, 1, 8, 8)),
-        ((8, 8), 1, True, (N_SAMPLES, BATCH_SIZE, 1, 64)),
-        ((8, 8), N_MAPS, True, (N_SAMPLES, BATCH_SIZE, N_MAPS, 64)),
+        (None, 1, (N_SAMPLES, BATCH_SIZE, 1, *MAP_SHAPE)),
+        ((8, 8), 1, (N_SAMPLES, BATCH_SIZE, 1, 8, 8)),
+        ((8, 8), N_MAPS, (N_SAMPLES, BATCH_SIZE, N_MAPS, 8, 8)),
     ],
 )
 @pytest.mark.parametrize("sample_kw", [dict(), dict(max_batch=2)])
-def test_sample_shape(make_diffusion, map_shape, n_maps, flat_labels, expected, sample_kw):
-    diffusion = make_diffusion(map_shape=map_shape, n_maps=n_maps, flat_labels=flat_labels)
+def test_sample_shape(make_diffusion, map_shape, n_maps, expected, sample_kw):
+    diffusion = make_diffusion(map_shape=map_shape, n_maps=n_maps)
     assert diffusion.sample(torch.randn(BATCH_SIZE, *INPUT_SHAPE), n_samples=N_SAMPLES, **sample_kw).shape == expected
 
 
