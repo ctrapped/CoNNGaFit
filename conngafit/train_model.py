@@ -426,17 +426,19 @@ def train(
         within = np.abs(pred - y) < accuracy_tolerance
         return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
 
-    #### Define Validation Loop ####
-    def validation_loop(dataloader, model, loss_fn, epoch):
-        """Evaluate the model on the validation set (no gradient updates) and compute a rough
-        "accuracy". On the final epoch, also writes correlation plots and per-sample comparison images/hdf5 snapshots.
+    #### Define Evaluation Loop ####
+    def evaluate(dataloader, model, loss_fn, epoch, name, image_output):
+        """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy".
+        name ("Validation" or "Test") labels the log line and the correlation plot. On the final epoch, also writes
+        per-sample comparison images/hdf5 snapshots under image_output, and correlation plots.
 
-        Returns (validation_loss, validation_mse, accuracy, specific_accuracy) where validation_mse is the MSE of
-        the predicted mean and specific_accuracy is the accuracy of every sample in the validation set.
+        Returns (loss, mse, accuracy, specific_accuracy) where mse is the MSE of the predicted mean and
+        specific_accuracy is the accuracy of every sample in the set. The mse and accuracies are NaN on the epochs
+        between predict_every, which make no predictions.
         """
         model.eval()
         num_batches = len(dataloader)
-        validation_loss, validation_mse, correct = 0, 0, 0
+        summed_loss, summed_mse, correct = 0, 0, 0
         total = 0
         final = epoch >= epochs - 1
         predict = final or (epoch + 1) % predict_every == 0
@@ -450,10 +452,10 @@ def train(
                 w = w.to(device)
 
                 loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
-                validation_loss += loss.item()
+                summed_loss += loss.item()
                 if pred is None:  # Predictions are made every predict_every epochs
                     continue
-                validation_mse += mse_fn(pred, y.float()).item()
+                summed_mse += mse_fn(pred, y.float()).item()
 
                 np_pred = pred.cpu().float().detach().numpy()
                 np_y = y.cpu().float().detach().numpy()
@@ -463,67 +465,21 @@ def train(
                 total += np.size(np_y)
 
                 if final and save_diagnostics:
-                    save_batch_outputs(x, y, pred, sigma, idx, validation_data, image_output_validation, epoch)
+                    # dataloader.dataset is the WithIndices wrapper; its .dataset has the sample names
+                    save_batch_outputs(x, y, pred, sigma, idx, dataloader.dataset.dataset, image_output, epoch)
                     all_pred.append(to_physical(np_pred))
                     all_y.append(to_physical(np_y))
 
-        # No predictions, and so no accuracy or MSE, on the epochs between predict_every
         accuracy = correct / total * 100 if total else np.nan
-        validation_loss /= num_batches
-        validation_mse = validation_mse / num_batches if total else np.nan
-        logger.info("Validation: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, validation_loss, validation_mse)
+        mean_loss = summed_loss / num_batches
+        mse = summed_mse / num_batches if total else np.nan
+        logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
 
         if final and save_diagnostics and radial_bins is None:
-            save_correlation_plots(all_pred, all_y, diagnostic_output + "_ValidationCorrelationPlot", epoch)
+            save_correlation_plots(all_pred, all_y, f"{diagnostic_output}_{name}CorrelationPlot", epoch)
 
         model.train()
-        return validation_loss, validation_mse, accuracy, specific_accuracy
-
-    #### Define Test Loop ####
-    def test_loop(dataloader, model, loss_fn, epoch):
-        """Evaluate the model on the held-out test set. Same rough accuracy metric and final-epoch
-        diagnostic outputs as validation_loop above, written under image_output_final_test instead.
-        Returns (test_loss, test_mse, accuracy, specific_accuracy).
-        """
-        model.eval()
-        num_batches = len(dataloader)
-        test_loss, test_mse, correct = 0, 0, 0
-        total = 0
-        final = epoch >= epochs - 1
-        all_pred, all_y = [], []  # Every sample's prediction/label on the final epoch, for the correlation plot
-        specific_accuracy = np.full(len(dataloader.dataset), np.nan)
-
-        with torch.no_grad():
-            for x, y, w, idx in dataloader:
-                x = x.to(device)
-                y = y.to(device)
-                w = w.to(device)
-                loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=final)
-                test_loss += loss.item()
-                test_mse += mse_fn(pred, y.float()).item()
-
-                np_pred = pred.cpu().float().detach().numpy()
-                np_y = y.cpu().float().detach().numpy()
-
-                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y)
-                correct += n_correct
-                total += np.size(np_y)
-
-                if final and save_diagnostics:
-                    save_batch_outputs(x, y, pred, sigma, idx, test_data, image_output_final_test, epoch)
-                    all_pred.append(to_physical(np_pred))
-                    all_y.append(to_physical(np_y))
-
-        accuracy = correct / total * 100
-        test_loss /= num_batches
-        test_mse /= num_batches
-        logger.info("Test: accuracy %.1f%%, avg loss %8f, avg MSE %8f", accuracy, test_loss, test_mse)
-
-        if final and save_diagnostics and radial_bins is None:
-            save_correlation_plots(all_pred, all_y, diagnostic_output + "_TestCorrelationPlot", epoch)
-
-        model.train()
-        return test_loss, test_mse, accuracy, specific_accuracy
+        return mean_loss, mse, accuracy, specific_accuracy
 
     #### Define the Model ####
     input_shape = tuple(
@@ -592,8 +548,8 @@ def train(
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
         training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t)
-        validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
-            validation_dataloader, model, compute_loss, t
+        validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = evaluate(
+            validation_dataloader, model, compute_loss, t, "Validation", image_output_validation
         )
 
     # Save the Trained Model
@@ -634,8 +590,8 @@ def train(
     test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
     testing_names = test_data.names
 
-    final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = test_loop(
-        test_dataloader, model, compute_loss, t
+    final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = evaluate(
+        test_dataloader, model, compute_loss, t, "Test", image_output_final_test
     )
     logger.info("Testing set loss = %g", final_test_loss)
     logger.info("Testing set MSE = %g", final_test_mse)
