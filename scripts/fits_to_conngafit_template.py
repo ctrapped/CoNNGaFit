@@ -23,7 +23,7 @@ output = "CoNNGaFitData/observations/NGC_2403"
 distance = 3200  # kpc
 target_npix = 40
 target_nspec = int(np.round(400 / 5.2))
-fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=distance, save_images=True)
+fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance_kpc=distance, save_images=True)
 
 logger.info("Running NGC 3351")
 image_dir = "CoNNGaFitData/observations/NGC_3351_NA_CUBE_THINGS.FITS"
@@ -31,7 +31,7 @@ output = "CoNNGaFitData/observations/NGC_3351"
 distance = 10500  # kpc
 target_npix = 40
 target_nspec = int(np.round(400 / 5.2))
-fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=distance, save_images=True)
+fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance_kpc=distance, save_images=True)
 
 logger.info("Running NGC 5055")
 image_dir = "CoNNGaFitData/observations/NGC_5055_NA_CUBE_THINGS.FITS"
@@ -39,7 +39,7 @@ output = "CoNNGaFitData/observations/NGC_5055"
 distance = 8900  # kpc
 target_npix = 40
 target_nspec = int(np.round(400 / 5.2))
-fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=distance, save_images=True)
+fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance_kpc=distance, save_images=True)
 
 logger.info("Running NGC 7793")
 image_dir = "CoNNGaFitData/observations/NGC_7793_NA_CUBE_THINGS.FITS"
@@ -47,4 +47,4 @@ output = "CoNNGaFitData/observations/NGC_7793"
 distance = 3600  # kpc
 target_npix = 40
 target_nspec = int(np.round(400 / 5.2))
-fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=distance, save_images=True)
+fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance_kpc=distance, save_images=True)
