@@ -1,3 +1,6 @@
+"""Plotting functions for the diagnostic figures and hdf5 snapshots that training and inference save: predictions
+against labels, as maps or radial curves."""
+
 import matplotlib
 import numpy as np
 
@@ -8,7 +11,6 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 
 
-#### Plotting Functions ####
 def make_comp_image(
     data_pred,
     data_input,
@@ -32,7 +34,7 @@ def make_comp_image(
     sim_to_physical_units: scalar multiplied into the data before plotting
     param_label/unit_label: axis/colorbar labels for the parameter being plotted.
     bin_op: statistic passed to scipy.stats.binned_statistic_dd for the radial profile
-        ("sum" for mass flux, "mean" for velocity/inclination, etc.).
+        ("sum" for momenta, "mean" for velocity/inclination, etc.).
     uncertainty: (nBatch, nY, nX) predicted 1-sigma maps in the same units as data_pred, or None (the default) for
         the 4-panel figure.
     """
@@ -208,11 +210,6 @@ def make_comp_image_1d(
     radii: the curves' ring centers in kpc (see ring_radii in datasets.py); if None, plot against bin number.
     uncertainty: (nBatch, nRadialBins) predicted 1-sigma of each ring.
     """
-    image_pred = np.zeros((np.shape(data_pred)[1]))
-    image_pred[:] = data_pred[index, :]
-
-    image_input = np.zeros((np.shape(data_input)[1]))
-    image_input[:] = data_input[index, :]
 
     fig, (ax_curve, ax_image) = plt.subplots(1, 2, figsize=(10, 4.5), constrained_layout=True)
 
@@ -267,8 +264,7 @@ def rv2_coeff(data_list):
 
     for arr in data_list:
         scal_arr = np.dot(arr, np.transpose(arr))
-        diego = np.diag(np.diag(scal_arr))
-        scal_arr_mod = scal_arr - diego
+        scal_arr_mod = scal_arr - np.diag(np.diag(scal_arr))
         scal_arr_list.append(scal_arr_mod)
 
     # Now compute the 'between study cosine matrix' c
@@ -315,13 +311,12 @@ def make_correlation_plot(pred_image, input_image, output):
             np.power(indices[0, :, :] - center_index[0], 2) + np.power(indices[1, :, :] - center_index[1], 2)
         )
 
-        n_bins = npix
         bin_range = [0, np.max(rmag)]
-        binned_pred, binedge, binnum = stats.binned_statistic_dd(
-            rmag.flatten(), pred_snap.flatten(), "sum", n_bins, range=[bin_range]
+        binned_pred, _binedge, _binnum = stats.binned_statistic_dd(
+            rmag.flatten(), pred_snap.flatten(), "sum", npix, range=[bin_range]
         )
-        binned_input, binedge, binnum = stats.binned_statistic_dd(
-            rmag.flatten(), input_snap.flatten(), "sum", n_bins, range=[bin_range]
+        binned_input, _binedge, _binnum = stats.binned_statistic_dd(
+            rmag.flatten(), input_snap.flatten(), "sum", npix, range=[bin_range]
         )
 
         correlation_matrix_1d = np.corrcoef(binned_pred, binned_input)

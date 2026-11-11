@@ -1,14 +1,12 @@
+"""Diagnostics for the CoNNGaFit 3-d networks: PNG dumps of intermediate activations ("latent images"), useful for
+visually checking what each encoder/decoder stage has learned. Set LATENT_IMAGE_OUTPUT to change where they go."""
+
 import logging
 
 import numpy as np
 from matplotlib import pyplot as plt
 
 logger = logging.getLogger(__name__)
-
-# Diagnostics for the CoNNGaFit 3-d networks: PNG dumps of intermediate activations ("latent images"), useful for
-# visually checking what each encoder/decoder stage has learned. Set LATENT_IMAGE_OUTPUT to change where they go.
-#
-# Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
 
 LATENT_IMAGE_OUTPUT = "latentImages/latent_"
 

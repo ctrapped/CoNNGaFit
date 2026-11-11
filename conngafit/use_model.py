@@ -1,3 +1,6 @@
+"""Functions to run a network trained by conngafit.train_model on HI spectral datacubes: VOF outputs, or real
+observations converted with fits_to_conngafit.py. See scripts/run_inference.py for an example."""
+
 import logging
 import os
 import tomllib
@@ -15,13 +18,6 @@ from conngafit.plotting import make_image
 logger = logging.getLogger(__name__)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-"""Functions to run a network trained by train_model_unet.py on HI spectral datacubes: VOF outputs, or
-real observations converted with fits_to_conngafit.py. See scripts/run_inference.py for an example.
-
-Written By Cameron Trapp (ctrapped@gmail.com)
-"""
 
 
 def load_model(model_path):

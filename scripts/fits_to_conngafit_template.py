@@ -1,18 +1,16 @@
+"""Template for converting FITS files to CoNNGaFit-compatible hdf5 files with fits_to_conngafit.py.
+
+image_dir should point to the FITS file, and output to where the converted datacube should be written.
+distance is optional: without it, the binned pixel size is saved in arcsec only, not kpc.
+target_npix and target_nspec need to match the dimensions of the trained network (currently 40 and 77).
+"""
+
 import logging
 
 import numpy as np
 
 from conngafit.fits_to_conngafit import fits_to_conngafit
 from conngafit.logging_setup import configure_logging
-
-####Template for how to convert from fits to CoNNGaFit compatible hdf5 files using fits_to_conngafit.py
-####image_dir should point to the FITS file
-####output should point to where you want to write the converted datacubes
-####distance is not necesarry
-####target_npix and target_nspec need to match the current dimensionality of the trained network (currently 40 and 77 respectively)
-#
-####Written By Cameron Trapp (ctrapped@gmail.com)
-####Updated 11/21/2023
 
 logger = logging.getLogger(__name__)
 configure_logging()

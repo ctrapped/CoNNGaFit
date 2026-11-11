@@ -220,9 +220,7 @@ def train(
     if batch_size is not None:
         batch_size_default = None if batch_size == 0 else batch_size  # batch_size 0 means full-batch
     else:
-        batch_size_default = max(2, len(training_data) // 10)  # Reasonable division of the training set into ~10
-        # batches per epoch; floored at 2 (BatchNorm3d needs more than 1 sample per batch while
-        # training). Override with batch_size (0 for full-batch training).
+        batch_size_default = max(2, len(training_data) // 10)  # Reasonable default division of the training set
 
     batches_per_training_set = 1
     if batch_size_default is None:
@@ -232,7 +230,7 @@ def train(
         batches_per_training_set = np.ceil(len(training_data) / batch_size)
         logger.info("Batches per training set = %d", batches_per_training_set)
 
-    #### Image normalization and label scaling, from every training file (augmentation changes neither) ####
+    #### Image normalization and label scaling, from every training file ####
     # One cube in memory at a time. Every cube has the same size, so the training set's mean (and mean of squares)
     # is the mean of each cube's.
     cube_means, cube_mean_squares, labels = [], [], []
@@ -278,10 +276,13 @@ def train(
     accuracy_tolerance = accuracy_tolerance.reshape(per_target)
 
     def scale_labels(label):
+        """Apply label normalization"""
         return (label - label_offset) / label_scale
 
     def to_physical(a):
-        """Scale labels or predictions back to physical units."""
+        """
+        Revert label normalization from scale_labels back to physical units
+        """
         return a * label_scale + label_offset
 
     training_data.transform = Compose([ToTensor(), Normalize(training_mean, training_stdv)])
@@ -428,12 +429,10 @@ def train(
     #### Define Validation Loop ####
     def validation_loop(dataloader, model, loss_fn, epoch):
         """Evaluate the model on the validation set (no gradient updates) and compute a rough
-        "accuracy" (the percentage of predicted values within accuracy_tolerance of the label -
-        a loose sanity metric, not a real accuracy). On the final epoch, also writes correlation
-        plots and per-sample comparison images/hdf5 snapshots. Returns
-        (validation_loss, validation_mse, accuracy, specific_accuracy) where validation_mse is the MSE of
-        the predicted mean and specific_accuracy is the accuracy of every sample in the validation set,
-        in dataset order.
+        "accuracy". On the final epoch, also writes correlation plots and per-sample comparison images/hdf5 snapshots.
+
+        Returns (validation_loss, validation_mse, accuracy, specific_accuracy) where validation_mse is the MSE of
+        the predicted mean and specific_accuracy is the accuracy of every sample in the validation set.
         """
         model.eval()
         num_batches = len(dataloader)
@@ -551,10 +550,11 @@ def train(
 
     def compute_loss(model, x, y, w, predict=True):
         """
-        (loss, prediction, 1-sigma) for a batch of cubes x and labels y, each pixel (or ring) weighted by w; the
-        prediction and 1-sigma are None unless predict.
-        resblock: Gaussian NLL of (mean, exp(logvar)) if predict_variance, with 1-sigma exp(logvar / 2), else MSE, with
-        1-sigma None.
+        Returns (loss, prediction, 1-sigma) for a batch of cubes x and labels y, with weights by w. The
+        prediction and 1-sigma are None unless predict=True.
+
+        resblock: If predict_variance=True, use Gaussian NLL of (mean, exp(logvar)) with sigma = exp(logvar / 2)
+                  Otherwise, use MSE loss, with sigma = None.
         ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
         samples, which are only drawn if predict since this has high compute cost.
         """
@@ -578,7 +578,7 @@ def train(
 
     optimizer = torch.optim.Adam(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
-    )  # Steepest gradient descent, can use different optimizers
+    )  # Can use different optimizers
 
     #### Initialize losses and specific accuracies ####
     training_losses = np.zeros((epochs))

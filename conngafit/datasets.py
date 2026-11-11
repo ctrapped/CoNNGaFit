@@ -116,7 +116,6 @@ MOMENTUM_TARGETS = {"radial_momentum", "cylindrical_radial_momentum", "rotationa
 
 def label_map(hf, target):
     """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun km/s (momenta) per pixel."""
-    # e.g. radial momentum = mass * radial velocity, per pixel
     target_maps = TARGETS[target]
     if len(target_maps) > 1:
         # Multiply Mass and Velocities for Momenta
@@ -166,7 +165,6 @@ def ring_radii(fov_kpc, n_bins):
     return (edges[:-1] + edges[1:]) / 2
 
 
-#### Augmentation ####
 # Augmentations, as (number of 90-degree rotations, left-right flip). VOF puts the galaxy's major
 # axis along x; "major_axis" keeps it there, while "all" (every rotation/flip of a square image)
 # also includes 90/270-degree rotations that put it along y.
@@ -201,7 +199,7 @@ class CoNNGaFitImageDataset:
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize for the image, label scaling for the label).
     augment: None (default), "major_axis", or "all" (see AUGMENTATIONS):
-        "major axis" adds 3 (180-degree rotation, left-right flips);
+        "major_axis" adds 3 (180-degree rotation, left-right flips);
         "all" adds 7 (90-degree rotations, left-right flips).
     radial_bins: if given, each target's label is a radial curve with this many rings (see radial_profile)
     radial_projection: where radial curves are measured. "face_on" (default) uses the same galaxy and
@@ -242,7 +240,8 @@ class CoNNGaFitImageDataset:
         self.radial_bins = radial_bins
 
         self.img_paths = find_vof_images(sources, inclinations, suffix)
-        # Sample idx is augmentation (idx % n) of file (idx // n)
+        # Each file gives one sample per augmentation, numbered file by file in the order of self.names. With n
+        # augmentations, sample idx is file idx // n, rotated/flipped by augmentation idx % n, which divmod(idx, n) gives together
         self.augmentations = AUGMENTATIONS[augment]
         self.names = []
         for path in self.img_paths:
@@ -296,7 +295,7 @@ class CoNNGaFitImageDataset:
     def mass_weights(self, idx, power):
         """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image, shaped
         (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve)."""
-        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
         if file_idx not in self.masses:
             if self.radial_bins is None:
                 with h5py.File(self.img_paths[file_idx], "r") as hf:
@@ -313,11 +312,12 @@ class CoNNGaFitImageDataset:
 
     def radii(self, idx):
         """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""
-        with h5py.File(self.curve_paths[idx // len(self.augmentations)], "r") as hf:
+        file_idx = idx // len(self.augmentations)  # The file sample idx comes from (see __init__)
+        with h5py.File(self.curve_paths[file_idx], "r") as hf:
             return ring_radii(hf.attrs["fov_kpc"], self.radial_bins)
 
     def __getitem__(self, idx):
-        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
         rotations, flip = self.augmentations[aug_idx]
         path = self.img_paths[file_idx]
         with h5py.File(path, "r") as hf:

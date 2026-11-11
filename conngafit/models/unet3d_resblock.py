@@ -1,3 +1,6 @@
+"""3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of arbitrary size and predicts
+one or more output maps. See NeuralNetwork for the full parameter list."""
+
 import logging
 import math
 
@@ -18,13 +21,6 @@ from conngafit.models.blocks import (
 from conngafit.models.diagnostics import save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
-
-# 3-d residual U-Net for HI 21cm spectral datacubes. Reads an (nSpec x nX x nY) cube of
-# arbitrary size and predicts one or more output maps. See NeuralNetwork for the full
-# parameter list.
-#
-# Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
-# Building blocks live in blocks.py; latent-image diagnostics in diagnostics.py.
 
 
 #### Full network ####
@@ -317,17 +313,12 @@ class NeuralNetwork(nn.Module):
     def forward(self, x, save_latent_images=False):
         """Run the network on a batch of datacubes.
 
-        x: tensor of shape (nBatch, nSpec, nX, nY) - a single-channel spectral datacube per
-            sample; (nSpec, nX, nY) must equal the model's input_shape. A channel dim of
-            size 1 is inserted before the 3-d convolutions.
+        x: Tensor of shape (nBatch, nSpec, nX, nY). (nSpec, nX, nY) must equal the model's input_shape.
         save_latent_images: if True, dump PNGs of the spectrally-summed activations at each
-            encoder/decoder stage to LATENT_IMAGE_OUTPUT (see save_summed_spectral_channels in diagnostics.py) -
-            useful for visually debugging what the network is learning, not needed for normal
-            training/inference.
-        Returns: if predict_variance=False (default), a tensor of shape (nBatch, n_maps, *output_shape)
-            - the predicted maps (or 1-d outputs). If predict_variance=True, a (mean, logvar)
-            tuple of two such tensors - logvar is an unconstrained per-element log-variance
-            (exp(logvar) to get the variance), with no output_activation applied.
+            encoder/decoder stage to LATENT_IMAGE_OUTPUT (see save_summed_spectral_channels in diagnostics.py)
+
+        Returns the predicted maps (nBatch, n_maps, *output_shape) or 1-d outputs.
+            If predict_variance=True, a (mean, logvar) tuple (exp(logvar) to get the variance)
         """
         n_batch, n_spec, n_x, n_y = x.size()
         if (n_spec, n_x, n_y) != self.input_shape:

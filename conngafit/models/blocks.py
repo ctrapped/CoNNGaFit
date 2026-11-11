@@ -1,19 +1,18 @@
+"""Shared building blocks for the CoNNGaFit 3-d networks:
+   Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
+   DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
+   SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
+   ResBlock2d, ConvMapHead                    - head='conv' option of both regression networks
+   HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
+Plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
+"""
+
 import math
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-# Shared building blocks for the CoNNGaFit 3-d networks:
-#   Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
-#   DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
-#   SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
-#   ResBlock2d, ConvMapHead                    - head='conv' option of both regression networks
-#   HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
-# plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
-#
-# Originally written by Cameron Trapp (ctrapped@gmail.com), and refactored into its current form by Caleb Choban using Claude LLM.
 
 
 #### Padding and alignment helpers used by the blocks ####
@@ -155,8 +154,7 @@ class ResidualBlock(nn.Module):
         kernel1: 3-tuple conv kernel size (used by conv1 and conv2).
         dropout_rate: probability for the channel-wise nn.Dropout3d on the block output.
             0.0 disables it.
-        activation: an nn.Module (the class itself, e.g. nn.ReLU, or a lambda such as
-           `lambda: nn.LeakyReLU(0.2)`).
+        activation: zero-arg callable returning an nn.Module, e.g. nn.ReLU or lambda: nn.LeakyReLU(0.2).
     """
 
     def __init__(self, in_channels, out_channels, downsample, kernel1, dropout_rate=0.0, activation=nn.ReLU):
