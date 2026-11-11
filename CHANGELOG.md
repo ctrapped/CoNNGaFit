@@ -9,7 +9,8 @@ All notable changes to this project are documented here. The format follows
 - Several targets at once: `target` in the datasets file may be a list (e.g. `["mass", "rotational_momentum"]`),
   and the ResBlock U-Net (and the dilated ResNet, through its new `n_maps` argument) predicts a map or radial
   curve of each from one shared network. The DDPM denoises the maps of every target together, so each sample is
-  drawn from their joint posterior. Labels are `(n_targets, n_pixels)`, each target is scaled separately
+  drawn from their joint posterior. Labels are `(n_targets, nY, nX)` maps or `(n_targets, n_bins)` radial curves,
+  each target is scaled separately
   (`label_stats` is `(2, n_targets)`), and the checkpoint records the targets in order.
 - `use_model.predict(..., return_samples=True)` yields the DDPM's joint posterior samples in physical units.
 - pytest suite for the network modules: shared blocks, both regression networks
@@ -62,7 +63,6 @@ All notable changes to this project are documented here. The format follows
   either network for `train_model_unet.py` and `use_model.py`.
 - `predict_every` hyperparameter: the training and validation sets are predicted, and so their accuracy
   and MSE scored, every `predict_every` epochs and on the final epoch.
-- `inference_test_validation_set.py --save-latent-images`.
 - `datasets.radial_profile(..., values=...)` bins a given map, such as a network's prediction, in place
   of the file's annotation, weighted by the file's mass.
 - `datasets.ring_index(shape, fov_kpc, n_bins)`: each pixel's ring, as `radial_profile` bins them.
@@ -70,6 +70,29 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- **Breaking:** `CoNNGaFitImageDataset` samples are `(image, label, loss weights, index)`, and the dataset takes a
+  `mass_weight_power` option; the weights and index were added by a wrapper in the training script. The index
+  names each saved output after the DataLoader shuffles the samples.
+- `train_model.train` is split into module-level functions, each usable on its own: `check_hyperparams`,
+  `check_datasets`, `training_statistics`, `calc_label_scaling`, `make_dataloaders`, `compute_loss`, `train_loop`,
+  `evaluate` (the validation and test loops, merged), `save_batch_outputs`, `save_checkpoint` and `save_history`.
+  `plotting.py` gains `save_correlation_plots`, `plot_loss` and `plot_history`. The test set is loaded before
+  training, so a mistake in its sources is found right away, and `TrainingResult` also records each validation
+  sample's accuracy every epoch and each test sample's accuracy. Training's outputs are unchanged.
+- **Breaking:** `fits_to_conngafit`'s `image_dir` and `distance` arguments are renamed `fits_path` and `distance_kpc`
+  (`distance_kpc` defaults to `None`).
+- **Breaking:** the networks' hand-built `summary()`, `stage_shapes()` and `param_breakdown()` methods are replaced by
+  `conngafit.networks.model_summary(model, input_shape)`, a `torchinfo.summary` table of the layers, their output
+  shapes and parameter counts (`torchinfo` is a new dependency). Training logs it at the start of each run, and
+  `examples/model_summaries.ipynb` prints it for each network.
+- **Breaking:** the ResBlock U-Net's and dilated ResNet's `predict_with_uncertainty` is renamed
+  `predict_with_mc_dropout`, to distinguish its Monte Carlo dropout spread from the 1σ trained with `predict_variance`
+  and from the DDPM's posterior sampling (`GaussianDiffusion.predict_with_uncertainty`, unchanged).
+- **Breaking:** the ResBlock U-Net's and dilated ResNet's `fc_dropout_rate`, `fc_activation` and `pool_output`
+  arguments are renamed `head_dropout_rate`, `head_activation` and `fc_pool_shape` (the ResBlock U-Net's only), since
+  the first two also apply to the conv heads. `head_activation` now also sets the `conv` head's activation; its
+  default keeps every head's activation unchanged (ReLU for `conv`, LeakyReLU otherwise). Hyperparameter files are
+  unchanged.
 - **Breaking:** the datasets file's optional `base_dir` key is renamed `data_dir`.
 - Training is the function `conngafit.train_model.train(hyperparams, datasets, ...)`, taking the parameters as dicts
   and returning the network's path and loss history; `scripts/train_model_unet.py` loads the two files and calls it.
@@ -83,12 +106,15 @@ All notable changes to this project are documented here. The format follows
   `conngafit/models/`, and the command-line scripts are in `scripts/`; install with `pip install -e .`
   before running them. Imports use the package paths (e.g. `from conngafit.use_model import predict`).
   Renamed: `conngafit_datasets` → `datasets`, `plotting_functions` → `plotting`, `unet_blocks` → `blocks`,
-  `unet_diagnostics` → `diagnostics`, `inference_template.py` → `run_inference.py`,
-  `inference_test_validation_set.py` → `run_inference_validation.py`. The Quartz guide moved from
+  `unet_diagnostics` → `diagnostics`, `inference_template.py` → `run_inference.py`. The Quartz guide moved from
   `Tutorials/Quartz/` to `docs/quartz/`.
-- The ResBlock U-Net and dilated ResNet return `(nBatch, n_maps, output_size)`, the DDPM's denoiser takes and
-  returns `(nBatch, n_maps, H, W)` maps and samples `(n_samples, nBatch, n_maps, ...)`, and `use_model.predict`
-  yields `(n_targets, ...)` arrays, also for a single target.
+- **Breaking:** maps stay 2-d through the whole pipeline instead of being flattened: datasets return
+  `(n_targets, nY, nX)` labels, the ResBlock U-Net and dilated ResNet return `(nBatch, n_maps, H, W)` maps (or
+  `(nBatch, n_maps, output_size)` radial curves; `output_size` is now for 1-d outputs of the fc head only), the
+  DDPM's denoiser takes and returns `(nBatch, n_maps, H, W)` maps and samples `(n_samples, nBatch, n_maps, H, W)`,
+  and `use_model.predict` yields `(n_targets, ...)` arrays, also for a single target. `GaussianDiffusion`'s
+  `flat_labels`, `plotting.make_image`'s `target_shape` and `plotting.save_hdf5_1d` are removed. Checkpoints and
+  saved outputs are unchanged.
 - Saved outputs include the target in their names: `<sample>_<target>_Epoch<N>` for training snapshots, and
   `<name>_<target>_projectionMap` / `_radialPlot` for `run_inferences`.
 - **Breaking:** the mass-flux targets are now momentum targets, mass × velocity in Msun km/s:
@@ -103,10 +129,8 @@ All notable changes to this project are documented here. The format follows
 - **Breaking:** `configs/hyperparams.toml` and `configs/hyperparams_rc.toml` are renamed
   `configs/hyperparams_resblock.toml` and `configs/hyperparams_resblock_rc.toml`.
 - **Breaking:** `unet3d_ddpm.DenoisingUNet3d` takes `input_shape` (and optional `map_shape`) and checks
-  them at construction, like `unet3d_resblock.NeuralNetwork`; its `summary()`, `stage_shapes()` and
-  `param_breakdown()` take no shape arguments. `GaussianDiffusion` samples by DDPM ancestral sampling
-  through every timestep, and `flat_labels` replaces `target_shape`.
-- `inference_test_validation_set.py` saves latent images only with `--save-latent-images`.
+  them at construction, like `unet3d_resblock.NeuralNetwork`. `GaussianDiffusion` samples by DDPM ancestral sampling
+  through every timestep.
 - The demo trains with `predict_variance`. Its figure adds ±1σ bands, a residual panel and both loss
   curves, and the committed demo network is retrained.
 - Loss plots use a log axis unless the loss can be negative.
@@ -119,6 +143,17 @@ All notable changes to this project are documented here. The format follows
   instead of one standard deviation of each batch.
 - Radial-curve comparison plots are plotted against radius in kpc, with a labeled colorbar.
 
+### Removed
+- `inference_test_validation_set.py`, which ran a network on the validation set listed in an annotations CSV; the
+  datasets no longer use annotation CSVs. Run `use_model.run_inferences` on the validation images instead.
+
 ### Fixed
+- `fits_to_conngafit` wrote an all-zero cube when the FITS cube had as many channels as the network takes, or when
+  its image didn't bin evenly into a grid larger than the network's, crashed when the cube had an odd number of
+  channels more than the network takes, and saved a negative `pixel_res_kpc` without a distance. It now converts the
+  cube from Jy/beam to HI column density per channel (cm^-2, optically thin, from the header's beam and channel
+  width), the units of the training cubes; averages the image in blocks with `astropy.nddata.block_reduce` (it
+  summed them, scaling the column density by the number of pixels per block); and crops or zero-pads each axis,
+  centered, to the network's grid. `pixel_res_kpc` is saved only with a distance.
 - The per-snapshot validation accuracy plot was empty unless training ran as a single batch.
 - Diagnostic plot names: "Valdiation" → "Validation".
