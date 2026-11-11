@@ -70,14 +70,19 @@ DATASETS = {
     "inclinations": [45],  # The inclinations to use, in degrees
     "augment": "major_axis",  # Add rotated and flipped copies of each training image
     "data_dir": DATA_DIR,  # The galaxies' folders below are in here
-    "training": {"vflat120": 600, "vflat160": 600, "vflat240": 600, "vflat280": 600}, #the galaxy name and their snapshot number(s)
+    "training": {
+        "vflat120": 600,
+        "vflat160": 600,
+        "vflat240": 600,
+        "vflat280": 600,
+    },  # the galaxy name and their snapshot number(s)
     "validation": {"vflat180": 600},
     "testing": {"vflat220": 600},
 }
 
 # --predict map: changes to steps 1 and 2 to predict the rotational velocity map
-MAP_HYPERPARAMS = {"output_head": "conv", "mass_weight_power": 1} #change output head and add mass weighting
-MAP_DATASETS = {"radial_bins": 0} #predict a map
+MAP_HYPERPARAMS = {"output_head": "conv", "mass_weight_power": 1}  # change output head and add mass weighting
+MAP_DATASETS = {"radial_bins": 0}  # predict a map
 
 
 def main():
