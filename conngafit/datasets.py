@@ -189,7 +189,9 @@ def augmentation_suffix(rotations, flip):
 
 
 class CoNNGaFitImageDataset:
-    """PyTorch-style dataset of (datacube, label) pairs from VeryObservableFIRE's optically thin projection
+    """PyTorch-style dataset of training samples from VeryObservableFIRE's optically thin projection. Each sample is
+    (datacube, label, loss weights, index): the weights are mass ** mass_weight_power per pixel (or ring), or all
+    ones, and the index identifies the sample (e.g. its name in names) after the DataLoader shuffles the samples.
 
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
         {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600}
@@ -208,6 +210,8 @@ class CoNNGaFitImageDataset:
     inclinations: which inclinations to include, "all" (default) or a list in degrees such as
         [30, 45], for every source.
     suffix: VOF's outputSuffix in the filenames to load (default "": files without one), for every source.
+    mass_weight_power: each sample's loss weights are its mass ** mass_weight_power (see mass_weights); 0 (the
+        default) gives all ones, an unweighted loss.
 
     The names attribute holds a short name for each sample (its filename without extension, plus
     an augmentation suffix such as "_r180_lr"), in dataset order.
@@ -224,6 +228,7 @@ class CoNNGaFitImageDataset:
         radial_projection="face_on",
         inclinations="all",
         suffix="",
+        mass_weight_power=0,
     ):
         if not targets:
             raise ValueError("targets is empty; name at least one annotation")
@@ -238,6 +243,7 @@ class CoNNGaFitImageDataset:
         self.transform = transform
         self.target_transform = target_transform
         self.radial_bins = radial_bins
+        self.mass_weight_power = mass_weight_power
 
         self.img_paths = find_vof_images(sources, inclinations, suffix)
         # Each file gives one sample per augmentation, numbered file by file in the order of self.names. With n
@@ -339,7 +345,11 @@ class CoNNGaFitImageDataset:
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
-        return image, label
+        if self.mass_weight_power > 0:
+            weights = self.mass_weights(idx, self.mass_weight_power)
+        else:
+            weights = np.ones_like(label)
+        return image, label, weights, idx
 
 
 class CoNNGaFitImageInferenceDataset:

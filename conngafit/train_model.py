@@ -19,7 +19,7 @@ import matplotlib
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
@@ -315,6 +315,78 @@ def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_sam
     return mean_loss, mse, accuracy, specific_accuracy
 
 
+def training_statistics(dataset):
+    """One pass over the training files, one cube in memory at a time: the image normalization (the mean and
+    standard deviation of every pixel of every cube) and each file's label, (n_maps, nY, nX) or (n_maps, n_rings)."""
+    # Every cube has the same size, so the training set's mean (and mean of squares) is the mean of each cube's
+    cube_means, cube_mean_squares, labels = [], [], []
+    for i in range(len(dataset.img_paths)):
+        cube = dataset.image(i)
+        cube_means.append(cube.mean(dtype=np.float64))
+        cube_mean_squares.append(np.square(cube, dtype=np.float64).mean())
+        labels.append(dataset.label(i))
+    training_mean = np.mean(cube_means)
+    training_stdv = np.sqrt(np.mean(cube_mean_squares) - training_mean**2)  # var = E[x²] - E[x]²
+    logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
+    return training_mean, training_stdv, labels
+
+
+def calc_label_scaling(labels, label_scaling, targets):
+    """Each target's label offset and scale, from every training label. Labels are scaled to
+    (label - label_offset) / label_scale for training and predictions. labels are scaled back to physical units
+    for every saved output and plot. Also gives an accuracy tolerance, in scaled units.
+
+    Returns (label_offset, label_scale, accuracy_tolerance), each shaped to broadcast over a target's map or curve:
+    (n_maps, 1, 1) for maps, (n_maps, 1) for radial curves.
+    """
+    n_maps = len(targets)
+    all_labels = np.concatenate([label.reshape(n_maps, -1) for label in labels], axis=1)  # (n_maps, every value)
+    label_offset, label_scale = np.zeros((n_maps, 1)), np.ones((n_maps, 1))
+    if label_scaling != "none":
+        if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
+            label_scale = np.max(np.abs(all_labels), axis=1, keepdims=True)
+        else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
+            label_max = np.max(all_labels, axis=1, keepdims=True)
+            label_min = np.min(all_labels, axis=1, keepdims=True)
+            label_offset = (label_max + label_min) / 2
+            label_scale = (label_max - label_min) / 2
+        for target, offset, scale in zip(targets, label_offset[:, 0], label_scale[:, 0]):
+            if not scale > 0:
+                raise ValueError(
+                    f"label_scaling = {label_scaling!r} needs {target} training labels that aren't constant"
+                )
+            logger.info("Label scaling of %s (%s): offset = %.4g, scale = %.4g", target, label_scaling, offset, scale)
+
+    accuracy_tolerance = ACCURACY_TOLERANCE * np.std(all_labels, axis=1, keepdims=True) / label_scale
+    for target, tolerance in zip(targets, (accuracy_tolerance * label_scale)[:, 0]):
+        logger.info("Accuracy tolerance of %s = %.4g (physical units)", target, tolerance)
+
+    # Shape each target's statistics, (n_maps, 1) so far, to broadcast over its map (or curve)
+    per_target = (n_maps,) + (1,) * (labels[0].ndim - 1)
+    return label_offset.reshape(per_target), label_scale.reshape(per_target), accuracy_tolerance.reshape(per_target)
+
+
+def make_dataloaders(training_data, validation_data, test_data, batch_size=None, test_batch_size=None):
+    """DataLoaders for the training, validation and test sets. The training set is reshuffled every epoch.
+
+    batch_size: training batch size. Default: about a tenth of the training set, at least 2 (BatchNorm needs more
+        than 1 sample per batch while training); 0 trains on the whole set as one batch.
+    test_batch_size: validation and testing batch size. Default: about a tenth of the validation set, at least 1
+        (evaluation uses BatchNorm's stored statistics, so 1 is safe); with batch_size 0, the whole validation set.
+    """
+    if batch_size is None:
+        batch_size = max(2, len(training_data) // 10)
+    if batch_size == 0:  # Full-batch training, and evaluation
+        batch_size, test_batch_size = len(training_data), len(validation_data)
+    elif test_batch_size is None:
+        test_batch_size = max(1, len(validation_data) // 10)
+    training_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
+    validation_loader = DataLoader(validation_data, batch_size=test_batch_size)
+    test_loader = DataLoader(test_data, batch_size=test_batch_size)
+    logger.info("Data loaded: %d training batches of up to %d samples per epoch", len(training_loader), batch_size)
+    return training_loader, validation_loader, test_loader
+
+
 def train(
     hyperparams,
     datasets,
@@ -409,74 +481,17 @@ def train(
     diagnostic_output = os.path.join(output_dir, "diagnostics", run_name)
     model_output_path = os.path.join(network_dir, run_name)
 
-    #### Load and Normalize Data ####
-    training_data = CoNNGaFitImageDataset(
-        training_sources,
-        targets,
-        augment=augment_training,
+    #### Load the data, with the image normalization and label scaling of the training set ####
+    dataset_settings = dict(
         radial_bins=radial_bins,
         radial_projection=radial_projection,
         inclinations=inclinations,
         suffix=suffix,
+        mass_weight_power=mass_weight_power,
     )
-
-    if batch_size is not None:
-        batch_size_default = None if batch_size == 0 else batch_size  # batch_size 0 means full-batch
-    else:
-        batch_size_default = max(2, len(training_data) // 10)  # Reasonable default division of the training set
-
-    batches_per_training_set = 1
-    if batch_size_default is None:
-        batch_size = len(training_data)
-    else:
-        batch_size = batch_size_default
-        batches_per_training_set = np.ceil(len(training_data) / batch_size)
-        logger.info("Batches per training set = %d", batches_per_training_set)
-
-    #### Image normalization and label scaling, from every training file ####
-    # One cube in memory at a time. Every cube has the same size, so the training set's mean (and mean of squares)
-    # is the mean of each cube's.
-    cube_means, cube_mean_squares, labels = [], [], []
-    for i in range(len(training_data.img_paths)):
-        cube = training_data.image(i)
-        cube_means.append(cube.mean(dtype=np.float64))
-        cube_mean_squares.append(np.square(cube, dtype=np.float64).mean())
-        labels.append(training_data.label(i))  # (n_maps, nY, nX), or (n_maps, n_rings) for radial curves
-    training_mean = np.mean(cube_means)
-    training_stdv = np.sqrt(np.mean(cube_mean_squares) - training_mean**2)  # var = E[x²] - E[x]²
-    logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
-    all_labels = np.concatenate([label.reshape(n_maps, -1) for label in labels], axis=1)  # (n_maps, every value)
-
-    # Labels are scaled to (label - label_offset) / label_scale for training; predictions and labels are
-    # scaled back to physical units for every saved output and plot. Both have shape (n_maps, 1), one per target.
-    label_offset, label_scale = np.zeros((n_maps, 1)), np.ones((n_maps, 1))
-    if label_scaling != "none":
-        if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
-            label_scale = np.max(np.abs(all_labels), axis=1, keepdims=True)
-        else:  # "one-sided", e.g. rotational velocity: [min(label), max(label)] to [-1, 1]
-            label_max = np.max(all_labels, axis=1, keepdims=True)
-            label_min = np.min(all_labels, axis=1, keepdims=True)
-            label_offset = (label_max + label_min) / 2
-            label_scale = (label_max - label_min) / 2
-        for target, offset, scale in zip(targets, label_offset[:, 0], label_scale[:, 0]):
-            if not scale > 0:
-                raise ValueError(
-                    f"label_scaling = {label_scaling!r} needs {target} training labels that aren't constant"
-                )
-            logger.info("Label scaling of %s (%s): offset = %.4g, scale = %.4g", target, label_scaling, offset, scale)
-
-    #### Rough accuracy: the percentage of predicted values within accuracy_tolerance of their label, where ####
-    #### accuracy_tolerance is ACCURACY_TOLERANCE times the spread (standard deviation) of each target's labels. ####
-    #### Not a great metric, but okay for tracking general performance ####
-    accuracy_tolerance = ACCURACY_TOLERANCE * np.std(all_labels, axis=1, keepdims=True) / label_scale  # Scaled units
-    for target, tolerance in zip(targets, (accuracy_tolerance * label_scale)[:, 0]):
-        logger.info("Accuracy tolerance of %s = %.4g (physical units)", target, tolerance)
-    del all_labels
-
-    # Shape each target's statistics, (n_maps, 1) so far, to broadcast over its map (or curve): (n_maps, 1, 1) for maps
-    per_target = (n_maps,) + (1,) * (labels[0].ndim - 1)
-    label_offset, label_scale = label_offset.reshape(per_target), label_scale.reshape(per_target)
-    accuracy_tolerance = accuracy_tolerance.reshape(per_target)
+    training_data = CoNNGaFitImageDataset(training_sources, targets, augment=augment_training, **dataset_settings)
+    training_mean, training_stdv, labels = training_statistics(training_data)
+    label_offset, label_scale, accuracy_tolerance = calc_label_scaling(labels, label_scaling, targets)
 
     def scale_labels(label):
         """Apply label normalization"""
@@ -488,53 +503,19 @@ def train(
         """
         return a * label_scale + label_offset
 
-    training_data.transform = Compose([ToTensor(), Normalize(training_mean, training_stdv)])
+    image_transform = Compose([ToTensor(), Normalize(training_mean, training_stdv)])
+    training_data.transform = image_transform
     training_data.target_transform = scale_labels
-
     validation_data = CoNNGaFitImageDataset(
-        validation_sources,
-        targets,
-        radial_bins=radial_bins,
-        radial_projection=radial_projection,
-        inclinations=inclinations,
-        suffix=suffix,
-        transform=Compose([ToTensor(), Normalize(training_mean, training_stdv)]),
-        target_transform=scale_labels,
+        validation_sources, targets, transform=image_transform, target_transform=scale_labels, **dataset_settings
     )
-
-    class WithIndices(Dataset):
-        """Wraps a dataset so each sample also returns its loss weights (see mass_weight_power) and its index,
-        to look up its name after shuffling."""
-
-        def __init__(self, dataset):
-            self.dataset = dataset
-
-        def __len__(self):
-            return len(self.dataset)
-
-        def __getitem__(self, idx):
-            image, label = self.dataset[idx]
-            if mass_weight_power > 0:
-                weights = self.dataset.mass_weights(idx, mass_weight_power)
-            else:
-                weights = np.ones_like(label)
-            return image, label, weights, idx
-
-    train_dataloader = DataLoader(
-        WithIndices(training_data), batch_size=batch_size, shuffle=True
-    )  # Reshuffled every epoch
-
-    if test_batch_size is None:
-        test_batch_size = max(1, len(validation_data) // 10)  # Reasonable division of the validation/test
-        # sets into ~10 batches; floored at 1 (unlike batch_size_default, batch size 1 is safe here
-        # since validation/testing run with model.eval(), which uses BatchNorm's running stats
-        # rather than computing per-batch statistics). Override with test_batch_size.
-    if batch_size_default is None:
-        batch_size = len(validation_data)
-    else:
-        batch_size = test_batch_size
-    validation_dataloader = DataLoader(WithIndices(validation_data), batch_size=batch_size)
-
+    # Loaded before training, so a mistake in the testing sources is found right away
+    test_data = CoNNGaFitImageDataset(
+        testing_sources, targets, transform=image_transform, target_transform=scale_labels, **dataset_settings
+    )
+    train_dataloader, validation_dataloader, test_dataloader = make_dataloaders(
+        training_data, validation_data, test_data, batch_size, test_batch_size
+    )
     logger.info("Data loaded")
 
     #### Define the Model ####
@@ -621,20 +602,6 @@ def train(
         hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
         hf_norm.create_dataset("datasets_text", data=datasets_text)
 
-    # Testing Data
-
-    test_data = CoNNGaFitImageDataset(
-        testing_sources,
-        targets,
-        radial_bins=radial_bins,
-        radial_projection=radial_projection,
-        inclinations=inclinations,
-        suffix=suffix,
-        transform=Compose([ToTensor(), Normalize(training_mean, training_stdv)]),
-        target_transform=scale_labels,
-    )
-
-    test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
     testing_names = test_data.names
 
     save_test = None
