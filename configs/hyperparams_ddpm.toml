@@ -5,6 +5,10 @@ network = "ddpm"  # The conditional diffusion model in unet3d_ddpm.py
 
 learning_rate = 1e-4
 weight_decay = 1e-3
+# Optional (default 0.999): evaluate, sample and save an exponential moving average (EMA) of the weights, which
+# smooths out step-to-step training noise. It averages over ~1 / (1 - ema_decay) optimizer steps, so keep that
+# well below the total number of steps (epochs * batches per epoch); 0 uses the raw weights.
+ema_decay = 0.999
 epochs = 4000 # Number of training epochs
 n_filt0 = 6   # Filters in the first encoder stage; doubles at each later stage
 k0 = 9        # Initial kernel size

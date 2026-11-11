@@ -6,6 +6,7 @@ import matplotlib
 import numpy as np
 import torch
 from torch import nn
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Compose, Normalize, ToTensor
 
@@ -184,6 +185,9 @@ if predict_variance and label_scaling == "none":
         f'{args.hyperparams}: predict_variance = true needs label_scaling = "symmetric" or "one-sided", '
         "since nn.GaussianNLLLoss floors the variance at 1e-6 in the units of the labels it trains on"
     )
+ema_decay = hyperparams.get("ema_decay", 0.999)  # On by default for every network; 0 uses the raw weights
+if not 0 <= ema_decay < 1:
+    raise ValueError(f"{args.hyperparams}: ema_decay = {ema_decay!r} should be in [0, 1)")
 predict_every = hyperparams["predict_every"]
 if not (isinstance(predict_every, int) and predict_every >= 1):
     raise ValueError(f"{args.hyperparams}: predict_every = {predict_every!r} should be an integer of 1 or more")
@@ -412,11 +416,14 @@ def save_correlation_plots(all_pred, all_y, output_base, epoch):
 
 
 #### Define Training Loop ####
-def train_loop(dataloader, model, loss_fn, optimizer, epoch):
+def train_loop(dataloader, model, loss_fn, optimizer, epoch, ema_model):
     """Run one training epoch: iterate the dataloader, backprop loss_fn (see compute_loss) each batch, and on
     the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
     Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
     batch was predicted.
+    ema_model: an AveragedModel of model, updated after every optimizer step. The ddpm samples its predictions
+    from it. The resblock network's training-set predictions come from the raw-weight, while validation and test
+    use the EMA.
     """
     model.train()
     size = len(dataloader.dataset)
@@ -430,7 +437,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         y = y.to(device)
         w = w.to(device)
 
-        loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
+        loss, pred, sigma = loss_fn(
+            model, x.float(), y.float(), w.float(), predict=predict, sampling_model=ema_model.module
+        )
         epoch_loss += loss.item()
         if pred is not None:
             n_predicted += 1
@@ -442,6 +451,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema_model.update_parameters(model)
 
         if batch % 100 == 0:
             current = batch * len(x)
@@ -590,7 +600,7 @@ else:
     LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
 
-def compute_loss(model, x, y, w, predict=True, t=None, noise=None):
+def compute_loss(model, x, y, w, predict=True, t=None, noise=None, sampling_model=None):
     """
     (loss, prediction, 1-sigma) for a batch of cubes x and labels y, each pixel (or ring) weighted by w; the
     prediction and 1-sigma are None unless predict.
@@ -598,13 +608,16 @@ def compute_loss(model, x, y, w, predict=True, t=None, noise=None):
     1-sigma None.
     ddpm: the denoising loss (unweighted) at timesteps t with noise (drawn at random if None), and the mean and
     standard deviation of n_samples posterior samples, which are only drawn if predict since this has high compute
-    cost. t and noise are ignored by the resblock network.
+    cost. t, noise and sampling_model are ignored by the resblock network.
+    sampling_model: the ddpm to draw posterior samples from (e.g. the EMA weights while the loss trains the
+    raw ones); None samples from model.
     """
     if network == "ddpm":
         loss = model(x, y, t, noise)
         if not predict:
             return loss, None, None
-        pred, sigma = model.predict_with_uncertainty(x, hyperparams["n_samples"])
+        sampler = sampling_model if sampling_model is not None else model
+        pred, sigma = sampler.predict_with_uncertainty(x, hyperparams["n_samples"])
         return loss, pred, sigma
 
     output = model(x)
@@ -622,6 +635,20 @@ def compute_loss(model, x, y, w, predict=True, t=None, noise=None):
 optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=weight_decay
 )  # Steepest gradient descent, can use different optimizers
+
+#### Exponential moving average (EMA) of the weights ####
+# With a constant learning rate the raw weights jitter around a minimum, by an amount set by the gradient
+# noise of each batch (for the ddpm also the random t and noise of every sample). The EMA,
+# w_ema <- ema_decay * w_ema + (1 - ema_decay) * w   after every optimizer step,
+# averages that jitter out over ~1 / (1 - ema_decay) steps. Training (loss, gradients) still updates the raw
+# weights, but validation, testing, the ddpm's posterior samples and the saved model all use the EMA.
+# ema_decay = 0 copies the raw weights, which reproduces training without an EMA.
+# use_buffers=True also averages buffers with the same EMA: the resblock network's BatchNorm running mean and
+# variance then follow the averaged weights, rather than being the raw model's statistics (use_buffers=False),
+# which come from the raw weights' activations. The ddpm's only buffers are its fixed noise schedule, which
+# averages to itself.
+ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay), use_buffers=True)
+eval_model = ema_model.module  # The weights every evaluation uses and that are saved
 
 #### Fixed validation noise (ddpm) ####
 # One (t, noise) draw per validation batch, made once here, so every epoch's validation loss scores the same noisy
@@ -647,14 +674,14 @@ specific_accuracies = np.zeros((len(validation_data), epochs))  # Each validatio
 #### Perform Training Loop ####
 for t in range(epochs):
     logger.info("Epoch %d/%d", t + 1, epochs)
-    training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t)
+    training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t, ema_model)
     validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
-        validation_dataloader, model, compute_loss, t, validation_draws
+        validation_dataloader, eval_model, compute_loss, t, validation_draws
     )
 
 
 # Save the Trained Model
-torch.save(model.state_dict(), model_output_path + ".pt")
+torch.save(eval_model.state_dict(), model_output_path + ".pt")  # The EMA weights, with the same keys as model
 
 # Save the normalization information for loading data
 hf_norm = h5py.File(model_output_path + ".hdf5", "w")
@@ -694,7 +721,7 @@ test_dataloader = DataLoader(WithIndices(test_data), batch_size=batch_size)
 testing_names = test_data.names
 
 final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = test_loop(
-    test_dataloader, model, compute_loss, t
+    test_dataloader, eval_model, compute_loss, t
 )
 logger.info("Testing set loss = %g", final_test_loss)
 logger.info("Testing set MSE = %g", final_test_mse)
