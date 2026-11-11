@@ -93,6 +93,42 @@ def dataset_sources(section, name, data_dir=None):
     return {os.path.abspath(os.path.join(base, os.path.expanduser(d))): snaps for d, snaps in section.items()}
 
 
+def check_hyperparams(hyperparams):
+    """Raise ValueError if hyperparams is missing a key its network needs, has an unrecognized key, or has an
+    invalid value."""
+    network = hyperparams.get("network")  # Sets which keys hyperparams must have
+    if network not in HYPERPARAM_KEYS:
+        raise ValueError(f"hyperparams: network = {network!r} should be one of {sorted(HYPERPARAM_KEYS)}")
+    check_keys(hyperparams, HYPERPARAM_KEYS[network], OPTIONAL_HYPERPARAM_KEYS[network], "hyperparams")
+    label_scaling = hyperparams["label_scaling"]
+    if label_scaling not in ("none", "symmetric", "one-sided"):
+        raise ValueError(f'hyperparams: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"')
+    mass_weight_power = hyperparams.get("mass_weight_power", 0)
+    if not mass_weight_power >= 0:
+        raise ValueError(f"hyperparams: mass_weight_power = {mass_weight_power!r} should be 0 or more")
+    predict_variance = hyperparams.get("predict_variance", False)
+    if not isinstance(predict_variance, bool):
+        raise ValueError(f"hyperparams: predict_variance = {predict_variance!r} should be true or false")
+    if predict_variance and label_scaling == "none":
+        raise ValueError(
+            'hyperparams: predict_variance = true needs label_scaling = "symmetric" or "one-sided", '
+            "since nn.GaussianNLLLoss floors the variance at 1e-6 in the units of the labels it trains on"
+        )
+    predict_every = hyperparams["predict_every"]
+    if not (isinstance(predict_every, int) and predict_every >= 1):
+        raise ValueError(f"hyperparams: predict_every = {predict_every!r} should be an integer of 1 or more")
+
+
+def check_datasets(datasets):
+    """Raise ValueError if datasets is missing a key, has an unrecognized key, or has invalid inclinations or suffix.
+    The training, validation and testing sources are checked by dataset_sources, and the targets by the datasets."""
+    check_keys(datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS, "datasets")
+    inclination_folders(datasets["inclinations"], "datasets")
+    suffix = datasets.get("suffix", "")
+    if not isinstance(suffix, str):
+        raise ValueError(f"datasets: suffix = {suffix!r} should be a string")
+
+
 @dataclass
 class TrainingResult:
     """What train() returns: the trained network's path (without .pt/.hdf5), each epoch's losses (the training
@@ -459,45 +495,24 @@ def train(
         set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     """
+    check_hyperparams(hyperparams)
+    check_datasets(datasets)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info("Using %s device", device)
 
-    ####   HYPERPARAMETERS   ####
-    network = hyperparams.get("network")  # Sets which keys hyperparams must have
-    if network not in HYPERPARAM_KEYS:
-        raise ValueError(f"hyperparams: network = {network!r} should be one of {sorted(HYPERPARAM_KEYS)}")
-    check_keys(hyperparams, HYPERPARAM_KEYS[network], OPTIONAL_HYPERPARAM_KEYS[network], "hyperparams")
-    hyperparams_text = to_toml(hyperparams)  # Saved with the model
-    learning_rate = hyperparams["learning_rate"]
-    weight_decay = hyperparams["weight_decay"]
-    epochs = hyperparams["epochs"]
-    label_scaling = hyperparams["label_scaling"]
-    if label_scaling not in ("none", "symmetric", "one-sided"):
-        raise ValueError(f'hyperparams: label_scaling = {label_scaling!r} should be "none", "symmetric" or "one-sided"')
-    mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
-    if not mass_weight_power >= 0:
-        raise ValueError(f"hyperparams: mass_weight_power = {mass_weight_power!r} should be 0 or more")
-    predict_variance = hyperparams.get("predict_variance", False)  # resblock only
-    if not isinstance(predict_variance, bool):
-        raise ValueError(f"hyperparams: predict_variance = {predict_variance!r} should be true or false")
-    if predict_variance and label_scaling == "none":
-        raise ValueError(
-            'hyperparams: predict_variance = true needs label_scaling = "symmetric" or "one-sided", '
-            "since nn.GaussianNLLLoss floors the variance at 1e-6 in the units of the labels it trains on"
-        )
-    predict_every = hyperparams["predict_every"]
-    if not (isinstance(predict_every, int) and predict_every >= 1):
-        raise ValueError(f"hyperparams: predict_every = {predict_every!r} should be an integer of 1 or more")
-    seed = hyperparams["seed"]
     # Weight initialization, dropout and the order training batches are drawn in all come from these generators
+    seed = hyperparams["seed"]
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)  # Seeds the CPU and every GPU
-    #############################
 
-    ####   DATASETS   ####
-    check_keys(datasets, DATASET_KEYS, OPTIONAL_DATASET_KEYS, "datasets")
-    datasets_text = to_toml(datasets)  # Saved with the model
+    network = hyperparams["network"]
+    epochs = hyperparams["epochs"]
+    predict_every = hyperparams["predict_every"]
+    label_scaling = hyperparams["label_scaling"]
+    mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
+    predict_variance = hyperparams.get("predict_variance", False)  # resblock only
+
     # One target name, or a list of them: the network predicts a map (or radial curve) of each
     targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
     n_maps = len(targets)
@@ -507,16 +522,10 @@ def train(
     augment_training = None if datasets["augment"] == "none" else datasets["augment"]  # TOML has no None
     radial_bins = datasets["radial_bins"] or None  # 0 means train on maps
     radial_projection = datasets["radial_projection"]
-    inclinations = datasets["inclinations"]  # "all" or a list, for every set
-    inclination_folders(inclinations, "datasets")  # Check it here, so an error names datasets
-    suffix = datasets.get("suffix", "")  # VOF's outputSuffix in the filenames, for every set
-    if not isinstance(suffix, str):
-        raise ValueError(f"datasets: suffix = {suffix!r} should be a string")
-    #############################
 
     run_name = run_name or "_".join(targets)
 
-    ####  Set input/output directories ####
+    # Output directories
     os.makedirs(network_dir, exist_ok=True)
     if save_diagnostics:
         os.makedirs(os.path.join(output_dir, "images"), exist_ok=True)
@@ -529,12 +538,12 @@ def train(
     diagnostic_output = os.path.join(output_dir, "diagnostics", run_name)
     model_output_path = os.path.join(network_dir, run_name)
 
-    #### Load the data, with the image normalization and label scaling of the training set ####
+    # Load the data, with the image normalization and label scaling of the training set
     dataset_settings = dict(
         radial_bins=radial_bins,
         radial_projection=radial_projection,
-        inclinations=inclinations,
-        suffix=suffix,
+        inclinations=datasets["inclinations"],  # "all" or a list, for every set
+        suffix=datasets.get("suffix", ""),  # VOF's outputSuffix in the filenames, for every set
         mass_weight_power=mass_weight_power,
     )
     training_data = CoNNGaFitImageDataset(training_sources, targets, augment=augment_training, **dataset_settings)
@@ -566,14 +575,14 @@ def train(
     )
     logger.info("Data loaded")
 
-    #### Define the Model ####
+    # The network
     input_shape = tuple(
         training_data[0][0].shape
     )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
     model = build_model(network, input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps).to(device)
     logger.info("Network:\n%s", model_summary(model, input_shape))  # Layers, output shapes and parameter counts
 
-    #### Define Loss Function and Optimizer ####
+    # Loss and optimizer
     n_samples = hyperparams.get("n_samples")  # ddpm only: posterior samples per prediction
     if network == "ddpm":
         loss_label = "Denoising MSE"
@@ -584,10 +593,10 @@ def train(
     output_settings = dict(targets=targets, to_physical=to_physical, label_scale=label_scale, radial_bins=radial_bins)
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        model.parameters(), lr=hyperparams["learning_rate"], weight_decay=hyperparams["weight_decay"]
     )  # Can use different optimizers
 
-    #### Initialize losses and specific accuracies ####
+    # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
     validation_losses = np.zeros((epochs))
     training_mses = np.zeros((epochs))
@@ -595,7 +604,7 @@ def train(
     validation_accuracies = np.zeros((epochs))
     specific_accuracies = np.zeros((len(validation_data), epochs))  # Each validation sample's accuracy, every epoch
 
-    #### Perform Training Loop ####
+    # Train
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
         final = t == epochs - 1
@@ -637,8 +646,8 @@ def train(
         label_offset=label_offset,
         label_scale=label_scale,
         hyperparams=hyperparams,
-        hyperparams_text=hyperparams_text,
-        datasets_text=datasets_text,
+        hyperparams_text=to_toml(hyperparams),  # The full parameters, saved with the model
+        datasets_text=to_toml(datasets),
         run_name=run_name,
         input_shape=input_shape,
         targets=targets,
