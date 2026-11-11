@@ -14,8 +14,11 @@ from the datacube's spectra, along with each ring's 1-sigma uncertainty (predict
 it learns the rotational velocity map instead, with each pixel's 1-sigma, and the map is binned into the
 rotation curve afterwards.
 
-The script walks through training a network from Python: step 1 sets the network and its hyperparameters, step 2
-the data, step 3 trains with conngafit.train_model.train, and step 4 predicts the test galaxy and plots the result.
+The script walks through training a network:
+    Step 1: Set the network and its hyperparameters
+    Step 2: Set the datasets (training, validation, test)
+    Step 3: Run the training with conngafit.train_model.train
+    Step 4: Predicts the test galaxy and plot the results.
 """
 
 import argparse
@@ -35,7 +38,7 @@ DATA_DIR = REPO_ROOT / "examples" / "demo_data"
 RUN_NAME = "demo"
 N_RINGS = 10  # Rings in each rotation curve
 
-#### Step 1: the network and its hyperparameters ####
+#### Step 1: Choose a network and set its hyperparameters ####
 # Every key is required (see configs/hyperparams_resblock_rc.toml for more on each). These are small enough to train
 # in a few minutes on a CPU.
 HYPERPARAMS = {
@@ -57,7 +60,7 @@ HYPERPARAMS = {
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
 }
 
-#### Step 2: the data ####
+#### Step 2: Set the datasets ####
 # What the network predicts, and which galaxies it trains, validates and tests on. The demo data are VOF
 # observations of six synthetic galaxies, each rotating at a different speed, at snapshot 600.
 DATASETS = {
@@ -67,7 +70,7 @@ DATASETS = {
     "inclinations": [45],  # The inclinations to use, in degrees
     "augment": "major_axis",  # Add rotated and flipped copies of each training image
     "data_dir": DATA_DIR,  # The galaxies' folders below are in here
-    "training": {"vflat120": 600, "vflat160": 600, "vflat240": 600, "vflat280": 600},
+    "training": {"vflat120": 600, "vflat160": 600, "vflat240": 600, "vflat280": 600}, #the galaxy name and their snapshot number(s)
     "validation": {"vflat180": 600},
     "testing": {"vflat220": 600},
 }
@@ -96,7 +99,7 @@ def main():
     configure_logging()  # Show the training's progress
     output = args.output.resolve()
 
-    # Steps 1 and 2, with the command line's changes
+    # Steps 1 and 2, with any command line changes
     hyperparams = {**HYPERPARAMS, "epochs": args.epochs}
     datasets = dict(DATASETS)
     run_name = RUN_NAME
