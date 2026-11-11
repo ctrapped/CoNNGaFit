@@ -432,11 +432,20 @@ class GaussianDiffusion(nn.Module):
         ab = self._gather(t, y0)
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
-    def forward(self, cube, y0):
-        """Training loss for a batch: MSE between true and predicted noise."""
+    def forward(self, cube, y0, t=None, noise=None):
+        """Training loss for a batch: MSE between true and predicted noise.
+
+        t: (B,) integer timesteps; None draws them uniformly from 0..T-1.
+        noise: the eps added to y0, shaped like y0 (flattened maps if flat_labels); None draws it from N(0, I).
+        Passing fixed t and noise makes the loss repeatable, e.g. to score validation sets the same way every epoch.
+        """
         y0 = self._to_map(y0.float())
-        t = torch.randint(0, self.n_timesteps, (y0.shape[0],), device=y0.device)
-        noise = torch.randn_like(y0)
+        if t is None:
+            t = torch.randint(0, self.n_timesteps, (y0.shape[0],), device=y0.device)
+        if noise is None:
+            noise = torch.randn_like(y0)
+        else:
+            noise = self._to_map(noise.float())
         return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
 
     # TODO: add DDIM sampling (Song et al. 2021): its update depends only on alpha_bar, so it can skip timesteps

@@ -457,14 +457,15 @@ def count_accurate(pred, y):
 
 
 #### Define Validation Loop ####
-def validation_loop(dataloader, model, loss_fn, epoch):
+def validation_loop(dataloader, model, loss_fn, epoch, fixed_draws=None):
     """Evaluate the model on the validation set (no gradient updates) and compute a rough
     "accuracy" (the percentage of predicted values within accuracy_tolerance of the label -
     a loose sanity metric, not a real accuracy). On the final epoch, also writes correlation
     plots and per-sample comparison images/hdf5 snapshots. Returns
     (validation_loss, validation_mse, accuracy, specific_accuracy) where validation_mse is the MSE of
     the predicted mean and specific_accuracy is the accuracy of every sample in the validation set,
-    in dataset order.
+    in dataset order. fixed_draws: for the ddpm network, one (t, noise) pair per batch, so every epoch's denoising
+    loss scores the same noisy maps; None draws new ones.
     """
     model.eval()
     num_batches = len(dataloader)
@@ -476,12 +477,13 @@ def validation_loop(dataloader, model, loss_fn, epoch):
     specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
-        for x, y, w, idx in dataloader:
+        for batch, (x, y, w, idx) in enumerate(dataloader):
             x = x.to(device)
             y = y.to(device)
             w = w.to(device)
 
-            loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict)
+            t, noise = fixed_draws[batch] if fixed_draws is not None else (None, None)
+            loss, pred, sigma = loss_fn(model, x.float(), y.float(), w.float(), predict=predict, t=t, noise=noise)
             validation_loss += loss.item()
             if pred is None:  # Predictions are made every predict_every epochs
                 continue
@@ -588,17 +590,18 @@ else:
     LOSS_LABEL = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
 
 
-def compute_loss(model, x, y, w, predict=True):
+def compute_loss(model, x, y, w, predict=True, t=None, noise=None):
     """
     (loss, prediction, 1-sigma) for a batch of cubes x and labels y, each pixel (or ring) weighted by w; the
     prediction and 1-sigma are None unless predict.
     resblock: Gaussian NLL of (mean, exp(logvar)) if predict_variance, with 1-sigma exp(logvar / 2), else MSE, with
     1-sigma None.
-    ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
-    samples, which are only drawn if predict since this has high compute cost.
+    ddpm: the denoising loss (unweighted) at timesteps t with noise (drawn at random if None), and the mean and
+    standard deviation of n_samples posterior samples, which are only drawn if predict since this has high compute
+    cost. t and noise are ignored by the resblock network.
     """
     if network == "ddpm":
-        loss = model(x, y)
+        loss = model(x, y, t, noise)
         if not predict:
             return loss, None, None
         pred, sigma = model.predict_with_uncertainty(x, hyperparams["n_samples"])
@@ -620,6 +623,18 @@ optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=weight_decay
 )  # Steepest gradient descent, can use different optimizers
 
+#### Fixed validation noise (ddpm) ####
+# One (t, noise) draw per validation batch, made once here, so every epoch's validation loss scores the same noisy
+# maps and its changes reflect the model rather than the draw. The validation dataloader is not shuffled, so batch i
+# holds the same cubes every epoch.
+validation_draws = None
+if network == "ddpm":
+    validation_draws = []
+    for _, y, _, _ in validation_dataloader:
+        draw_t = torch.randint(0, hyperparams["n_timesteps"], (y.shape[0],), device=device)
+        draw_noise = torch.randn(y.shape, device=device)
+        validation_draws.append((draw_t, draw_noise))
+
 #### Initialize losses and specific accuracies ####
 training_losses = np.zeros((epochs))
 validation_losses = np.zeros((epochs))
@@ -634,7 +649,7 @@ for t in range(epochs):
     logger.info("Epoch %d/%d", t + 1, epochs)
     training_losses[t], training_mses[t] = train_loop(train_dataloader, model, compute_loss, optimizer, t)
     validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = validation_loop(
-        validation_dataloader, model, compute_loss, t
+        validation_dataloader, model, compute_loss, t, validation_draws
     )
 
 
