@@ -10,8 +10,8 @@ from conngafit.models.blocks import (
     SpectralAttentionPool,
     Stem,
     Upsample,
-    _check_stage_compatibility,
     _match_spatial,
+    check_stage_compatibility,
 )
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
@@ -196,7 +196,7 @@ class DenoisingUNet3d(nn.Module):
       decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 TimeDeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
     Every block is FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
-    construction: input_shape is checked against n_stages (_check_stage_compatibility) and forward()
+    construction: input_shape is checked against n_stages (check_stage_compatibility) and forward()
     rejects any other size. No weight depends on them, so a trained denoiser's state_dict loads into
     one built for another size (with the same n_maps).
 
@@ -244,7 +244,7 @@ class DenoisingUNet3d(nn.Module):
         self.input_shape = input_shape
         self.map_shape = tuple(int(v) for v in map_shape) if map_shape is not None else input_shape[1:]
         self.n_maps = n_maps
-        _check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
+        check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
         t_dim = t_dim or 4 * n_filt0
         block_kw = dict(

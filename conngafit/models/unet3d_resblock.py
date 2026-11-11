@@ -12,8 +12,8 @@ from conngafit.models.blocks import (
     ResidualBlock,
     Stem,
     Upsample,
-    _check_stage_compatibility,
     _match_spatial,
+    check_stage_compatibility,
 )
 from conngafit.models.diagnostics import save_summed_spectral_channels
 
@@ -58,7 +58,7 @@ class NeuralNetwork(nn.Module):
 
     The encoder/decoder are built in loops and the skip alignment + adaptive pool are
     shape-agnostic, so the network runs at any input size and any depth >= 2. __init__
-    calls _check_stage_compatibility, which raises a descriptive ValueError (naming the
+    calls check_stage_compatibility, which raises a descriptive ValueError (naming the
     tightest axis) if `input_shape` cannot survive the stem plus n_stages-1 ceil-halvings.
     Every activation is configurable via the *_activation args.
 
@@ -73,7 +73,7 @@ class NeuralNetwork(nn.Module):
             then overrides n_fc_layers). <= 0 or empty means no hidden layers - the pooled
             features go straight to the output Linear (with a dropout in between).
         n_stages: number of encoder stages (>= 2); the decoder has n_stages - 1. Validated
-            against input_shape at construction (see _check_stage_compatibility).
+            against input_shape at construction (see check_stage_compatibility).
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
         output_size: length of each flattened map. Defaults to nX*nY from input_shape
@@ -173,7 +173,7 @@ class NeuralNetwork(nn.Module):
             )
         self.output_size = int(output_size) if output_size is not None else map_size
         # fail fast if this input can't be halved n_stages-1 times after the stem
-        _check_stage_compatibility(input_shape, n_stages)
+        check_stage_compatibility(input_shape, n_stages)
         logger.debug("output size = %d", self.output_size)
         self.save_itr = 0  # forward() call counter; numbers the latent-image filenames
 
