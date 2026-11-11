@@ -636,6 +636,24 @@ optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=weight_decay
 )  # Steepest gradient descent, can use different optimizers
 
+# Alternative: AdamW. To use it, uncomment the block below in place of Adam above, and raise weight_decay in the
+# hyperparameter file (1e-2, PyTorch's AdamW default).
+# AdamW decouples weight decay from the gradient step (Loshchilov & Hutter 2019): every decayed weight shrinks by
+# the same factor (1 - learning_rate * weight_decay) per step. Adam's weight_decay instead adds an L2 term to the
+# gradient, which its per-parameter scaling then distorts, so weights with small gradients are decayed far harder.
+# Only conv and linear weights (ndim > 1), which set how strongly each layer responds to its input, are decayed.
+# Biases and the GroupNorm/BatchNorm scales and shifts (ndim <= 1) set offsets and activation scales rather than
+# model complexity, so decaying them would bias the outputs and fight the normalization instead of regularizing.
+# decay_params = [p for p in model.parameters() if p.ndim > 1]
+# no_decay_params = [p for p in model.parameters() if p.ndim <= 1]
+# optimizer = torch.optim.AdamW(
+#     [
+#         {"params": decay_params, "weight_decay": weight_decay},
+#         {"params": no_decay_params, "weight_decay": 0.0},
+#     ],
+#     lr=learning_rate,
+# )
+
 #### Exponential moving average (EMA) of the weights ####
 # With a constant learning rate the raw weights jitter around a minimum, by an amount set by the gradient
 # noise of each batch (for the ddpm also the random t and noise of every sample). The EMA,
