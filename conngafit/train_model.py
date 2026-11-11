@@ -237,26 +237,23 @@ def train(
         batches_per_training_set = np.ceil(len(training_data) / batch_size)
         logger.info("Batches per training set = %d", batches_per_training_set)
 
-    #### Image normalization, from every training image (augmentation doesn't change their mean/spread) ####
-    # Each cube's mean and variance are combined exactly (Chan et al.'s parallel algorithm), one cube in memory at a time
-    n_pixels, training_mean, sum_squared_deviations = 0, 0.0, 0.0
+    #### Image normalization and label scaling, from every training file (augmentation changes neither) ####
+    # One cube in memory at a time. Every cube has the same size, so the training set's mean (and mean of squares)
+    # is the mean of each cube's.
+    cube_means, cube_mean_squares, labels = [], [], []
     for i in range(len(training_data.img_paths)):
         cube = training_data.image(i)
-        n, mean = cube.size, cube.mean(dtype=np.float64)
-        delta = mean - training_mean
-        sum_squared_deviations += cube.var(dtype=np.float64) * n + delta**2 * n_pixels * n / (n_pixels + n)
-        training_mean += delta * n / (n_pixels + n)
-        n_pixels += n
-    training_stdv = np.sqrt(sum_squared_deviations / n_pixels)
-    del cube
+        cube_means.append(cube.mean(dtype=np.float64))
+        cube_mean_squares.append(np.square(cube, dtype=np.float64).mean())
+        labels.append(training_data.label(i))  # (n_maps, n_pixels or n_rings)
+    training_mean = np.mean(cube_means)
+    training_stdv = np.sqrt(np.mean(cube_mean_squares) - training_mean**2)  # var = E[x²] - E[x]²
     logger.info("Image normalization: mean = %.4g, stdv = %.4g", training_mean, training_stdv)
+    all_labels = np.concatenate(labels, axis=1)  # (n_maps, every training pixel or ring)
 
-    #### Label scaling of each target, from every training label (augmentation doesn't change their range) ####
     # Labels are scaled to (label - label_offset) / label_scale for training; predictions and labels are
     # scaled back to physical units for every saved output and plot. Both have shape (n_maps, 1), one per target.
     label_offset, label_scale = np.zeros((n_maps, 1)), np.ones((n_maps, 1))
-    # (n_maps, every training pixel or ring)
-    all_labels = np.concatenate([training_data.label(i) for i in range(len(training_data.img_paths))], axis=1)
     if label_scaling != "none":
         if label_scaling == "symmetric":  # e.g. radial momentum: divide by max(|label|), to [-1, 1]
             label_scale = np.max(np.abs(all_labels), axis=1, keepdims=True)
