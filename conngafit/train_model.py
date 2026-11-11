@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from functools import partial
 
 import h5py
-import matplotlib
 import numpy as np
 import torch
 from torch import nn
@@ -26,9 +25,6 @@ from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
-
-matplotlib.use("Agg")
-from matplotlib import pyplot as plt  # noqa: E402 - after choosing the backend
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +96,9 @@ def dataset_sources(section, name, data_dir=None):
 @dataclass
 class TrainingResult:
     """What train() returns: the trained network's path (without .pt/.hdf5), each epoch's losses (the training
-    objective), MSEs of the predicted mean and validation accuracies (NaN on epochs between predict_every), and the
-    test set's final loss, MSE and accuracy."""
+    objective), MSEs of the predicted mean and validation accuracies (NaN on epochs between predict_every), each
+    validation sample's accuracy every epoch, (n_validation, epochs), and the test set's final loss, MSE, accuracy and
+    accuracy of each sample."""
 
     model_path: str
     training_losses: np.ndarray
@@ -109,9 +106,11 @@ class TrainingResult:
     training_mses: np.ndarray
     validation_mses: np.ndarray
     validation_accuracies: np.ndarray
+    specific_accuracies: np.ndarray
     final_test_loss: float
     final_test_mse: float
     final_test_accuracy: float
+    final_test_specific_accuracy: np.ndarray
 
 
 def weighted_mse_loss(pred, y, w):
@@ -183,7 +182,7 @@ def save_batch_outputs(
     x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see compute_loss, or None), in
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
-        save_correlation_plots.
+        plotting.save_correlation_plots.
     """
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
@@ -216,15 +215,6 @@ def save_batch_outputs(
             plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
     if saved is not None:
         saved.append((np_pred, np_y))
-
-
-def save_correlation_plots(saved, targets, output_base, epoch):
-    """Write a correlation plot of each target's predicted and true maps, from the (predictions, labels) batches
-    save_batch_outputs collected in saved, in physical units."""
-    all_pred = np.concatenate([batch_pred for batch_pred, _ in saved])
-    all_y = np.concatenate([batch_y for _, batch_y in saved])
-    for m, target in enumerate(targets):
-        plotting.make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
 
 
 def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, save_batch=None):
@@ -385,6 +375,64 @@ def make_dataloaders(training_data, validation_data, test_data, batch_size=None,
     test_loader = DataLoader(test_data, batch_size=test_batch_size)
     logger.info("Data loaded: %d training batches of up to %d samples per epoch", len(training_loader), batch_size)
     return training_loader, validation_loader, test_loader
+
+
+def save_checkpoint(
+    model_path,
+    model,
+    *,
+    image_stats,
+    label_offset,
+    label_scale,
+    hyperparams,
+    hyperparams_text,
+    datasets_text,
+    run_name,
+    input_shape,
+    targets,
+    radial_bins,
+    radial_projection,
+):
+    """Save the trained network's weights to model_path + ".pt", and to model_path + ".hdf5" everything needed to
+    rebuild and use it (see use_model.load_model): the image normalization (image_stats, its mean and standard
+    deviation), each target's label scaling, every hyperparameter, and the parameter text of both files."""
+    torch.save(model.state_dict(), model_path + ".pt")
+
+    with h5py.File(model_path + ".hdf5", "w") as hf_norm:
+        hf_norm.create_dataset("image_stats", data=np.array(image_stats))
+        hf_norm.create_dataset(
+            "label_stats", data=np.stack([label_offset.ravel(), label_scale.ravel()])
+        )  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
+        for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
+            hf_norm.create_dataset(key, data=value)
+        hf_norm.create_dataset("run_name", data=run_name)
+        hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
+        # In the order of the network's output maps
+        hf_norm.create_dataset("target", data=np.array(targets, dtype=h5py.string_dtype()))
+        if radial_bins is not None:
+            hf_norm.create_dataset("radial_bins", data=radial_bins)
+            hf_norm.create_dataset("radial_projection", data=radial_projection)
+        # The full parameter files, so every trained model records exactly what it was trained with
+        hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
+        hf_norm.create_dataset("datasets_text", data=datasets_text)
+
+
+def save_history(output, result, training_names, validation_names, testing_names):
+    """Save a run's loss history (a TrainingResult) and its sets' sample names to output + "_LossesAndAccuracies.hdf5"."""
+    with h5py.File(output + "_LossesAndAccuracies.hdf5", "w") as hf_diagnostic:
+        hf_diagnostic.create_dataset("training_losses", data=result.training_losses)
+        hf_diagnostic.create_dataset("validation_losses", data=result.validation_losses)
+        hf_diagnostic.create_dataset("training_mses", data=result.training_mses)
+        hf_diagnostic.create_dataset("validation_mses", data=result.validation_mses)
+        hf_diagnostic.create_dataset("validation_accuracies", data=result.validation_accuracies)
+        hf_diagnostic.create_dataset("specific_accuracies", data=result.specific_accuracies)
+        hf_diagnostic.create_dataset("training_names", data=training_names)
+        hf_diagnostic.create_dataset("validation_names", data=validation_names)
+        hf_diagnostic.create_dataset("testing_names", data=testing_names)
+        hf_diagnostic.create_dataset("final_test_loss", data=result.final_test_loss)
+        hf_diagnostic.create_dataset("final_test_mse", data=result.final_test_mse)
+        hf_diagnostic.create_dataset("final_test_accuracy", data=result.final_test_accuracy)
+        hf_diagnostic.create_dataset("final_test_specific_accuracy", data=result.final_test_specific_accuracy)
 
 
 def train(
@@ -578,29 +626,25 @@ def train(
             model, validation_dataloader, device, predict, accuracy_tolerance, "Validation", n_samples, save_validation
         )
         if validation_outputs and radial_bins is None:  # Correlation plots compare maps
-            save_correlation_plots(validation_outputs, targets, diagnostic_output + "_ValidationCorrelationPlot", t)
+            plotting.save_correlation_plots(
+                validation_outputs, targets, diagnostic_output + "_ValidationCorrelationPlot", t
+            )
 
-    # Save the Trained Model
-    torch.save(model.state_dict(), model_output_path + ".pt")
-
-    # Save the normalization information for loading data
-    with h5py.File(model_output_path + ".hdf5", "w") as hf_norm:
-        hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
-        hf_norm.create_dataset(
-            "label_stats", data=np.stack([label_offset.ravel(), label_scale.ravel()])
-        )  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
-        for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
-            hf_norm.create_dataset(key, data=value)
-        hf_norm.create_dataset("run_name", data=run_name)
-        hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
-        # In the order of the network's output maps
-        hf_norm.create_dataset("target", data=np.array(targets, dtype=h5py.string_dtype()))
-        if radial_bins is not None:
-            hf_norm.create_dataset("radial_bins", data=radial_bins)
-            hf_norm.create_dataset("radial_projection", data=radial_projection)
-        # The full parameter files, so every trained model records exactly what it was trained with
-        hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
-        hf_norm.create_dataset("datasets_text", data=datasets_text)
+    save_checkpoint(
+        model_output_path,
+        model,
+        image_stats=(training_mean, training_stdv),
+        label_offset=label_offset,
+        label_scale=label_scale,
+        hyperparams=hyperparams,
+        hyperparams_text=hyperparams_text,
+        datasets_text=datasets_text,
+        run_name=run_name,
+        input_shape=input_shape,
+        targets=targets,
+        radial_bins=radial_bins,
+        radial_projection=radial_projection,
+    )
 
     testing_names = test_data.names
 
@@ -619,7 +663,7 @@ def train(
         model, test_dataloader, device, True, accuracy_tolerance, "Test", n_samples, save_test
     )
     if test_outputs and radial_bins is None:  # Correlation plots compare maps
-        save_correlation_plots(test_outputs, targets, diagnostic_output + "_TestCorrelationPlot", epochs - 1)
+        plotting.save_correlation_plots(test_outputs, targets, diagnostic_output + "_TestCorrelationPlot", epochs - 1)
     logger.info("Testing set loss = %g", final_test_loss)
     logger.info("Testing set MSE = %g", final_test_mse)
     logger.info("Testing set accuracy = %g", final_test_accuracy)
@@ -627,71 +671,20 @@ def train(
     for name, accuracy in zip(testing_names, final_test_specific_accuracy):
         logger.info("  %s: %.1f%%", name, accuracy)
 
-    #### Make Basic Diagnostic Outputs ####
-    def plot_loss(losses, title, output):
-        """Plot a loss curve per epoch, on a log axis unless some value isn't positive (the Gaussian NLL can be negative)."""
-        plt.figure()
-        plt.plot(np.arange(1, len(losses) + 1), losses)
-        if np.all(losses > 0):
-            plt.yscale("log")
-        plt.title(title)
-        plt.xlabel("Epoch")
-        plt.ylabel(loss_label)
-        plt.savefig(output)
-        plt.close()
-
-    if save_diagnostics:
-        plot_loss(training_losses, "Training Loss", diagnostic_output + "_trainingLoss.png")
-        plot_loss(validation_losses, "Validation Loss", diagnostic_output + "_validationLoss.png")
-
-        # Accuracies are NaN on the epochs between predict_every, so only the predicted epochs are plotted
-        epoch_numbers = np.arange(1, epochs + 1)
-        predicted = np.isfinite(validation_accuracies)
-
-        plt.figure()
-        plt.plot(epoch_numbers[predicted], validation_accuracies[predicted], marker="o", ms=3)
-        plt.title(f"Validation Accuracy (within {ACCURACY_TOLERANCE:g} label std. dev.)")
-        plt.xlabel("Epoch")
-        plt.ylabel("Accuracy [%]")
-        plt.ylim([0, 101])
-        plt.savefig(diagnostic_output + "_ValidationAccuracy.png")
-        plt.close()
-
-        plt.figure()
-        for name, accuracies in zip(validation_data.names, specific_accuracies):
-            plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
-        if len(validation_data.names) <= 10:  # Name each line, unless there are too many to read
-            plt.legend(fontsize=6)
-        plt.title("Validation Accuracy for each Snapshot")
-        plt.xlabel("Epoch")
-        plt.ylabel("Accuracy [%]")
-        plt.ylim([0, 101])
-        plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
-        plt.close()
-
-    with h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w") as hf_diagnostic:
-        hf_diagnostic.create_dataset("training_losses", data=training_losses)
-        hf_diagnostic.create_dataset("validation_losses", data=validation_losses)
-        hf_diagnostic.create_dataset("training_mses", data=training_mses)
-        hf_diagnostic.create_dataset("validation_mses", data=validation_mses)
-        hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
-        hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
-        hf_diagnostic.create_dataset("training_names", data=training_data.names)
-        hf_diagnostic.create_dataset("validation_names", data=validation_data.names)
-        hf_diagnostic.create_dataset("testing_names", data=testing_names)
-        hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
-        hf_diagnostic.create_dataset("final_test_mse", data=final_test_mse)
-        hf_diagnostic.create_dataset("final_test_accuracy", data=final_test_accuracy)
-        hf_diagnostic.create_dataset("final_test_specific_accuracy", data=final_test_specific_accuracy)
-
-    return TrainingResult(
+    result = TrainingResult(
         model_path=model_output_path,
         training_losses=training_losses,
         validation_losses=validation_losses,
         training_mses=training_mses,
         validation_mses=validation_mses,
         validation_accuracies=validation_accuracies,
+        specific_accuracies=specific_accuracies,
         final_test_loss=final_test_loss,
         final_test_mse=final_test_mse,
         final_test_accuracy=final_test_accuracy,
+        final_test_specific_accuracy=final_test_specific_accuracy,
     )
+    if save_diagnostics:
+        plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, ACCURACY_TOLERANCE)
+    save_history(diagnostic_output, result, training_data.names, validation_data.names, testing_names)
+    return result

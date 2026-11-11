@@ -345,3 +345,58 @@ def make_correlation_plot(pred_image, input_image, output):
     hf.create_dataset("corr1d", data=corr1d)
     hf.create_dataset("corr2d", data=corr2d)
     hf.close()
+
+
+def save_correlation_plots(saved, targets, output_base, epoch):
+    """Write a correlation plot of each target's predicted and true maps, from the (predictions, labels) batches
+    save_batch_outputs collected in saved, in physical units."""
+    all_pred = np.concatenate([batch_pred for batch_pred, _ in saved])
+    all_y = np.concatenate([batch_y for _, batch_y in saved])
+    for m, target in enumerate(targets):
+        make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
+
+
+def plot_loss(losses, title, ylabel, output):
+    """Plot a loss curve per epoch, on a log axis unless some value isn't positive (the Gaussian NLL can be negative)."""
+    plt.figure()
+    plt.plot(np.arange(1, len(losses) + 1), losses)
+    if np.all(losses > 0):
+        plt.yscale("log")
+    plt.title(title)
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.savefig(output)
+    plt.close()
+
+
+def plot_history(output, result, validation_names, loss_label, accuracy_tolerance):
+    """Plot a run's training and validation losses (loss_label names the training objective), its validation
+    accuracy, and each validation sample's accuracy, to output + "_trainingLoss.png" and so on. result is
+    train_model.train's TrainingResult; accuracy_tolerance is the accuracy's tolerance, in label standard deviations."""
+    plot_loss(result.training_losses, "Training Loss", loss_label, output + "_trainingLoss.png")
+    plot_loss(result.validation_losses, "Validation Loss", loss_label, output + "_validationLoss.png")
+
+    # Accuracies are NaN on the epochs between predict_every, so only the predicted epochs are plotted
+    epoch_numbers = np.arange(1, len(result.validation_accuracies) + 1)
+    predicted = np.isfinite(result.validation_accuracies)
+
+    plt.figure()
+    plt.plot(epoch_numbers[predicted], result.validation_accuracies[predicted], marker="o", ms=3)
+    plt.title(f"Validation Accuracy (within {accuracy_tolerance:g} label std. dev.)")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy [%]")
+    plt.ylim([0, 101])
+    plt.savefig(output + "_ValidationAccuracy.png")
+    plt.close()
+
+    plt.figure()
+    for name, accuracies in zip(validation_names, result.specific_accuracies):
+        plt.plot(epoch_numbers[predicted], accuracies[predicted], lw=0.5, marker="o", ms=2, label=name)
+    if len(validation_names) <= 10:  # Name each line, unless there are too many to read
+        plt.legend(fontsize=6)
+    plt.title("Validation Accuracy for each Snapshot")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy [%]")
+    plt.ylim([0, 101])
+    plt.savefig(output + "_ValidationAccuracyPerSnapshot.png")
+    plt.close()
