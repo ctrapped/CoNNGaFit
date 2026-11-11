@@ -1,4 +1,4 @@
-"""The networks train_model_unet.py trains and use_model.py runs, named by a hyperparameter file's network key:
+"""The networks train_model.train trains and use_model.py runs, named by the hyperparameters' network key:
 "resblock" - the residual U-Net in unet3d_resblock.py, predicting maps or radial curves
 "ddpm"     - the conditional diffusion model in unet3d_ddpm.py, predicting maps
 """
