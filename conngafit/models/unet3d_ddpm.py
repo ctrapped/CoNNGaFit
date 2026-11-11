@@ -343,7 +343,7 @@ class DenoisingUNet3d(nn.Module):
         enc_shapes, shape = [], stem
         for i, ch in enumerate(self.enc_channels):
             if i > 0:
-                shape = tuple(-(-s // 2) for s in shape)  # ceil(N/2) downsample
+                shape = tuple(math.ceil(s / 2) for s in shape)  # downsample
             enc_shapes.append(shape)
             rows.append((f"encoder stage {i}" + (" (no downsample)" if i == 0 else ""), ch, shape))
 

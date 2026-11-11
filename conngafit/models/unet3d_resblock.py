@@ -1,4 +1,5 @@
 import logging
+import math
 
 import numpy as np
 import torch
@@ -30,38 +31,29 @@ def _stem_out_shape(input_shape):
     """(nSpec, nX, nY) shape after layer_stem: a stride-2 conv then a stride-2 maxpool, each
     exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4) -
     true for any kernel size (ceiling division composes exactly: ceil(ceil(n/2)/2) = ceil(n/4))."""
-    return tuple(-(-n // 4) for n in input_shape)
+    return tuple(math.ceil(n / 4) for n in input_shape)
 
 
 def _check_stage_compatibility(input_shape, n_stages):
-    """Raise ValueError unless the input survives n_stages-1 halvings after the stem.
-
-    The encoder has n_stages stages: the first keeps its shape, each later one
-    downsamples every axis to ceil(N/2). So after the stem there are n_stages-1
-    halvings, and an axis that reaches 1 before they are all done cannot be
-    downsampled again. The message reports the tightest axis and the largest
-    n_stages that axis allows. Returns the post-stem (nSpec, nX, nY) shape on success.
-    """
+    """The encoder has n_stages stages: the first keeps its shape, each later one downsamples every axis to
+    ceil(N/2). Return the (nSpec, nX, nY) shape after the stem, after checking that every axis can then be halved
+    n_stages - 1 times. If not, raise a ValueError naming the smallest axis and the largest n_stages it allows."""
     stem_shape = _stem_out_shape(input_shape)
-    n_halvings = n_stages - 1
-    tightest = (1 << 30, "", 0, 0)  # (max_halvings, axis_name, input_len, post_stem_len)
-    for name, n0, n_stem in zip(("spectral", "x", "y"), input_shape, stem_shape):
-        if n_stem < 1:
-            raise ValueError(
-                f"input {name} axis = {n0} is too small: the stem reduces it to {n_stem} (< 1). Enlarge that axis."
-            )
-        cap, n = 0, n_stem  # count ceil-halvings this axis can take before hitting 1
-        while n >= 2:
-            n = -(-n // 2)
-            cap += 1
-        if cap < tightest[0]:
-            tightest = (cap, name, n0, n_stem)
-    if tightest[0] < n_halvings:
-        cap, name, n0, n_stem = tightest
+    n_halvings = n_stages - 1  # Encoder stage 0 keeps its input shape; each later stage halves every axis
+    names = ("spectral", "x", "y")
+    max_halvings = []
+    for n in stem_shape:
+        count = 0  # ceil-halvings this axis can take before reaching 1
+        while n > 1:
+            n = math.ceil(n / 2)
+            count += 1
+        max_halvings.append(count)
+    i = int(np.argmin(max_halvings))  # the axis that allows the fewest halvings
+    if max_halvings[i] < n_halvings:
         raise ValueError(
-            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the "
-            f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
-            f"Use n_stages <= {cap + 1} or enlarge that axis."
+            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the {names[i]} axis "
+            f"(input {input_shape[i]}, {stem_shape[i]} after the stem) supports at most {max_halvings[i]}. "
+            f"Use n_stages <= {max_halvings[i] + 1} or enlarge that axis."
         )
     return stem_shape
 
@@ -334,7 +326,7 @@ class NeuralNetwork(nn.Module):
             )
         elif head == "conv_halfres":
             # Head: fold the half-resolution spectral axis into channels -> HalfResConvHead
-            self.half_shape = tuple(-(-n // 2) for n in input_shape)
+            self.half_shape = tuple(math.ceil(n / 2) for n in input_shape)
             self.fc_widths = []
             self.head_channels = head_channels
             self.halfres_head = HalfResConvHead(
@@ -528,7 +520,7 @@ class NeuralNetwork(nn.Module):
         enc_shapes, shape = [], stem
         for i, ch in enumerate(self.enc_channels):
             if i > 0:
-                shape = tuple(-(-s // 2) for s in shape)  # ceil(N/2) downsample
+                shape = tuple(math.ceil(s / 2) for s in shape)  # downsample
             enc_shapes.append(shape)
             tag = f"encoder stage {i}" + (" (no downsample)" if i == 0 else "")
             rows.append((tag, ch, shape))
