@@ -263,7 +263,6 @@ def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, sa
     batch was predicted.
     """
     model.train()
-    size = len(dataloader.dataset)
     epoch_loss, epoch_mse = 0.0, 0.0
     n_predicted = 0  # Batches with predictions, made every predict_every epochs
     num_batches = len(dataloader)
@@ -287,8 +286,7 @@ def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, sa
         optimizer.step()
 
         if batch % 100 == 0:
-            current = batch * len(x)
-            logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
+            logger.info("loss: %7f [%5d/%5d]", loss.item(), batch * len(x), len(dataloader.dataset))
 
     return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
 
@@ -573,7 +571,6 @@ def train(
     train_dataloader, validation_dataloader, test_dataloader = make_dataloaders(
         training_data, validation_data, test_data, batch_size, test_batch_size
     )
-    logger.info("Data loaded")
 
     # The network
     input_shape = tuple(
