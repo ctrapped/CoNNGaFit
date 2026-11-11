@@ -18,7 +18,7 @@ import h5py
 import numpy as np
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
-sys.path.insert(0, str(EXAMPLES_DIR))  # demo_utils and demo_plots
+sys.path.append(str(EXAMPLES_DIR))  # demo_utils and demo_plots; after this folder, so its own demo.py is found
 
 from conngafit.datasets import ring_index  # noqa: E402
 from conngafit.logging_setup import add_logging_arguments, configure_logging  # noqa: E402

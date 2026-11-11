@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
-sys.path.insert(0, str(EXAMPLES_DIR))  # demo_utils and demo_plots
+sys.path.append(str(EXAMPLES_DIR))  # demo_utils and demo_plots; after this folder, so its own demo.py is found
 
 from conngafit.datasets import TARGET_SETTINGS, ring_index, ring_radii  # noqa: E402
 from conngafit.use_model import load_model, predict  # noqa: E402
