@@ -605,24 +605,23 @@ def train(
     torch.save(model.state_dict(), model_output_path + ".pt")
 
     # Save the normalization information for loading data
-    hf_norm = h5py.File(model_output_path + ".hdf5", "w")
-    hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
-    hf_norm.create_dataset(
-        "label_stats", data=np.stack([label_offset[:, 0], label_scale[:, 0]])
-    )  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
-    for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
-        hf_norm.create_dataset(key, data=value)
-    hf_norm.create_dataset("run_name", data=run_name)
-    hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
-    # In the order of the network's output maps
-    hf_norm.create_dataset("target", data=np.array(targets, dtype=h5py.string_dtype()))
-    if radial_bins is not None:
-        hf_norm.create_dataset("radial_bins", data=radial_bins)
-        hf_norm.create_dataset("radial_projection", data=radial_projection)
-    # The full parameter files, so every trained model records exactly what it was trained with
-    hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
-    hf_norm.create_dataset("datasets_text", data=datasets_text)
-    hf_norm.close()
+    with h5py.File(model_output_path + ".hdf5", "w") as hf_norm:
+        hf_norm.create_dataset("image_stats", data=np.array([training_mean, training_stdv]))
+        hf_norm.create_dataset(
+            "label_stats", data=np.stack([label_offset[:, 0], label_scale[:, 0]])
+        )  # (2, n_maps): physical label = scaled label * label_scale + label_offset, for each target
+        for key, value in hyperparams.items():  # Every hyperparameter of the network, including network itself
+            hf_norm.create_dataset(key, data=value)
+        hf_norm.create_dataset("run_name", data=run_name)
+        hf_norm.create_dataset("input_shape", data=input_shape)  # Needed to rebuild the network for inference
+        # In the order of the network's output maps
+        hf_norm.create_dataset("target", data=np.array(targets, dtype=h5py.string_dtype()))
+        if radial_bins is not None:
+            hf_norm.create_dataset("radial_bins", data=radial_bins)
+            hf_norm.create_dataset("radial_projection", data=radial_projection)
+        # The full parameter files, so every trained model records exactly what it was trained with
+        hf_norm.create_dataset("hyperparams_text", data=hyperparams_text)
+        hf_norm.create_dataset("datasets_text", data=datasets_text)
 
     # Testing Data
 
@@ -690,22 +689,20 @@ def train(
         plt.ylim([0, 101])
         plt.savefig(diagnostic_output + "_ValidationAccuracyPerSnapshot.png")
 
-    hf_diagnostic = h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w")
-    hf_diagnostic.create_dataset("training_losses", data=training_losses)
-    hf_diagnostic.create_dataset("validation_losses", data=validation_losses)
-    hf_diagnostic.create_dataset("training_mses", data=training_mses)
-    hf_diagnostic.create_dataset("validation_mses", data=validation_mses)
-    hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
-    hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
-    hf_diagnostic.create_dataset("training_names", data=training_names)
-    hf_diagnostic.create_dataset("validation_names", data=validation_names)
-    hf_diagnostic.create_dataset("testing_names", data=testing_names)
-    hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
-    hf_diagnostic.create_dataset("final_test_mse", data=final_test_mse)
-    hf_diagnostic.create_dataset("final_test_accuracy", data=final_test_accuracy)
-    hf_diagnostic.create_dataset("final_test_specific_accuracy", data=final_test_specific_accuracy)
-
-    hf_diagnostic.close()
+    with h5py.File(diagnostic_output + "_LossesAndAccuracies.hdf5", "w") as hf_diagnostic:
+        hf_diagnostic.create_dataset("training_losses", data=training_losses)
+        hf_diagnostic.create_dataset("validation_losses", data=validation_losses)
+        hf_diagnostic.create_dataset("training_mses", data=training_mses)
+        hf_diagnostic.create_dataset("validation_mses", data=validation_mses)
+        hf_diagnostic.create_dataset("validation_accuracies", data=validation_accuracies)
+        hf_diagnostic.create_dataset("specific_accuracies", data=specific_accuracies)
+        hf_diagnostic.create_dataset("training_names", data=training_names)
+        hf_diagnostic.create_dataset("validation_names", data=validation_names)
+        hf_diagnostic.create_dataset("testing_names", data=testing_names)
+        hf_diagnostic.create_dataset("final_test_loss", data=final_test_loss)
+        hf_diagnostic.create_dataset("final_test_mse", data=final_test_mse)
+        hf_diagnostic.create_dataset("final_test_accuracy", data=final_test_accuracy)
+        hf_diagnostic.create_dataset("final_test_specific_accuracy", data=final_test_specific_accuracy)
 
     return TrainingResult(
         model_path=model_output_path,
