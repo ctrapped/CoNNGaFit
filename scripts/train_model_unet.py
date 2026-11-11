@@ -520,7 +520,6 @@ def validation_loop(dataloader, model, loss_fn, epoch, fixed_draws=None):
     if final and radial_bins is None:
         save_correlation_plots(all_pred, all_y, diagnostic_output + "_ValidationCorrelationPlot", epoch)
 
-    model.train()
     return validation_loss, validation_mse, accuracy, specific_accuracy
 
 
@@ -567,7 +566,6 @@ def test_loop(dataloader, model, loss_fn, epoch):
     if final and radial_bins is None:
         save_correlation_plots(all_pred, all_y, diagnostic_output + "_TestCorrelationPlot", epoch)
 
-    model.train()
     return test_loss, test_mse, accuracy, specific_accuracy
 
 
@@ -667,6 +665,10 @@ optimizer = torch.optim.Adam(
 # averages to itself.
 ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay), use_buffers=True)
 eval_model = ema_model.module  # The weights every evaluation uses and that are saved
+# The EMA copy is never trained, so it stays in eval mode for good: dropout is off whenever it is evaluated or
+# sampled from, including the ddpm's training-set predictions inside train_loop. The raw model's mode is set
+# by train_loop (model.train()) each epoch and is not changed by the validation or test loops.
+eval_model.eval()
 
 #### Fixed validation noise (ddpm) ####
 # One (t, noise) draw per validation batch, made once here, so every epoch's validation loss scores the same noisy
