@@ -426,6 +426,19 @@ class GaussianDiffusion(nn.Module):
         """abar_t reshaped to broadcast against (B, n_maps, H, W) maps."""
         return self.alpha_bar[t].view(-1, *([1] * (like.dim() - 1)))
 
+    def sample_timesteps(self, n, device=None):
+        """n training timesteps, stratified over 0..T-1 (the low-discrepancy sampler of Kingma et al. 2021).
+
+        [0, 1) is split into n equal strata and every sample gets one stratum, so a batch always covers the noise
+        levels evenly instead of clumping by chance. A single random offset shifts all strata together and the
+        strata are handed out in random order, so each sample's t is still uniform over 0..T-1: the loss has the
+        same expectation as with independent draws, but less variance over t.
+        """
+        strata = (torch.arange(n, device=device) + torch.rand((), device=device)) / n
+        t = (strata * self.n_timesteps).long()[torch.randperm(n, device=device)]
+        # Float rounding can land the top stratum exactly on 1.0, which would give t = T
+        return t.clamp(max=self.n_timesteps - 1)
+
     def q_sample(self, y0, t, noise):
         """Forward process: jump straight from y_0 to y_t in closed form,
         y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)."""
@@ -435,13 +448,14 @@ class GaussianDiffusion(nn.Module):
     def forward(self, cube, y0, t=None, noise=None):
         """Training loss for a batch: MSE between true and predicted noise.
 
-        t: (B,) integer timesteps; None draws them uniformly from 0..T-1.
+        t: (B,) integer timesteps; None draws them uniformly from 0..T-1, stratified across the batch
+            (see sample_timesteps).
         noise: the eps added to y0, shaped like y0 (flattened maps if flat_labels); None draws it from N(0, I).
         Passing fixed t and noise makes the loss repeatable, e.g. to score validation sets the same way every epoch.
         """
         y0 = self._to_map(y0.float())
         if t is None:
-            t = torch.randint(0, self.n_timesteps, (y0.shape[0],), device=y0.device)
+            t = self.sample_timesteps(y0.shape[0], device=y0.device)
         if noise is None:
             noise = torch.randn_like(y0)
         else:

@@ -179,6 +179,16 @@ def test_alpha_bar_is_a_saved_buffer(make_diffusion):
     assert diffusion.alpha_bar.shape == (N_TIMESTEPS,)  # one value per timestep
 
 
+def test_sample_timesteps_are_uniform_over_all_timesteps(make_diffusion):
+    torch.manual_seed(0)
+    diffusion = make_diffusion()
+    n_draws = 3000  # batches of 3, so the strata don't line up with the timesteps
+    t = torch.cat([diffusion.sample_timesteps(3) for _ in range(n_draws)])
+    counts = torch.bincount(t, minlength=N_TIMESTEPS).float()
+    expected = len(t) / N_TIMESTEPS
+    assert ((counts - expected).abs() < 0.1 * expected).all()  # every timestep drawn about equally often
+
+
 def test_q_sample_mixes_signal_and_noise(make_diffusion):
     diffusion = make_diffusion()
     y0, noise = torch.randn(BATCH_SIZE, 1, *MAP_SHAPE), torch.randn(BATCH_SIZE, 1, *MAP_SHAPE)

@@ -691,11 +691,15 @@ eval_model.eval()
 # holds the same cubes every epoch.
 validation_draws = None
 if network == "ddpm":
+    # One timestep per validation cube, stratified over the whole set (see GaussianDiffusion.sample_timesteps), so
+    # the fixed draws cover the noise levels evenly; batch i takes the next len(batch) of them, in dataset order.
+    validation_t = model.sample_timesteps(len(validation_data), device=device)
     validation_draws = []
+    start = 0
     for _, y, _, _ in validation_dataloader:
-        draw_t = torch.randint(0, hyperparams["n_timesteps"], (y.shape[0],), device=device)
-        draw_noise = torch.randn(y.shape, device=device)
-        validation_draws.append((draw_t, draw_noise))
+        n = y.shape[0]
+        validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
+        start += n
 
 #### Initialize losses and specific accuracies ####
 training_losses = np.zeros((epochs))
