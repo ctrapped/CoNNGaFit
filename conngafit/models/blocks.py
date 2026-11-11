@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -106,6 +107,36 @@ class Stem(nn.Module):
         if return_half:
             return self.act(x), self.act(half)
         return self.act(x)
+
+
+#### Input-shape checks ####
+def _stem_out_shape(input_shape):
+    """(nSpec, nX, nY) shape after the Stem: a stride-2 conv then a stride-2 maxpool, each
+    exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4)."""
+    return tuple(math.ceil(n / 4) for n in input_shape)
+
+
+def _check_stage_compatibility(input_shape, n_stages):
+    """The encoder has n_stages stages: the first keeps its shape, each later one downsamples every axis to
+    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem. If not, raise a ValueError
+    naming the smallest axis and the largest n_stages it allows."""
+    stem_shape = _stem_out_shape(input_shape)
+    n_halvings = n_stages - 1  # Encoder stage 0 keeps its input shape; each later stage halves every axis
+    names = ("spectral", "x", "y")
+    max_halvings = []
+    for n in stem_shape:
+        count = 0  # ceil-halvings this axis can take before reaching 1
+        while n > 1:
+            n = math.ceil(n / 2)
+            count += 1
+        max_halvings.append(count)
+    i = int(np.argmin(max_halvings))  # the axis that allows the fewest halvings
+    if max_halvings[i] < n_halvings:
+        raise ValueError(
+            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the {names[i]} axis "
+            f"(input {input_shape[i]}, {stem_shape[i]} after the stem) supports at most {max_halvings[i]}. "
+            f"Use n_stages <= {max_halvings[i] + 1} or enlarge that axis."
+        )
 
 
 #### Encoder-side residual block ####
@@ -376,7 +407,6 @@ class ConvMapHead(nn.Module):
         super().__init__()
         if n_blocks < 0:
             raise ValueError("n_blocks must be >= 0")
-        self.channels, self.out_channels = channels, out_channels
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList([ResBlock2d(channels, channels, activation, max_groups) for _ in range(n_blocks)])
         self.dropout = nn.Dropout2d(p=dropout_rate)
@@ -389,33 +419,6 @@ class ConvMapHead(nn.Module):
         for blk in self.blocks:
             h = blk(h)
         return self.out(self.dropout(h))
-
-    def stage_shapes(self, in_xy, map_shape):
-        """(label, n_features, dims) rows for the head, given the (X, Y) of its input features."""
-        c, map_shape = self.channels, tuple(map_shape)
-        rows = [("head: spectral attention pool", c, tuple(in_xy)), ("head: resize to map", c, map_shape)]
-        rows += [(f"head: 2-d res block {k}", c, map_shape) for k in range(len(self.blocks))]
-        rows.append(("head: output conv", self.out_channels, map_shape))
-        return rows
-
-    def param_groups(self):
-        """(label, [modules]) aligned with stage_shapes() rows."""
-        groups = [("head: spectral attention pool", [self.pool]), ("head: resize to map", [])]
-        groups += [(f"head: 2-d res block {k}", [b]) for k, b in enumerate(self.blocks)]
-        groups.append(("head: output conv", [self.dropout, self.out]))
-        return groups
-
-    def row_note(self, label):
-        """summary() note for one of this head's rows (None for other labels)."""
-        if label == "head: spectral attention pool":
-            return "softmax weights over nSpec"
-        if label == "head: resize to map":
-            return "bilinear"
-        if label.startswith("head: 2-d res block"):
-            return f"activation={type(self.blocks[0].act1).__name__}"
-        if label == "head: output conv":
-            return f"{self.out_channels} channels"
-        return None
 
 
 class HalfResConvHead(nn.Module):

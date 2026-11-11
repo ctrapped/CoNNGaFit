@@ -23,7 +23,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, TARGETS, CoNNGaFitImageDataset, inclination_folders
-from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
+from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # noqa: E402 - after choosing the backend
@@ -537,7 +537,7 @@ def train(
         training_data[0][0].shape
     )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
     model = build_model(network, input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps).to(device)
-    model.summary(print_fn=logger.info, layers=False)  # stage table and parameter counts
+    logger.info("Network:\n%s", model_summary(model, input_shape))  # Layers, output shapes and parameter counts
     validation_names = validation_data.names
     training_names = training_data.names
 

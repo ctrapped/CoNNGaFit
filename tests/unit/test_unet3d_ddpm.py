@@ -16,8 +16,6 @@ MAP_SHAPE = INPUT_SHAPE[1:]
 DENOISER_KWARGS = dict(
     input_shape=INPUT_SHAPE, n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_stages=3, n_head_blocks=2
 )
-# stage_shapes() rows with no module of their own (inputs, concatenation, resize) are not hooked
-UNHOOKED_ROWS = ("input:", "+ skip", "resize to map", "+ noisy map")
 
 
 @pytest.fixture
@@ -155,30 +153,6 @@ def test_denoiser_backward_reaches_every_parameter(make_denoiser, n_maps):
         assert torch.isfinite(param.grad).all(), name  # no NaN/inf gradients
 
 
-@pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
-@pytest.mark.parametrize("map_shape", [MAP_SHAPE, (8, 8)])
-@pytest.mark.parametrize("n_maps", [1, N_MAPS])
-def test_denoiser_stage_shapes_match_forward_pass(make_denoiser, record_shapes, upsample_mode, map_shape, n_maps):
-    model = make_denoiser(upsample_mode=upsample_mode, map_shape=map_shape, n_maps=n_maps)
-    stages = [model.stem, *(blocks[-1] for blocks in model.encoder)]
-    for up, blocks in zip(model.upsamples, model.decoder):
-        stages += [up, blocks[-1]]
-    stages += [model.head.pool, *model.head.blocks, model.head.out]
-    recorded = record_shapes(stages)
-    model(*denoiser_inputs(map_shape=map_shape, n_maps=n_maps))
-    expected = [
-        (feats, tuple(shape))
-        for label, feats, shape in model.stage_shapes()
-        if not any(tag in label for tag in UNHOOKED_ROWS)
-    ]
-    assert recorded == expected
-
-
-def test_denoiser_param_breakdown_accounts_for_every_parameter(make_denoiser):
-    model = make_denoiser()
-    assert sum(n for _, n in model.param_breakdown()) == sum(p.numel() for p in model.parameters())
-
-
 #### Diffusion process ####
 def test_alpha_bar_is_a_saved_buffer(make_diffusion):
     diffusion = make_diffusion()
@@ -247,11 +221,3 @@ def test_sampling_denoises_every_sample_at_every_timestep(make_diffusion):
     diffusion.predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), N_SAMPLES)
     # one call per timestep, from T - 1 down to 0, each denoising every sample of every cube
     assert timesteps == [[t] * N_SAMPLES * BATCH_SIZE for t in reversed(range(N_TIMESTEPS))]
-
-
-def test_summary_reports_parameter_count(make_diffusion):
-    diffusion = make_diffusion()
-    lines = []
-    diffusion.summary(print_fn=lines.append)
-    n_params = sum(p.numel() for p in diffusion.denoiser.parameters())
-    assert any(f"{n_params:,} total" in line for line in lines)

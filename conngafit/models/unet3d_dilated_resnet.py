@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from conngafit.models.blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
-from conngafit.models.diagnostics import count_params, layer_param_lines, save_summed_spectral_channels
+from conngafit.models.diagnostics import save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,6 @@ logger = logging.getLogger(__name__)
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
 #
 # Written by Caleb Choban using Claude LLM, adapting unet3d_resblock.py's conventions.
-
-
-def _strided_out_shape(input_shape, stride):
-    """(nSpec, nX, nY) shape after a single conv with the given stride and _ceil_conv_pad
-    padding, i.e. ceil(N/stride) per axis."""
-    return tuple(-(-n // s) for n, s in zip(input_shape, stride))
 
 
 #### Encode: project the raw input cube into feature space ####
@@ -231,16 +225,10 @@ class NeuralNetwork(nn.Module):
             )
         self.output_size = int(output_size) if output_size is not None else map_size
         logger.debug("output size = %d", self.output_size)
-        self.n_fc = n_fc
         self.save_itr = 0  # forward() call counter; numbers the latent-image filenames
 
-        self.n_filt0 = n_filt0
-        self.kernel_stem = tuple(kernel_stem)
-        self.kernel_coder = tuple(kernel_coder)
         self.stem_stride = tuple(stem_stride)
-        self.n_blocks = n_blocks
         self.dilation_rates = tuple(dilation_rates)
-        self.encode_out_shape = _strided_out_shape(input_shape, self.stem_stride)
 
         # Encode: single conv, 1 -> n_filt0 channels, ceil(N/stem_stride) per axis
         self.layer_encode = Encoder(n_filt0, kernel_stem, stride=self.stem_stride, activation=encode_activation)
@@ -367,26 +355,6 @@ class NeuralNetwork(nn.Module):
         logvar = self.fc_out_logvar(x).unflatten(1, map_shape) if self.predict_variance else None
         return mean, logvar
 
-    def stage_shapes(self):
-        """Analytically compute the tensor shape at every stage (no forward pass).
-
-        Returns a list of (label, n_features, (nSpec, nX, nY)) tuples in execution order,
-        matching what forward() produces: the encoder brings every axis to
-        ceil(N/stem_stride) (exactly N when stem_stride is (1,1,1)), every Process block and
-        the decoder then preserve that shape exactly (dilation with 'same' padding at stride 1
-        never changes the spatial/spectral size).
-        """
-        rows = [("input datacube", 1, self.input_shape)]
-        rows.append(("encode", self.n_filt0, self.encode_out_shape))
-        for i in range(self.n_blocks):
-            rows.append((f"process block {i}", self.n_filt0, self.encode_out_shape))
-        rows.append(("decode", self.n_filt0, self.encode_out_shape))
-        if self.head_type == "conv":
-            rows += self.conv_head.stage_shapes(self.encode_out_shape[1:], self.output_shape)
-        else:
-            rows.append(("adaptive avg pool", self.n_filt0, self.pool_output))
-        return rows
-
     def _enable_mc_dropout(self):
         """Switch only the dropout layers back to training mode, so they keep dropping random channels. Every other
         layer stays in eval mode: BatchNorm keeps using the statistics stored during training, rather than
@@ -427,129 +395,3 @@ class NeuralNetwork(nn.Module):
             total_std = (aleatoric_std**2 + epistemic_std**2).sqrt()
             return mean_pred, aleatoric_std, epistemic_std, total_std
         return preds.mean(dim=0), preds.std(dim=0)
-
-    def _param_groups(self):
-        """(label, [modules]) for every summary() row, in order: the stage_shapes() rows, then (fc
-        head) the fully-connected layers. Rows with no parameters (input, pooling, resize) get []."""
-        mods = [[], [self.layer_encode]] + [[block] for block in self.process] + [[self.layer_decode]]
-        if self.head_type == "conv":
-            head = self.conv_head.param_groups()
-            head[-1] = (head[-1][0], head[-1][1] + [self.out_activation])  # output conv + activation
-            mods += [m for _, m in head]
-            return [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
-        mods.append([])  # adaptive avg pool
-        groups = [(label, m) for (label, _, _), m in zip(self.stage_shapes(), mods)]
-        # fc_hidden is [Linear, activation, Dropout] per hidden layer (see __init__)
-        groups += [
-            (f"fc hidden {k}", [self.fc_hidden[3 * k], self.fc_hidden[3 * k + 1]]) for k in range(len(self.fc_widths))
-        ]
-        groups.append(("fc out (mean)", [self.fc_out_mean, self.out_activation]))
-        if self.predict_variance:
-            groups.append(("fc out (logvar)", [self.fc_out_logvar]))
-        return groups
-
-    def param_breakdown(self):
-        """(label, n_parameters) for every summary() row that holds parameters, in order. The counts
-        add up to the model's total parameter count."""
-        return [(label, count_params(mods)) for label, mods in self._param_groups() if mods]
-
-    def summary(self, print_fn=print, layers=True):
-        """Print the network structure, the input dimensions, the data/feature-count
-        progression through every layer, the number of parameters in every block and layer,
-        which activation runs at each stage, and the dilation schedule used by the Process
-        stack. `print_fn` lets output be redirected (e.g. to a logger); defaults to the
-        builtin print. layers: if True (default), list each block's layers and their parameter
-        counts under the block's row.
-        """
-        rows = self.stage_shapes()
-        w = max(len(label) for label, _, _ in rows)
-        bar = "=" * (w + 58)
-
-        encode_act = type(self.layer_encode.act).__name__
-        block_act = type(self.process[0].acts[0]).__name__  # same class at every block/site
-        decode_act = type(self.layer_decode.act).__name__
-        fc_act = type(self.fc_hidden[1]).__name__ if self.fc_widths else None
-        out_act = type(self.out_activation).__name__
-        if self.head_type == "conv":
-            head_act = (
-                "head blocks=" + type(self.conv_head.blocks[0].act1).__name__
-                if len(self.conv_head.blocks)
-                else "head blocks=n/a (none)"
-            )
-        else:
-            head_act = f"fc hidden={fc_act or 'n/a (no hidden FC layers)'}"
-
-        print_fn(bar)
-        print_fn(
-            f"{type(self).__name__}  |  {self.n_blocks} process blocks  |  "
-            f"dilation_rates={self.dilation_rates}  |  kernel_stem={self.kernel_stem}  |  "
-            f"kernel_coder={self.kernel_coder}  |  stem_stride={self.stem_stride}  |  "
-            f"predict_variance={self.predict_variance}  |  head={self.head_type!r}  |  n_maps={self.n_maps}"
-        )
-        n_spec, n_x, n_y = self.input_shape
-        output = f"(nBatch, {self.n_maps}, {self.output_size})"
-        print_fn(f"input:  (nBatch, nSpec={n_spec}, nX={n_x}, nY={n_y})  ->  output: {output}")
-        print_fn(
-            f"activations: encode={encode_act}  process blocks={block_act}  "
-            f"decode={decode_act}  {head_act}  "
-            f"output={out_act}"
-        )
-        print_fn("-" * (w + 58))
-
-        def row_note(label):
-            if label == "encode":
-                return f"activation={encode_act}  stride={self.stem_stride}"
-            if label.startswith("process block"):
-                return f"activation={block_act}  dilation_rates={self.dilation_rates}"
-            if label == "decode":
-                return f"activation={decode_act}"
-            if self.head_type == "conv":
-                return self.conv_head.row_note(label)
-            return None
-
-        groups = dict(self._param_groups())
-
-        def params_col(label):
-            mods = groups.get(label, [])
-            return f"{count_params(mods):,}" if mods else "-"
-
-        def print_layers(label):
-            if layers:
-                for line in layer_param_lines(groups.get(label, [])):
-                    print_fn(line)
-
-        for label, feats, shape in rows:
-            dims = " x ".join(str(s) for s in shape)
-            note = row_note(label)
-            suffix = f" {note}" if note else ""
-            print_fn(f"  {label:<{w}}   features={feats:<6} params={params_col(label):<11} dims={dims}{suffix}")
-            print_layers(label)
-
-        if self.head_type == "fc":
-            flat = self.n_filt0 * int(np.prod(self.pool_output))
-            print_fn(f"  {'flatten':<{w}}   features={flat}")
-            in_f = flat
-            for k, out_f in enumerate(self.fc_widths):
-                label = f"fc hidden {k}"
-                print_fn(f"  {label:<{w}}   {in_f} -> {out_f}  params={params_col(label)}  activation={fc_act}")
-                in_f = out_f
-            print_fn(
-                f"  {'fc out (mean)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                f"params={params_col('fc out (mean)')}  activation={out_act}"
-            )
-            if self.predict_variance:
-                print_fn(
-                    f"  {'fc out (logvar)':<{w}}   {in_f} -> {self.n_maps} x {self.output_size}  "
-                    f"params={params_col('fc out (logvar)')}  activation=None"
-                )
-        else:
-            print_fn(f"  {'output (mean)':<{w}}   map -> {output}  activation={out_act}")
-            if self.predict_variance:
-                print_fn(f"  {'output (logvar)':<{w}}   map -> {output}  activation=None")
-        print_fn("-" * (w + 58))
-        n_all = sum(p.numel() for p in self.parameters())
-        n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print_fn(f"parameters: {n_all:,} total ({n_train:,} trainable)")
-        print_fn(bar)
-        print_fn(str(self))
-        print_fn(bar)

@@ -129,19 +129,3 @@ def test_predict_with_mc_dropout_combines_variances(network, make_model, make_cu
     model = make_model(network, head=head, head_dropout_rate=DROPOUT, predict_variance=True).eval()
     _, aleatoric, epistemic, total = model.predict_with_mc_dropout(make_cube(), n_samples=N_SAMPLES)
     torch.testing.assert_close(total**2, aleatoric**2 + epistemic**2)
-
-
-@every_head
-@pytest.mark.parametrize("predict_variance", [False, True])
-def test_param_breakdown_accounts_for_every_parameter(network, make_model, head, predict_variance):
-    model = make_model(network, head=head, predict_variance=predict_variance)
-    assert sum(n for _, n in model.param_breakdown()) == sum(p.numel() for p in model.parameters())
-
-
-@every_head
-def test_summary_reports_parameter_count(network, make_model, head):
-    model = make_model(network, head=head)
-    lines = []
-    model.summary(print_fn=lines.append)
-    n_params = sum(p.numel() for p in model.parameters())
-    assert any(f"{n_params:,} total" in line for line in lines)

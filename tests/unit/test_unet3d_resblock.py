@@ -1,31 +1,11 @@
 """unet3d_resblock: stage-count validation, head/upsample configurations and analytic stage shapes."""
 
-from itertools import chain
-
 import pytest
 
 from conngafit.models import unet3d_resblock as unet
 
 HEADS = ["fc", "conv", "conv_halfres"]
 CONV_HEADS = ["conv", "conv_halfres"]
-# stage_shapes() rows with no module of their own (concatenation, folding, resize) are not hooked;
-# the final map shape is checked on the output instead
-UNHOOKED_ROWS = ("+ skip", "resize to map", "fold spectra", "1x1 conv + resize")
-
-
-def head_stages(model):
-    """The head's hookable modules, in execution order, for each head type."""
-    if model.head_type == "conv":
-        return [model.conv_head.pool, *model.conv_head.blocks, model.conv_head.out]
-    if model.head_type == "conv_halfres":
-        return [model.upsample_half, model.dc_layer_half, model.halfres_head.act2]
-    return [model.avgpool0]
-
-
-def stage_modules(model):
-    """Every stage of model with a module of its own, in execution order."""
-    decoder = chain.from_iterable(zip(model.upsamples, model.dc_layers))
-    return [model.layer_stem, *model.encoder, *decoder, *head_stages(model)]
 
 
 def test_too_many_stages_names_tightest_axis(make_model):
@@ -49,31 +29,3 @@ def test_conv_heads_predict_on_any_map_grid(make_model, make_cube, head, output_
     model = make_model(unet, head=head, output_shape=output_shape)
     cube = make_cube()
     assert model(cube).shape == (len(cube), 1, output_shape[0] * output_shape[1])
-
-
-@pytest.mark.parametrize("head", HEADS)
-@pytest.mark.parametrize("upsample_mode", ["conv_transpose", "trilinear"])
-@pytest.mark.parametrize(
-    "input_shape, kernel",
-    [
-        ((16, 16, 16), (3, 3, 3)),
-        ((13, 10, 11), (3, 3, 3)),
-        ((16, 16, 16), (4, 4, 4)),
-    ],
-)
-def test_stage_shapes_match_forward_pass(
-    make_model, make_cube, record_shapes, head, upsample_mode, input_shape, kernel
-):
-    model = make_model(
-        unet, input_shape=input_shape, kernel_stem=kernel, kernel_coder=kernel, head=head, upsample_mode=upsample_mode
-    )
-    recorded = record_shapes(stage_modules(model))
-    cube = make_cube(input_shape)
-    out = model(cube)
-    expected = [
-        (feats, tuple(shape))
-        for label, feats, shape in model.stage_shapes()[1:]
-        if not any(tag in label for tag in UNHOOKED_ROWS)
-    ]
-    assert recorded == expected  # every stage has the shape stage_shapes() reports
-    assert out.shape == (len(cube), 1, input_shape[1] * input_shape[2])  # and the output is one value per pixel
