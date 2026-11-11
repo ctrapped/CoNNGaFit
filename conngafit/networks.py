@@ -20,6 +20,7 @@ SHARED_KEYS = {
     "predict_every",
     "seed",
     "ema_decay",
+    "max_grad_norm",
 }
 HYPERPARAM_KEYS = {
     "resblock": SHARED_KEYS | {"n_fc", "dropout_rate", "output_head", "predict_variance"},

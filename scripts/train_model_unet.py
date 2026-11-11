@@ -188,6 +188,9 @@ if predict_variance and label_scaling == "none":
 ema_decay = hyperparams.get("ema_decay", 0.999)  # On by default for every network; 0 uses the raw weights
 if not 0 <= ema_decay < 1:
     raise ValueError(f"{args.hyperparams}: ema_decay = {ema_decay!r} should be in [0, 1)")
+max_grad_norm = hyperparams["max_grad_norm"]  # 0: no gradient clipping
+if not max_grad_norm >= 0:
+    raise ValueError(f"{args.hyperparams}: max_grad_norm = {max_grad_norm!r} should be 0 or more")
 predict_every = hyperparams["predict_every"]
 if not (isinstance(predict_every, int) and predict_every >= 1):
     raise ValueError(f"{args.hyperparams}: predict_every = {predict_every!r} should be an integer of 1 or more")
@@ -418,7 +421,8 @@ def save_correlation_plots(all_pred, all_y, output_base, epoch):
 #### Define Training Loop ####
 def train_loop(dataloader, model, loss_fn, optimizer, epoch, ema_model):
     """Run one training epoch: iterate the dataloader, backprop loss_fn (see compute_loss) each batch, and on
-    the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection.
+    the final epoch dump every sample's prediction/label hdf5 snapshot for later inspection. Clips the total
+    gradient norm to max_grad_norm (if > 0) and logs the epoch's mean gradient norm and how often it was clipped.
     Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
     batch was predicted.
     ema_model: an AveragedModel of model, updated after every optimizer step. The ddpm samples its predictions
@@ -429,6 +433,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch, ema_model):
     size = len(dataloader.dataset)
     epoch_loss, epoch_mse = 0.0, 0.0
     n_predicted = 0  # Batches with predictions, made every predict_every epochs
+    epoch_grad_norm, n_clipped = 0.0, 0  # Total gradient norm before clipping, and how many batches were clipped
     num_batches = len(dataloader)
     final = epoch >= epochs - 1
     predict = final or (epoch + 1) % predict_every == 0
@@ -450,6 +455,13 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch, ema_model):
         # Backpropagation
         optimizer.zero_grad()
         loss.backward()
+        # clip_grad_norm_ rescales all gradients together (keeping their direction) when their total norm exceeds
+        # clip_at, and returns the norm before clipping; with an infinite limit it only measures it
+        clip_at = max_grad_norm if max_grad_norm > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_at).item()
+        epoch_grad_norm += grad_norm
+        if grad_norm > clip_at:
+            n_clipped += 1
         optimizer.step()
         ema_model.update_parameters(model)
 
@@ -457,6 +469,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, epoch, ema_model):
             current = batch * len(x)
             logger.info("loss: %7f [%5d/%5d]", loss.item(), current, size)
 
+    logger.info(
+        "Mean gradient norm %.3g, clipped in %d of %d batches", epoch_grad_norm / num_batches, n_clipped, num_batches
+    )
     return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
 
 
