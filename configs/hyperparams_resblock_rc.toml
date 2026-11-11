@@ -11,7 +11,7 @@ n_filt0 = 6   # Filters in the first encoder stage; doubles at each later stage
 k0 = 9        # Initial kernel size
 k1 = 3        # Kernel size for residual/deconv blocks
 
-dropout_rate = 0.3  # Applied before the output layer, to regularize the head
+dropout_rate = 0.3  # Dropout in the output head, to regularize it
 # Disabled by default. Applies channel-wise dropout (nn.Dropout3d) inside every
 # ResidualBlock/DeconvBlock - a much broader regularizer than dropout_rate, since it touches
 # every stage of the encoder/decoder and the skip connections too. Only enable this if
