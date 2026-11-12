@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 #### Full network ####
 class NeuralNetwork(nn.Module):
     """3-d residual U-Net mapping an HI 21cm spectral datacube (nSpec x nX x nY, any size)
-    to `n_maps` output maps (e.g. mass and rotational momentum), each of shape `output_shape`
-    (default (nX, nY)), or to `n_maps` radial curves of `output_size` values (head='fc').
+    to `n_maps` outputs (e.g. mass and rotational momentum), each of shape `output_shape`: a map, on the cube's
+    grid by default, or with head='fc' a 1-d output such as a radial curve.
 
     Architecture:
       - Stem (blocks.Stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing
@@ -72,8 +72,6 @@ class NeuralNetwork(nn.Module):
             against input_shape at construction (see check_stage_compatibility).
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
-        output_size: if given, each output is a 1-d array of this many values, such as a radial curve, instead
-            of a map. head='fc' only.
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
             layer predicts every map: n_maps output channels for the conv heads, or
             n_maps * prod(output_shape) outputs for the fc head.
@@ -111,8 +109,8 @@ class NeuralNetwork(nn.Module):
             'conv_halfres' - one more decoder stage to half resolution, then HalfResConvHead with head_channels.
             The conv heads' sizes don't depend on the map size, and they ignore fc_pool_shape, n_fc and
             n_fc_layers.
-        output_shape: (H, W) of each predicted map (default (nX, nY)). Stored as self.output_shape, which is
-            (output_size,) instead when output_size is given.
+        output_shape: shape of each predicted output: (H, W) for maps (default: (nX, nY) from input),
+            or (n_bins,) for 1-d outputs such as radial curves (head='fc' only). Stored as self.output_shape.
         n_head_blocks: number of 2-d residual blocks in head='conv' (>= 0; default 2).
         head_channels: channel count of head='conv_halfres''s two 3x3 convolutions (default 64).
     """
@@ -126,7 +124,6 @@ class NeuralNetwork(nn.Module):
         n_fc,
         n_stages=4,
         n_fc_layers=1,
-        output_size=None,
         fc_pool_shape=(8, 8, 8),
         head_dropout_rate=0.0,
         block_dropout_rate=0.0,
@@ -158,16 +155,12 @@ class NeuralNetwork(nn.Module):
         if head_activation is None:  # ReLU for the conv head's residual blocks, LeakyReLU otherwise
             head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
 
-        # Each map's output shape: (output_size,) for a 1-d output such as a radial curve (fc head only), or the (H, W)
-        # map grid, output_shape or the cube's (nX, nY)
-        if output_size is not None:
-            if head != "fc":
-                raise ValueError(f"output_size={output_size}: the conv heads predict maps, not 1-d outputs")
-            self.output_shape = (int(output_size),)
-        elif output_shape is not None:
-            self.output_shape = tuple(int(v) for v in output_shape)
-        else:
-            self.output_shape = input_shape[1:]
+        # Each output's shape: an (H, W) map, on the cube's grid by default, or a 1-d output such as a radial curve
+        if output_shape is None:
+            output_shape = input_shape[1:]
+        self.output_shape = tuple(int(v) for v in output_shape)
+        if len(self.output_shape) == 1 and head != "fc":
+            raise ValueError(f"output_shape={self.output_shape}: the conv heads predict maps, not 1-d outputs")
         # fail fast if this input can't be halved n_stages-1 times after the stem
         check_stage_compatibility(input_shape, n_stages)
         logger.debug("output shape = %s", self.output_shape)

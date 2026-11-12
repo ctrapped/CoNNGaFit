@@ -10,7 +10,7 @@ HEADS = {
     unet3d_resblock: ("fc", "conv", "conv_halfres"),
     unet3d_dilated_resnet: ("fc", "conv"),
 }
-OUTPUT_SIZE = 5
+OUTPUT_SHAPE = (5,)  # output_shape of a 1-d output such as a radial curve
 N_MAPS = 3
 DROPOUT = 0.5
 N_SAMPLES = 8
@@ -34,9 +34,9 @@ def test_default_output_is_a_map_on_the_cube_grid(network, make_model, make_cube
     assert model(cube).shape == (len(cube), 1, n_x, n_y)
 
 
-def test_output_size_override(network, make_model, make_cube):
+def test_1d_output_shape(network, make_model, make_cube):
     cube = make_cube()
-    assert make_model(network, output_size=OUTPUT_SIZE)(cube).shape == (len(cube), 1, OUTPUT_SIZE)
+    assert make_model(network, output_shape=OUTPUT_SHAPE)(cube).shape == (len(cube), 1, *OUTPUT_SHAPE)
 
 
 def test_rejects_cube_of_wrong_shape(network, make_model, make_cube):
@@ -58,8 +58,8 @@ def test_rejects_unknown_head(network, make_model):
 
 @every_conv_head
 def test_conv_heads_reject_1d_outputs(network, make_model, head):
-    with pytest.raises(ValueError, match="output_size"):
-        make_model(network, head=head, output_size=OUTPUT_SIZE)
+    with pytest.raises(ValueError, match="output_shape"):
+        make_model(network, head=head, output_shape=OUTPUT_SHAPE)
 
 
 @pytest.mark.parametrize(

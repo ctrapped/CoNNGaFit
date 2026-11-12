@@ -78,8 +78,8 @@ class Decoder(nn.Module):
 #### Full network ####
 class NeuralNetwork(nn.Module):
     """3-d dilated residual network ("Encode-Process-Decode") mapping a spectral
-    datacube (nSpec x nX x nY, any size) to `n_maps` output maps (e.g. mass and rotational
-    momentum), each of shape `output_shape` (default (nX, nY)).
+    datacube (nSpec x nX x nY, any size) to `n_maps` outputs (e.g. mass and rotational momentum), each of shape
+    `output_shape`: a map, on the cube's grid by default, or with head='fc' a 1-d output such as a radial curve.
 
     Architecture:
       - Encode (layer_encode): a single Conv3d projecting the 1-channel input to n_filt0
@@ -124,8 +124,6 @@ class NeuralNetwork(nn.Module):
             large input cubes, bringing every axis to ceil(N/stride).
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
-        output_size: if given, each output is an array of this shape. For 1-D shapes, use
-            head='fc'.
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
             layer predicts every map: n_maps output channels for head='conv', or
             n_maps * prod(output_shape) outputs for head='fc'.
@@ -161,8 +159,8 @@ class NeuralNetwork(nn.Module):
             'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
             n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
             the input and map size (pool_output, n_fc and n_fc_layers are then unused).
-        output_shape: (H, W) of each predicted map (default (nX, nY)). Stored as self.output_shape, which is
-            (output_size,) instead when output_size is given.
+        output_shape: shape of each predicted output: (H, W) for maps (default: (nX, nY) from input),
+            or (n_bins,) for 1-d outputs such as radial curves (head='fc' only). Stored as self.output_shape.
         n_head_blocks: number of 2-d residual blocks in the conv head (>= 0; default 2).
 
         Each *_activation is a zero-arg callable returning an nn.Module - the activation
@@ -182,7 +180,6 @@ class NeuralNetwork(nn.Module):
         dilation_rates=(1, 2, 4, 8, 4, 2, 1),
         stem_stride=(1, 1, 1),
         n_fc_layers=1,
-        output_size=None,
         pool_output=(8, 8, 8),
         head_dropout_rate=0.0,
         block_dropout_rate=0.0,
@@ -212,16 +209,12 @@ class NeuralNetwork(nn.Module):
         if head_activation is None:  # ReLU for the conv head's residual blocks, LeakyReLU otherwise
             head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
         self.head_activation = head_activation
-        # Each map's output shape: (output_size,) for a 1-d output such as a radial curve (fc head only), or the (H, W)
-        # map grid, output_shape or the cube's (nX, nY)
-        if output_size is not None:
-            if head != "fc":
-                raise ValueError(f"output_size={output_size}: the conv head predicts maps, not 1-d outputs")
-            self.output_shape = (int(output_size),)
-        elif output_shape is not None:
-            self.output_shape = tuple(int(v) for v in output_shape)
-        else:
-            self.output_shape = input_shape[1:]
+        # Each output's shape: an (H, W) map, on the cube's grid by default, or a 1-d output such as a radial curve
+        if output_shape is None:
+            output_shape = input_shape[1:]
+        self.output_shape = tuple(int(v) for v in output_shape)
+        if len(self.output_shape) == 1 and head != "fc":
+            raise ValueError(f"output_shape={self.output_shape}: the conv head predicts maps, not 1-d outputs")
         logger.debug("output shape = %s", self.output_shape)
         self.n_fc = n_fc
         self.save_itr = 0  # forward() call counter; numbers the latent-image filenames

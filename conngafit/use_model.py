@@ -39,7 +39,8 @@ def load_model(model_path):
     radial_bins = int(metadata["radial_bins"]) if "radial_bins" in metadata else None
     input_shape = tuple(int(n) for n in metadata["input_shape"])
     n_maps = len(metadata["target"])
-    model = build_model(metadata["network"], input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps)
+    output_shape = (radial_bins,) if radial_bins is not None else None  # A radial curve, or a map on the cube's grid
+    model = build_model(metadata["network"], input_shape, hyperparams, output_shape=output_shape, n_maps=n_maps)
     model = model.to(device)
     model.load_state_dict(torch.load(model_path + ".pt", map_location=device, weights_only=True))
     return model.eval(), metadata

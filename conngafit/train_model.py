@@ -576,7 +576,8 @@ def train(
     input_shape = tuple(
         training_data[0][0].shape
     )  # (nSpec, nY, nX) after ToTensor; the output map has one value per (nY, nX) pixel
-    model = build_model(network, input_shape, hyperparams, output_size=radial_bins, n_maps=n_maps).to(device)
+    output_shape = (radial_bins,) if radial_bins is not None else None  # A radial curve, or a map on the cube's grid
+    model = build_model(network, input_shape, hyperparams, output_shape=output_shape, n_maps=n_maps).to(device)
     logger.info("Network:\n%s", model_summary(model, input_shape))  # Layers, output shapes and parameter counts
 
     # Loss and optimizer

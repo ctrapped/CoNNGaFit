@@ -40,7 +40,7 @@ def test_ddpm_rejects_radial_curves():
     with open(CONFIG_DIR / "hyperparams_ddpm.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
     with pytest.raises(ValueError, match="predicts maps"):
-        build_model("ddpm", BUILD_SHAPE, hyperparams, output_size=10)
+        build_model("ddpm", BUILD_SHAPE, hyperparams, output_shape=(10,))
 
 
 def test_mass_weight_power_is_resblock_only():

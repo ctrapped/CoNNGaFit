@@ -30,9 +30,9 @@ HYPERPARAM_KEYS = {
 OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"mass_weight_power"}, "ddpm": set()}
 
 
-def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
-    """The network for cubes of input_shape (nSpec, nY, nX), predicting a map, or a radial curve of output_size bins
-    (resblock only), for each of n_maps targets."""
+def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
+    """The network for cubes of input_shape (nSpec, nY, nX), predicting a map on the cube's grid (output_shape None),
+    or a radial curve of output_shape (n_bins,) (resblock only), for each of n_maps targets."""
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
     if network == "resblock":
@@ -45,14 +45,14 @@ def build_model(network, input_shape, hyperparams, output_size=None, n_maps=1):
             head_dropout_rate=hyperparams["dropout_rate"],
             block_dropout_rate=hyperparams["block_dropout_rate"],
             head=hyperparams["output_head"],
-            output_size=output_size,
+            output_shape=output_shape,
             predict_variance=hyperparams["predict_variance"],
             n_maps=n_maps,
         )
 
-    if output_size is not None:
+    if output_shape is not None:
         raise ValueError(
-            "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_size must be set to None."
+            "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_shape must be set to None."
         )
     denoiser = DenoisingUNet3d(
         input_shape,
