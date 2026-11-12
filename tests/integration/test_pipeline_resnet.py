@@ -166,10 +166,11 @@ def test_train_from_python(tmp_path):
         output_dir=tmp_path / "diag",
         save_diagnostics=False,
     )
+    # check model files are saved
     assert (tmp_path / "nets" / "python.pt").is_file() and result.model_path == str(tmp_path / "nets" / "python")
     for history in (result.training_losses, result.validation_losses, result.training_mses, result.validation_mses):
-        assert len(history) == SMALL_HYPERPARAMS["epochs"] and np.isfinite(history).all()
-    assert np.isfinite(result.final_test_loss)
+        assert len(history) == SMALL_HYPERPARAMS["epochs"] and np.isfinite(history).all()  # make sure losses are finite
+    assert np.isfinite(result.final_test_loss)  # ensure last test loss is finite
     assert sorted(p.name for p in (tmp_path / "diag").rglob("*") if p.is_file()) == ["python_LossesAndAccuracies.hdf5"]
     _, metadata = load_model(result.model_path)  # the checkpoint's generated parameter text loads back
     assert tomllib.loads(metadata["hyperparams_text"]) == hyperparams

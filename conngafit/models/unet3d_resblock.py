@@ -151,6 +151,7 @@ class NeuralNetwork(nn.Module):
         if len(input_shape) != 3:
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
+        self.n_stages = n_stages
         if head not in ("fc", "conv", "conv_halfres"):
             raise ValueError(f"unknown head {head!r}; use 'fc', 'conv' or 'conv_halfres'")
         self.head_type = head
@@ -170,6 +171,7 @@ class NeuralNetwork(nn.Module):
         # fail fast if this input can't be halved n_stages-1 times after the stem
         check_stage_compatibility(input_shape, n_stages)
         logger.debug("output shape = %s", self.output_shape)
+        self.n_fc = n_fc
         self.save_itr = 0  # forward() call counter; numbers the latent-image filenames
 
         # Stem: stride-2 conv + stride-2 maxpool + activation, reducing every axis by exactly ceil(N/4)
@@ -178,6 +180,9 @@ class NeuralNetwork(nn.Module):
         # Encoder: stage 0 keeps the stem's shape/channels; each later stage -> ceil(N/2)
         # per axis and doubles the channel count.
         enc_channels = [n_filt0 * (2**i) for i in range(n_stages)]
+        self.n_filt0 = n_filt0
+        self.kernel_stem = tuple(kernel_stem)
+        self.kernel_coder = tuple(kernel_coder)
         self.encoder = nn.ModuleList()
         prev = n_filt0
         for i, ch in enumerate(enc_channels):
@@ -300,7 +305,11 @@ class NeuralNetwork(nn.Module):
 
             fc_layers, in_f = [], flat_features
             for w in fc_widths:
-                fc_layers += [nn.Linear(in_f, w), head_activation(), nn.Dropout(p=head_dropout_rate)]
+                fc_layers += [
+                    nn.Linear(in_f, w),
+                    head_activation(),
+                    nn.Dropout(p=head_dropout_rate),
+                ]
                 in_f = w
             if not fc_widths:
                 fc_layers.append(nn.Dropout(p=head_dropout_rate))
@@ -426,7 +435,10 @@ class NeuralNetwork(nn.Module):
                 means = torch.stack(means, dim=0)
                 logvars = torch.stack(logvars, dim=0)
             else:
-                preds = torch.stack([self.forward(x, save_latent_images) for _ in range(n_samples)], dim=0)
+                preds = torch.stack(
+                    [self.forward(x, save_latent_images) for _ in range(n_samples)],
+                    dim=0,
+                )
         self.eval()
 
         if self.predict_variance:

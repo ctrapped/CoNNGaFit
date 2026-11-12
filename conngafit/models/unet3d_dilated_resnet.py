@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 # matching the input/output conventions of unet3d_resblock.py. There is no spatial
 # downsampling/upsampling path or skip connections; the receptive field is grown entirely
 # through dilated convolutions. See NeuralNetwork for the full parameter list.
-#
-# Written by Caleb Choban using Claude LLM, adapting unet3d_resblock.py's conventions.
 
 
 #### Encode: project the raw input cube into feature space ####
@@ -79,10 +77,9 @@ class Decoder(nn.Module):
 
 #### Full network ####
 class NeuralNetwork(nn.Module):
-    """3-d dilated residual network ("Encode-Process-Decode") mapping an HI 21cm spectral
+    """3-d dilated residual network ("Encode-Process-Decode") mapping a spectral
     datacube (nSpec x nX x nY, any size) to `n_maps` output maps (e.g. mass and rotational
-    momentum), each of shape `output_shape` (default (nX, nY)), or to `n_maps` radial curves of
-    `output_size` values (head='fc').
+    momentum), each of shape `output_shape` (default (nX, nY)).
 
     Architecture:
       - Encode (layer_encode): a single Conv3d projecting the 1-channel input to n_filt0
@@ -127,8 +124,8 @@ class NeuralNetwork(nn.Module):
             large input cubes, bringing every axis to ceil(N/stride).
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
-        output_size: if given, each output is a 1-d array of this many values, such as a radial curve, instead
-            of a map. head='fc' only.
+        output_size: if given, each output is an array of this shape. For 1-D shapes, use
+            head='fc'.
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
             layer predicts every map: n_maps output channels for head='conv', or
             n_maps * prod(output_shape) outputs for head='fc'.
@@ -214,6 +211,7 @@ class NeuralNetwork(nn.Module):
         self.head_type = head
         if head_activation is None:  # ReLU for the conv head's residual blocks, LeakyReLU otherwise
             head_activation = nn.ReLU if head == "conv" else nn.LeakyReLU
+        self.head_activation = head_activation
         # Each map's output shape: (output_size,) for a 1-d output such as a radial curve (fc head only), or the (H, W)
         # map grid, output_shape or the cube's (nX, nY)
         if output_size is not None:
@@ -225,9 +223,14 @@ class NeuralNetwork(nn.Module):
         else:
             self.output_shape = input_shape[1:]
         logger.debug("output shape = %s", self.output_shape)
+        self.n_fc = n_fc
         self.save_itr = 0  # forward() call counter; numbers the latent-image filenames
 
+        self.n_filt0 = n_filt0
+        self.kernel_stem = tuple(kernel_stem)
+        self.kernel_coder = tuple(kernel_coder)
         self.stem_stride = tuple(stem_stride)
+        self.n_blocks = n_blocks
         self.dilation_rates = tuple(dilation_rates)
 
         # Encode: single conv, 1 -> n_filt0 channels, ceil(N/stem_stride) per axis

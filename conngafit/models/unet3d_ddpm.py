@@ -247,6 +247,8 @@ class DenoisingUNet3d(nn.Module):
         check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
         t_dim = t_dim or 4 * n_filt0
+        self.n_filt0, self.t_dim, self.max_groups = n_filt0, t_dim, max_groups
+        self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
             kernel1=tuple(kernel_coder),
             t_dim=t_dim,
@@ -350,6 +352,7 @@ class GaussianDiffusion(nn.Module):
         super().__init__()
         self.denoiser = denoiser
         self.n_timesteps = n_timesteps
+        self.schedule = schedule
         self.map_shape = tuple(denoiser.map_shape)
         self.n_maps = denoiser.n_maps
         self.clip_range = clip_range

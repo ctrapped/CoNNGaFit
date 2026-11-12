@@ -360,6 +360,7 @@ class SpectralAttentionPool(nn.Module):
         self.score = nn.Conv3d(channels, 1, kernel_size=1)  # (B, C, S, X, Y) -> (B, 1, S, X, Y)
 
     def forward(self, x):
+        # Compute per-pixel attention weights over the spectral axis and sum
         w = torch.softmax(self.score(x), dim=2)  # (B, 1, S, X, Y), sums to 1 over S
         return (x * w).sum(dim=2)  # (B, C, X, Y)
 

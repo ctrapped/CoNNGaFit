@@ -9,8 +9,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 #### Finding VOF images ####
-# Where VOF's optically thin projection writes each datacube (with its annotations), under the
-# output directory given to VOF:
+# Standard file naming used by VOF when writing each datacube (with its annotations)
 #   <output>/i<inclination>/<galaxy>_i<inclination>_pa<position angle>_<snapshot>_image<outputSuffix>_fullSpectra.hdf5
 VOF_IMAGE_NAME = "*_image{suffix}_fullSpectra.hdf5"
 # The viewing angles and snapshot in a VOF filename, just before "_image"
@@ -43,7 +42,7 @@ def find_vof_images(sources, inclinations="all", suffix=""):
     """Return the paths of every VOF datacube in each source directory's snapshot range, in source order.
 
     sources are the directory and snapshot ranges from the datasets file.
-    inclinations = 'all' or a list.
+    inclinations = 'all' or a list of degrees. suffix adds a suffix to the image filename.
     """
     folders = inclination_folders(inclinations, "find_vof_images")
     filename = VOF_IMAGE_NAME.format(suffix=glob.escape(suffix))
@@ -190,7 +189,7 @@ def augmentation_suffix(rotations, flip):
 
 class CoNNGaFitImageDataset:
     """PyTorch-style dataset of training samples from VeryObservableFIRE's optically thin projection. Each sample is
-    (datacube, label, loss weights, index): the weights are mass ** mass_weight_power per pixel (or ring), or all
+    (datacube, label, weights, index): the weights are mass ** mass_weight_power per pixel (or ring), or all
     ones, and the index identifies the sample (e.g. its name in names) after the DataLoader shuffles the samples.
 
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
@@ -210,8 +209,8 @@ class CoNNGaFitImageDataset:
     inclinations: which inclinations to include, "all" (default) or a list in degrees such as
         [30, 45], for every source.
     suffix: VOF's outputSuffix in the filenames to load (default "": files without one), for every source.
-    mass_weight_power: each sample's loss weights are its mass ** mass_weight_power (see mass_weights); 0 (the
-        default) gives all ones, an unweighted loss.
+    mass_weight_power: each sample's weights are its mass ** mass_weight_power (see mass_weights); 0 (the
+        default) gives all ones. Weights are used for loss calculations.
 
     The names attribute holds a short name for each sample (its filename without extension, plus
     an augmentation suffix such as "_r180_lr"), in dataset order.

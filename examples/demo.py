@@ -104,7 +104,7 @@ def main():
     configure_logging()  # Show the training's progress
     output = args.output.resolve()
 
-    # Steps 1 and 2, with any command line changes
+    # Steps 1 and 2, set hyperparameters and datasets to be used
     hyperparams = {**HYPERPARAMS, "epochs": args.epochs}
     datasets = dict(DATASETS)
     run_name = RUN_NAME
