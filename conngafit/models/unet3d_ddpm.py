@@ -212,7 +212,7 @@ class DenoisingUNet3d(nn.Module):
         upsample_mode: 'trilinear' (default; no checkerboard artifacts, which would look like
             structured noise to the model) or 'conv_transpose'.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
-        map_shape: (H, W) of each map (default (nX, nY)).
+        output_shape: (H, W) of each map (default (nX, nY) from input).
         n_maps: number of maps denoised together (default 1).
     """
 
@@ -230,7 +230,7 @@ class DenoisingUNet3d(nn.Module):
         block_activation=nn.SiLU,
         upsample_mode="trilinear",
         max_groups=8,
-        map_shape=None,
+        output_shape=None,
         n_maps=1,
     ):
         super().__init__()
@@ -242,7 +242,9 @@ class DenoisingUNet3d(nn.Module):
         if len(input_shape) != 3:
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
-        self.map_shape = tuple(int(v) for v in map_shape) if map_shape is not None else input_shape[1:]
+        if output_shape is None:
+            output_shape = input_shape[1:]
+        self.output_shape = tuple(int(v) for v in output_shape)
         self.n_maps = n_maps
         check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
@@ -294,12 +296,12 @@ class DenoisingUNet3d(nn.Module):
 
     def forward(self, cube, y_t, t):
         """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with
-        (H, W) = map_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
-        maps_shape = (self.n_maps, *self.map_shape)
+        (H, W) = output_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
+        maps_shape = (self.n_maps, *self.output_shape)
         if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
             raise ValueError(
                 f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
-                f"was built for: input_shape {self.input_shape}, (n_maps, *map_shape) {maps_shape}"
+                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
             )
         _, n_spec, n_x, n_y = cube.shape
         t_emb = self.time_embed(t)
@@ -334,8 +336,8 @@ class GaussianDiffusion(nn.Module):
     sampling, Ho et al. 2020).
 
     Parameters:
-        denoiser: an eps-prediction network with input_shape, map_shape and n_maps, e.g. DenoisingUNet3d. Its
-            n_maps maps are sampled together at its map_shape (H, W).
+        denoiser: an eps-prediction network with input_shape, output_shape and n_maps, e.g. DenoisingUNet3d. Its
+            n_maps maps are sampled together at its output_shape (H, W).
         n_timesteps: number of diffusion steps T.
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
@@ -353,7 +355,7 @@ class GaussianDiffusion(nn.Module):
         self.denoiser = denoiser
         self.n_timesteps = n_timesteps
         self.schedule = schedule
-        self.map_shape = tuple(denoiser.map_shape)
+        self.output_shape = tuple(denoiser.output_shape)
         self.n_maps = denoiser.n_maps
         self.clip_range = clip_range
         alpha_bar = torch.cumprod(1 - make_beta_schedule(schedule, n_timesteps), dim=0)
@@ -387,10 +389,10 @@ class GaussianDiffusion(nn.Module):
 
         cube: (B, nSpec, nX, nY).
         max_batch: cap on cubes per denoiser call to bound memory.
-        Returns (n_samples, B, n_maps, H, W), with (H, W) = map_shape.
+        Returns (n_samples, B, n_maps, H, W), with (H, W) = output_shape.
         """
         n_batch = cube.shape[0]
-        shape = (self.n_maps, *self.map_shape)
+        shape = (self.n_maps, *self.output_shape)
         cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
         chunk = max_batch or cubes.shape[0]
         out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])

@@ -76,7 +76,7 @@ def model_summary(model, input_shape, depth=3):
     depth sets how many levels of nested layers are listed."""
     cube = torch.zeros(1, *input_shape)
     if isinstance(model, GaussianDiffusion):
-        noisy_maps = torch.zeros(1, model.n_maps, *model.map_shape)
+        noisy_maps = torch.zeros(1, model.n_maps, *model.output_shape)
         timestep = torch.zeros(1, dtype=torch.long)
         return torchinfo.summary(
             model.denoiser, input_data=[cube, noisy_maps, timestep], depth=depth, mode="eval", verbose=0
