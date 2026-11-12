@@ -1,108 +1,107 @@
+"""Convert an observed HI datacube in a FITS file into the hdf5 format CoNNGaFit runs on, at a trained network's size."""
+
 import logging
 
 import h5py
 import numpy as np
+from astropy import constants
+from astropy import units as u
 from astropy.io import fits
+from astropy.nddata import block_reduce
 from matplotlib import pyplot as plt
 
 logger = logging.getLogger(__name__)
 
-# from torchvision.io import read_image
-DEG_TO_ARCSEC = 60 * 60
-
-"""Function to convert a FITS file of a given resolution to a compatible hdf5 file to run inferences on with CoNNGaFit
-Currently, this will reduce the resolution of the input image
-#Input parameter are:
-   image_dir: path to the fits file you wish to convert
-   output: path to where you want to write the converted files and images
-   target_npix: Target spatial dimensionality for inferences (currently 40)
-   target_nspec: Target spectral dimenionality
-    distance: (Optional) Distance to observed galaxy for bookkeeping purposes
-    save_images: (Optional) Save images of column densities for original and reduced images
-
-Written By Cameron Trapp (ctrapped@gmail.com)
-Updated 11/21/2023"""
+ARCSEC_PER_DEGREE = 3600
+HI_FREQUENCY = 1.420405751768 * u.GHz
+# Optically thin HI: N_HI [cm^-2] = 1.823e18 * brightness temperature [K] integrated over velocity [km/s]
+COLUMN_DENSITY_PER_K_KM_S = 1.823e18
 
 
-def fits_to_conngafit(image_dir, output, target_npix, target_nspec, distance=-1, save_images=False):
-    with fits.open(image_dir) as hdul:
-        original_pixel_res = np.abs(hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
-        logger.info("pixel res = %g arcsec", hdul[0].header["CDELT1"] * DEG_TO_ARCSEC)
-        rawdata = hdul[0].data.copy()  # copy, so the data doesn't depend on the closed file
+def center_to_length(cube, length, axis):
+    """Crop or zero-pad cube along axis to length, keeping it centered."""
+    excess = cube.shape[axis] - length
+    if excess >= 0:
+        start = excess // 2
+        return np.take(cube, range(start, start + length), axis=axis)
+    pad = [(0, 0)] * cube.ndim
+    pad[axis] = (-excess // 2, -excess - (-excess // 2))
+    return np.pad(cube, pad)
 
-    logger.debug("Shape of raw data: %s", np.shape(rawdata))
 
+def column_density_per_jy_beam(header):
+    """The factor converting a FITS cube's Jy/beam to HI column density per channel (cm^-2), the units CoNNGaFit's
+    training cubes are in, assuming optically thin gas: N_HI = 1.823e18 * T_B * channel width [km/s], with T_B the
+    Rayleigh-Jeans brightness temperature [K] of 1 Jy/beam in the header's Gaussian beam (BMAJ, BMIN)."""
+    unit = header.get("BUNIT", "Jy/beam").replace(" ", "").upper()
+    if unit not in ("JY/BEAM", "JYBEAM-1"):
+        raise ValueError(f"the cube is in {header['BUNIT']!r}; fits_to_conngafit converts from Jy/beam")
+    beam_area = np.pi / (4 * np.log(2)) * (header["BMAJ"] * u.deg) * (header["BMIN"] * u.deg)
+    kelvin = (1 * u.Jy / u.beam).to_value(u.K, equivalencies=u.brightness_temperature(HI_FREQUENCY, beam_area))
+    channel_width = abs(header["CDELT3"]) * u.Unit(header.get("CUNIT3", "m/s"))  # FITS velocities default to m/s
+    if channel_width.unit.is_equivalent(u.Hz):  # A frequency axis: a channel spans c * dnu / nu of velocity
+        channel_width = constants.c * channel_width / HI_FREQUENCY
+    return COLUMN_DENSITY_PER_K_KM_S * kelvin * channel_width.to_value(u.km / u.s)
+
+
+def save_column_density(image, output):
+    """Save a cube summed over velocity as output + ".png" and output + ".hdf5"."""
+    plt.imshow(image)
+    plt.colorbar()
+    plt.savefig(output + ".png")
+    plt.close()
+    with h5py.File(output + ".hdf5", "w") as hf:
+        hf.create_dataset("image", data=image)
+
+
+def fits_to_conngafit(fits_path, output, target_npix, target_nspec, distance_kpc=None, save_images=False):
+    """Convert the HI datacube in fits_path to output + ".hdf5": a (target_npix, target_npix, target_nspec) cube in
+    CoNNGaFit's (y, x, velocity) layout, the size of the network it will be run on.
+
+    The cube is converted from Jy/beam to HI column density per channel (cm^-2, see column_density_per_jy_beam), the
+    units of the training cubes. The image is averaged in square blocks of n_bin pixels, with n_bin chosen so it is
+    about target_npix blocks across, then cropped or zero-padded, centered, to exactly target_npix. The velocity
+    channels are not resampled, only cropped or zero-padded, centered, to target_nspec, so the cube's channel width
+    should match the data the network was trained on.
+
+    distance_kpc: the galaxy's distance. If given, the binned pixel size is also saved in kpc (pixel_res_kpc), which
+        use_model.run_inferences uses to plot radial curves against radius.
+    save_images: also save the cube summed over velocity, before and after, as output + "_originalImage" and
+        output + "_reducedImage" (.png and .hdf5).
+    """
+    with fits.open(fits_path) as hdul:
+        header = hdul[0].header
+        pixel_arcsec = abs(header["CDELT1"]) * ARCSEC_PER_DEGREE
+        to_column_density = column_density_per_jy_beam(header)
+        cube = hdul[0].data * to_column_density  # (velocity, y, x) in cm^-2 per channel, copied out of the file
+    if cube.ndim == 4:
+        cube = cube[0]  # Drop the Stokes axis
+    logger.info(
+        "Read a %s cube with %g arcsec pixels; 1 Jy/beam = %.4g cm^-2", cube.shape, pixel_arcsec, to_column_density
+    )
     if save_images:
-        plt.imshow(np.sum(rawdata, axis=1)[0, :, :])
-        plt.colorbar()
-        plt.savefig(output + "_originalImage.png")
-        hf_original = h5py.File(output + "_originalImage.hdf5", "w")
-        hf_original.create_dataset("image", data=np.sum(rawdata, axis=1)[0, :, :])
-        hf_original.close()
-        plt.close()
+        save_column_density(cube.sum(axis=0), output + "_originalImage")
 
-    new_image = np.zeros((target_npix, target_npix, target_nspec))
+    # Average the image in n_bin x n_bin blocks (column density is per area, so a block's is its pixels' mean), after
+    # cropping each axis (centered) to a whole number of blocks
+    n_bin = max(1, round(cube.shape[2] / target_npix))
+    for axis in (1, 2):
+        cube = center_to_length(cube, cube.shape[axis] // n_bin * n_bin, axis)
+    cube = block_reduce(cube, (1, n_bin, n_bin), func=np.mean)
 
-    n_bin = int(np.round(np.shape(rawdata)[3] / target_npix))
-
-    newdata = rawdata[0, :, :, :]
-    logger.debug("Shape of newdata: %s", np.shape(newdata))
-    all_but_first = (1, 2)
-
-    n_spec, n_pix, tmp = np.shape(newdata)
-
-    dx = int(np.round((target_npix - n_pix / n_bin) / 2))
-    ds = int(np.round((target_nspec - n_spec) / 2))
-    logger.debug("ds = %d, target_nspec = %d", ds, target_nspec)
-
-    pix_offset0 = 0
-    logger.debug("dx = %d", dx)
-
-    if dx < 0:
-        # dx*=-1
-        pix_offset0 = int(np.round(-dx / 2))
-
-    n_trunc = target_nspec - 2 * ds
-    logger.debug("nspec = %d, ntrunc = %d", n_spec, n_trunc)
-    offset = n_spec - n_trunc
-    logger.debug("offset = %d", offset)
-
-    pix_offset = 0
-    if int(n_pix / n_bin) + dx > target_npix:
-        pix_offset = int(np.round((target_npix - int(n_pix / n_bin) - np.abs(dx)) / 2))
-
-    logger.debug("pix_offset = %d, pix_offset0 = %d", pix_offset, pix_offset0)
-
-    for i in range(pix_offset0, int(n_pix / n_bin) + pix_offset):
-        for j in range(pix_offset0, int(n_pix / n_bin) + pix_offset):
-            if ds > 0:
-                new_image[i + dx, j + dx, ds : (target_nspec - ds + offset)] = newdata[
-                    :,
-                    i * n_bin + pix_offset0 : (i + 1) * n_bin + pix_offset,
-                    j * n_bin + pix_offset0 : (j + 1) * n_bin + pix_offset,
-                ].sum(axis=all_but_first)
-            elif ds < 0:
-                new_image[i + dx, j + dx, :] = newdata[
-                    -ds : n_spec + ds,
-                    i * n_bin + pix_offset0 : (i + 1) * n_bin + pix_offset,
-                    j * n_bin + pix_offset0 : (j + 1) * n_bin + pix_offset,
-                ].sum(axis=all_but_first)
-
+    # Center the image and the spectrum on the network's grid, then put velocity last
+    for axis, length in ((0, target_nspec), (1, target_npix), (2, target_npix)):
+        cube = center_to_length(cube, length, axis)
+    spectra = np.moveaxis(cube, 0, -1)  # (y, x, velocity)
     if save_images:
-        plt.imshow(np.sum(new_image, axis=2))
-        plt.colorbar()
-        plt.savefig(output + "_reducedImage.png")
-        hf_reduced = h5py.File(output + "_reducedImage.hdf5", "w")
-        hf_reduced.create_dataset("image", data=np.sum(new_image, axis=2))
-        hf_reduced.close()
-        plt.close()
+        save_column_density(spectra.sum(axis=2), output + "_reducedImage")
 
-    hf = h5py.File(output + ".hdf5", "w")
-    hf.create_dataset("spectra", data=new_image)
-    hf.create_dataset("pixel_res_arcsec", data=original_pixel_res * n_bin)
-    hf.create_dataset("pixel_res_kpc", data=original_pixel_res * n_bin / DEG_TO_ARCSEC * np.pi / 180 * distance)
-    hf.close()
-
-    logger.info("n_bin = %d", n_bin)
-    logger.info("newPixelRes = %g arcsec", original_pixel_res * n_bin)
-    logger.info("newPixelRes = %g kpc", original_pixel_res * n_bin / DEG_TO_ARCSEC * np.pi / 180 * distance)
+    pixel_res_arcsec = pixel_arcsec * n_bin
+    logger.info("Binned %d x %d pixels together: %g arcsec pixels", n_bin, n_bin, pixel_res_arcsec)
+    with h5py.File(output + ".hdf5", "w") as hf:
+        hf.create_dataset("spectra", data=spectra)
+        hf.create_dataset("pixel_res_arcsec", data=pixel_res_arcsec)
+        if distance_kpc is not None:
+            pixel_res_kpc = np.deg2rad(pixel_res_arcsec / ARCSEC_PER_DEGREE) * distance_kpc
+            hf.create_dataset("pixel_res_kpc", data=pixel_res_kpc)
+            logger.info("Binned pixels are %g kpc across at %g kpc", pixel_res_kpc, distance_kpc)

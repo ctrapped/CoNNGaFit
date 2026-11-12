@@ -1,4 +1,4 @@
-"""Regenerate examples/demo_data/: VOF observations of synthetic disk galaxies, for examples/demo.py.
+"""Regenerate examples/demo_data/: VOF observations of synthetic disk galaxies, for the demos in examples/.
 
 You only need this to change the demo data, which is already in the repository. Needs VOF installed
 and a clone of its repository (for its synthetic galaxy, tests/synthetic_galaxy.py). From this repository's root:
