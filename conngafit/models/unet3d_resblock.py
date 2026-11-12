@@ -64,12 +64,11 @@ class NeuralNetwork(nn.Module):
         n_filt0: channel count of the first encoder stage; doubles at each later stage.
         kernel_stem: 3-tuple kernel size of the stem's strided convolution.
         kernel_coder: 3-tuple kernel size for every ResidualBlock/DeconvBlock convolution.
-        n_fc: width of the fully-connected head's hidden layers. An int applies that width to
-            every hidden layer; a list/tuple gives explicit per-layer widths (its length
-            then overrides n_fc_layers). <= 0 or empty means no hidden layers - the pooled
-            features go straight to the output Linear (with a dropout in between).
         n_stages: number of encoder stages (>= 2); the decoder has n_stages - 1. Validated
             against input_shape at construction (see check_stage_compatibility).
+        n_fc: width of the fully-connected head's hidden layers for head='fc'. An int -> width to
+            every hidden layer; list/tuple -> explicit per-layer widths. <= 0 or empty means no hidden layers - the pooled
+            features go straight to the output Linear (with a dropout in between). Default 64.
         n_fc_layers: number of hidden fully-connected layers when n_fc is a scalar (ignored
             when n_fc is a sequence of widths).
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
@@ -121,8 +120,8 @@ class NeuralNetwork(nn.Module):
         n_filt0,
         kernel_stem,
         kernel_coder,
-        n_fc,
         n_stages=4,
+        n_fc=64,
         n_fc_layers=1,
         fc_pool_shape=(8, 8, 8),
         head_dropout_rate=0.0,

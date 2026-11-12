@@ -103,7 +103,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | | `predict_every` | Predict the training and validation sets, and so score their accuracy and MSE, every `predict_every` epochs and on the final epoch; the loss is computed every epoch |
 | | `seed` | Random seed for weight initialization, dropout, batch order and the diffusion noise; the same seed, data and settings on the same machine give the same network |
 | ResBlock | `output_head` | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
-| | `n_fc` | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
+| | `n_fc` (optional) | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
 | | `dropout_rate` | Dropout before the output layer |
 | | `predict_variance` | `true` also predicts each value's 1σ uncertainty: the network outputs a mean and log-variance and trains with `nn.GaussianNLLLoss` instead of MSE. Needs `label_scaling = "symmetric"` or `"one-sided"` |
 | | `mass_weight_power` (optional) | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted, the default; 0.5 is a good start). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |

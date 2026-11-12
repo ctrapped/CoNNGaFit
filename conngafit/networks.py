@@ -24,10 +24,10 @@ SHARED_KEYS = {
     "seed",
 }
 HYPERPARAM_KEYS = {
-    "resblock": SHARED_KEYS | {"n_fc", "dropout_rate", "output_head", "predict_variance"},
+    "resblock": SHARED_KEYS | {"dropout_rate", "output_head", "predict_variance"},
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
-OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"mass_weight_power"}, "ddpm": set()}
+OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"n_fc", "mass_weight_power"}, "ddpm": set()}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
@@ -36,18 +36,19 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
     if network == "resblock":
+        fc_width = {"n_fc": hyperparams["n_fc"]} if "n_fc" in hyperparams else {}  # Otherwise the network's default
         return NeuralNetwork(
             input_shape,
             hyperparams["n_filt0"],
             kernel_stem,
             kernel_coder,
-            hyperparams["n_fc"],
             head_dropout_rate=hyperparams["dropout_rate"],
             block_dropout_rate=hyperparams["block_dropout_rate"],
             head=hyperparams["output_head"],
             output_shape=output_shape,
             predict_variance=hyperparams["predict_variance"],
             n_maps=n_maps,
+            **fc_width,
         )
 
     if output_shape is not None:

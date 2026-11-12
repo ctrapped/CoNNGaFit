@@ -93,7 +93,7 @@ class NeuralNetwork(nn.Module):
         channels, feeding the regression head.
       - Head, chosen by `head` (both options identical to unet3d_resblock.py's):
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
-        `pool_output`, so the flattened size is fixed regardless of input shape or depth; then
+        `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
         'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
@@ -114,7 +114,8 @@ class NeuralNetwork(nn.Module):
         n_fc: width of the fully-connected head's hidden layers. An int applies that width to
             every hidden layer; a list/tuple gives explicit per-layer widths (its length
             then overrides n_fc_layers). <= 0 or empty means no hidden layers - the pooled
-            features go straight to the output Linear (with a dropout in between).
+            features go straight to the output Linear (with a dropout in between). Default 64; only the fc
+            head uses it.
         n_blocks: number of DilatedResidualBlock instances in the Process stack. With the
             default 7-rate dilation schedule, n_blocks=4 gives 28 dilated conv layers.
         dilation_rates: per-layer dilation schedule cycled by every DilatedResidualBlock
@@ -127,8 +128,8 @@ class NeuralNetwork(nn.Module):
         n_maps: number of maps predicted from the shared body (default 1). Each head's output
             layer predicts every map: n_maps output channels for head='conv', or
             n_maps * prod(output_shape) outputs for head='fc'.
-        pool_output: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
-            n_filt0 * prod(pool_output); the default (8, 8, 8) gives 512 * n_filt0.
+        fc_pool_shape: 3-tuple target grid for nn.AdaptiveAvgPool3d. The fc input size is
+            n_filt0 * prod(fc_pool_shape); the default (8, 8, 8) gives 512 * n_filt0.
         head_dropout_rate: dropout probability in the output head: after every hidden FC layer's activation
             (or once before the output Linear, with no hidden layers) for head='fc', and a channel-wise
             Dropout2d before the output conv for head='conv'. 0.0 disables. Active in training mode only.
@@ -153,12 +154,12 @@ class NeuralNetwork(nn.Module):
             positive variance). With head='conv' the log-variances are n_maps more output
             channels of the head's final conv instead of a second Linear.
         head: 'fc' (default) - adaptive average pool -> flatten -> fully-connected layers, as
-            set by pool_output/n_fc/n_fc_layers; its output Linear has
-            n_filt0 * prod(pool_output) * n_maps * prod(output_shape) weights, so it grows with the map
+            set by fc_pool_shape/n_fc/n_fc_layers; its output Linear has
+            n_filt0 * prod(fc_pool_shape) * n_maps * prod(output_shape) weights, so it grows with the map
             size and number of maps.
             'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
             n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
-            the input and map size (pool_output, n_fc and n_fc_layers are then unused).
+            the input and map size (fc_pool_shape, n_fc and n_fc_layers are then unused).
         output_shape: shape of each predicted output: (H, W) for maps (default: (nX, nY) from input),
             or (n_bins,) for 1-d outputs such as radial curves (head='fc' only). Stored as self.output_shape.
         n_head_blocks: number of 2-d residual blocks in the conv head (>= 0; default 2).
@@ -175,12 +176,12 @@ class NeuralNetwork(nn.Module):
         n_filt0,
         kernel_stem,
         kernel_coder,
-        n_fc,
+        n_fc=64,
         n_blocks=4,
         dilation_rates=(1, 2, 4, 8, 4, 2, 1),
         stem_stride=(1, 1, 1),
         n_fc_layers=1,
-        pool_output=(8, 8, 8),
+        fc_pool_shape=(8, 8, 8),
         head_dropout_rate=0.0,
         block_dropout_rate=0.0,
         encode_activation=None,
@@ -246,7 +247,7 @@ class NeuralNetwork(nn.Module):
         # Decode: single conv, n_filt0 -> n_filt0 channels, shape unchanged
         self.layer_decode = Decoder(n_filt0, n_filt0, kernel_stem, activation=decode_activation)
 
-        self.pool_output = tuple(pool_output)
+        self.fc_pool_shape = tuple(fc_pool_shape)
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.fc_widths = []
@@ -260,8 +261,8 @@ class NeuralNetwork(nn.Module):
         else:
             # Head: adaptive pool -> flatten -> hidden FC stack -> output Linear -> activation.
             # Identical to unet3d_resblock.py's head.
-            self.avgpool0 = nn.AdaptiveAvgPool3d(self.pool_output)
-            flat_features = n_filt0 * int(np.prod(self.pool_output))
+            self.avgpool0 = nn.AdaptiveAvgPool3d(self.fc_pool_shape)
+            flat_features = n_filt0 * int(np.prod(self.fc_pool_shape))
 
             if isinstance(n_fc, (list, tuple)):
                 fc_widths = [int(w) for w in n_fc if int(w) > 0]
@@ -341,7 +342,7 @@ class NeuralNetwork(nn.Module):
             out = self.conv_head(x, self.output_shape)  # (nBatch, n_maps or 2 * n_maps, H, W)
             mean = self.out_activation(out[:, : self.n_maps])
             return mean, (out[:, self.n_maps :] if self.predict_variance else None)
-        # fc head: pool to pool_output and flatten, then the hidden layers, then separate output layers for the
+        # fc head: pool to fc_pool_shape and flatten, then the hidden layers, then separate output layers for the
         # means and log-variances
         x = self.avgpool0(x)
         x = torch.flatten(x, 1)
