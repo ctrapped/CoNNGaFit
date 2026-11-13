@@ -8,7 +8,8 @@ from conftest import BATCH_SIZE, INPUT_SHAPE
 from torch import nn
 
 from conngafit.models import unet3d_ddpm as ddpm
-from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep
+from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep, spectral_attention
+from conngafit.models.ddpm_diagnostics.activations import captured_outputs
 from conngafit.models.ddpm_diagnostics.recorder import TrainingDiagnostics
 from conngafit.train_model import weighted_mse_loss
 
@@ -152,19 +153,98 @@ def test_calibration_is_plotted_and_saved(tmp_path):
         assert [target.decode() for target in hf["targets"][()]] == TARGETS
 
 
+#### Activation capture ####
+def test_captured_outputs_collects_each_call_and_removes_its_hooks():
+    layers = nn.Sequential(nn.Linear(3, 2), nn.ReLU())
+    x = torch.randn(4, 3)
+    with captured_outputs({"linear": layers[0]}) as outputs:
+        layers(x)
+        layers(x)
+    assert len(outputs["linear"]) == 2
+    torch.testing.assert_close(outputs["linear"][0], layers[0](x))
+    assert not layers[0]._forward_hooks  # Hooks are gone after the block
+
+
+#### Spectral attention ####
+def test_attention_weights_sum_to_one_over_the_spectral_channels(diffusion):
+    cube, y0, noise = torch.randn(1, *INPUT_SHAPE), torch.randn(1, *MAPS_SHAPE), torch.randn(1, *MAPS_SHAPE)
+    timesteps = [0, N_TIMESTEPS - 1]
+    weights = spectral_attention.attention_weights(diffusion, cube, y0, noise, timesteps)
+    assert weights.shape[0] == len(timesteps) and weights.ndim == 4  # (n_t, S', X', Y')
+    np.testing.assert_allclose(weights.sum(axis=1), 1, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "n_channels, n_pooled, expected",
+    [(4, None, [-15, -5, 5, 15]), (5, None, [-20, -10, 0, 10, 20]), (4, 2, [-10, 10])],
+)
+def test_channel_velocities_are_centred_on_zero(n_channels, n_pooled, expected):
+    np.testing.assert_allclose(spectral_attention.channel_velocities(n_channels, 10.0, n_pooled), expected)
+
+
+def test_attention_on_one_channel_gives_its_velocity_and_no_spread():
+    velocities = np.array([-20.0, 0.0, 20.0])
+    weights = np.zeros((3, 2, 2))
+    weights[2] = 1  # Every pixel attends only to the last channel
+    mean, spread = spectral_attention.attention_moments(weights, velocities)
+    np.testing.assert_allclose(mean, 20.0)
+    np.testing.assert_allclose(spread, 0.0)
+
+
+def test_cube_mean_velocity_follows_the_emission():
+    velocities = np.array([-20.0, 0.0, 20.0])
+    cube = np.zeros((3, 2, 2))
+    cube[0, 0, 0] = 5.0  # One pixel emits only in the first channel; the others are empty
+    velocity = spectral_attention.cube_mean_velocity(cube, velocities)
+    assert velocity[0, 0] == -20.0 and np.isnan(velocity[1, 1])
+
+
+def test_spectral_attention_is_plotted_and_saved(tmp_path):
+    rng = np.random.default_rng(0)
+    timesteps = [0, 5, 9]
+    weights = {epoch: rng.dirichlet(np.ones(4), size=(3, 3, 3)).transpose(0, 3, 1, 2) for epoch in (1, 3)}
+    velocities = spectral_attention.channel_velocities(16, 10.0, 4)
+    cube_velocity = rng.normal(size=(12, 12))
+    mean, spread = spectral_attention.attention_moments(weights[3], velocities)
+
+    spectral_attention.plot_spectral_attention(cube_velocity, mean, spread, timesteps, 3, tmp_path / "attention.png")
+    spectral_attention.save_spectral_attention(
+        weights, velocities, cube_velocity, timesteps, tmp_path / "attention.hdf5"
+    )
+
+    assert (tmp_path / "attention.png").stat().st_size > 0
+    with h5py.File(tmp_path / "attention.hdf5", "r") as hf:
+        np.testing.assert_array_equal(hf["weights"][()], np.stack([weights[1], weights[3]]))
+        np.testing.assert_array_equal(hf["epochs"][()], [1, 3])
+        np.testing.assert_array_equal(hf["timesteps"][()], timesteps)
+        np.testing.assert_array_equal(hf["velocities"][()], velocities)
+        np.testing.assert_array_equal(hf["cube_velocity"][()], cube_velocity)
+
+
 #### Recording during training ####
 def test_record_rewrites_every_diagnostic_with_each_recorded_epoch(diffusion, tmp_path):
     n_samples = 3
     batches = [(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.rand(BATCH_SIZE, *MAPS_SHAPE), torch.ones(1), None)]
     draws = [(torch.randint(0, N_TIMESTEPS, (BATCH_SIZE,)), torch.randn(BATCH_SIZE, *MAPS_SHAPE))]
-    diagnostics = TrainingDiagnostics(batches, draws, n_samples, TARGETS, str(tmp_path / "run"), seed=0, device="cpu")
+    diagnostics = TrainingDiagnostics(
+        batches,
+        draws,
+        n_samples,
+        TARGETS,
+        str(tmp_path / "run"),
+        0,
+        "cpu",
+        image_mean=0,
+        image_stdv=1,
+        channel_width=10,
+    )
 
     rng_state = torch.get_rng_state()
     for epoch in (1, 3):
         diagnostics.record(epoch, diffusion)
     assert torch.equal(torch.get_rng_state(), rng_state)  # Training's random draws are left alone
 
-    for name in ("LossByTimestep", "Calibration"):
+    for name in ("LossByTimestep", "Calibration", "SpectralAttention"):
         assert (tmp_path / f"run_{name}.png").stat().st_size > 0
         with h5py.File(tmp_path / f"run_{name}.hdf5", "r") as hf:
             np.testing.assert_array_equal(hf["epochs"][()], [1, 3])  # Both recorded epochs

@@ -90,7 +90,7 @@ def test_run_inferences_writes_mean_and_std_map(trained):
             assert hf["uncertainty"].shape == expected_shape()  # with its standard deviation
 
 
-def test_diagnostic_mode_records_the_loss_by_timestep_and_calibration(train_on_image):
+def test_diagnostic_mode_records_every_diagnostic(train_on_image):
     with open(CONFIG_DIR / "hyperparams_ddpm.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
     name = "ddpm_diagnostics"
@@ -113,3 +113,8 @@ def test_diagnostic_mode_records_the_loss_by_timestep_and_calibration(train_on_i
         rank_counts = hf["rank_counts"][()]
         assert rank_counts.shape == (len(recorded_epochs), len(DIAGNOSTIC_TARGETS), SMALL_HYPERPARAMS["n_samples"] + 1)
         assert (rank_counts.sum(axis=2) == np.prod(expected_shape())).all()
+    output = run_dir / "diag" / "diagnostics" / f"{name}_SpectralAttention"
+    assert output.with_suffix(".png").is_file()
+    with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
+        assert list(hf["epochs"][()]) == recorded_epochs
+        np.testing.assert_allclose(hf["weights"][()].sum(axis=2), 1, rtol=1e-5)  # Normalized over channels

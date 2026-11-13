@@ -538,7 +538,8 @@ def train(
         on the final epoch, to <output_dir>/diagnostics/ (written even when save_diagnostics is False):
         <run_name>_LossByTimestep.png and .hdf5, the validation loss of each sample at its fixed timestep, and
         <run_name>_Calibration.png and .hdf5, the posterior calibration of the validation maps (this samples the
-        validation set a second time each recorded epoch).
+        validation set a second time each recorded epoch), and <run_name>_SpectralAttention.png and .hdf5, where
+        along the line profile the head looks for the first validation sample at a few noise levels.
         Ignored, with a warning, for the other networks.
     """
     check_hyperparams(hyperparams)
@@ -694,8 +695,19 @@ def train(
 
     diagnostics = None
     if diagnostic_mode and network == "ddpm":
+        with h5py.File(validation_data.img_paths[0], "r") as hf:
+            channel_width = hf.attrs["dnu_kmps"]  # km/s per spectral channel, for the spectral attention
         diagnostics = TrainingDiagnostics(
-            validation_dataloader, validation_draws, n_samples, targets, diagnostic_output, seed, device
+            validation_dataloader,
+            validation_draws,
+            n_samples,
+            targets,
+            diagnostic_output,
+            seed,
+            device,
+            image_mean=training_mean,
+            image_stdv=training_stdv,
+            channel_width=channel_width,
         )
     elif diagnostic_mode:
         logger.warning("diagnostic_mode only records diagnostics of the ddpm network; ignored for %s", network)
