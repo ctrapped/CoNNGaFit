@@ -86,7 +86,8 @@ def parse_args():
         action="store_true",
         help="Also record the ddpm diagnostics (conngafit/models/ddpm_diagnostics/) every predict_every epochs and "
         "on the final epoch, to <output-dir>/diagnostics/: the validation loss of each sample at its diffusion "
-        "timestep (<run-name>_LossByTimestep.png and .hdf5). Ignored for the other networks.",
+        "timestep (<run-name>_LossByTimestep.png and .hdf5) and the posterior calibration of the validation maps "
+        "(<run-name>_Calibration.png and .hdf5). Ignored for the other networks.",
     )
     add_logging_arguments(parser)
     return parser.parse_args()

@@ -24,7 +24,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
-from conngafit.models.ddpm_diagnostics import loss_by_timestep
+from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
@@ -536,7 +536,9 @@ def train(
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     diagnostic_mode: also record the ddpm diagnostics of models/ddpm_diagnostics every predict_every epochs and
         on the final epoch, to <output_dir>/diagnostics/ (written even when save_diagnostics is False):
-        <run_name>_LossByTimestep.png and .hdf5, the validation loss of each sample at its fixed timestep.
+        <run_name>_LossByTimestep.png and .hdf5, the validation loss of each sample at its fixed timestep, and
+        <run_name>_Calibration.png and .hdf5, the posterior calibration of the validation maps (this samples the
+        validation set a second time each recorded epoch).
         Ignored, with a warning, for the other networks.
     """
     check_hyperparams(hyperparams)
@@ -694,6 +696,8 @@ def train(
     if diagnostic_mode and not ddpm_diagnostics:
         logger.warning("diagnostic_mode only records diagnostics of the ddpm network; ignored for %s", network)
     losses_by_epoch = {}  # Each recorded epoch's validation loss per sample, at its fixed timestep
+    rank_counts_by_epoch, coverage_by_epoch = {}, {}  # Each recorded epoch's posterior calibration
+    diagnostic_rng = np.random.default_rng(seed)  # Its own generator, so the diagnostics leave training's alone
 
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
@@ -752,6 +756,18 @@ def train(
                 timesteps, losses_by_epoch[t] = loss_by_timestep.validation_losses_by_timestep(
                     eval_model, validation_dataloader, validation_draws, device
                 )
+                samples, labels = calibration.validation_posterior_samples(
+                    eval_model, validation_dataloader, n_samples, device
+                )
+            rank_counts_by_epoch[t], coverage_by_epoch[t] = calibration.calibration_summary(
+                samples, labels, diagnostic_rng
+            )
+            calibration.plot_calibration(
+                rank_counts_by_epoch, coverage_by_epoch, targets, diagnostic_output + "_Calibration.png"
+            )
+            calibration.save_calibration(
+                rank_counts_by_epoch, coverage_by_epoch, targets, diagnostic_output + "_Calibration.hdf5"
+            )
             loss_by_timestep.plot_loss_by_timestep(
                 timesteps, losses_by_epoch, targets, eval_model.n_timesteps, diagnostic_output + "_LossByTimestep.png"
             )

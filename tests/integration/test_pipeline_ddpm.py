@@ -90,7 +90,7 @@ def test_run_inferences_writes_mean_and_std_map(trained):
             assert hf["uncertainty"].shape == expected_shape()  # with its standard deviation
 
 
-def test_diagnostic_mode_records_the_loss_by_timestep(train_on_image):
+def test_diagnostic_mode_records_the_loss_by_timestep_and_calibration(train_on_image):
     with open(CONFIG_DIR / "hyperparams_ddpm.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
     name = "ddpm_diagnostics"
@@ -103,3 +103,13 @@ def test_diagnostic_mode_records_the_loss_by_timestep(train_on_image):
         # one loss per recorded epoch, validation sample (the single image) and target, all finite
         assert hf["losses"].shape == (len(recorded_epochs), 1, len(DIAGNOSTIC_TARGETS))
         assert np.isfinite(hf["losses"][()]).all()
+    output = run_dir / "diag" / "diagnostics" / f"{name}_Calibration"
+    assert output.with_suffix(".png").is_file()
+    with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
+        assert list(hf["epochs"][()]) == recorded_epochs
+        n_levels = len(hf["levels"][()])
+        assert hf["coverage"].shape == (len(recorded_epochs), n_levels, len(DIAGNOSTIC_TARGETS))
+        # a rank histogram of every pixel of the single validation image, per target
+        rank_counts = hf["rank_counts"][()]
+        assert rank_counts.shape == (len(recorded_epochs), len(DIAGNOSTIC_TARGETS), SMALL_HYPERPARAMS["n_samples"] + 1)
+        assert (rank_counts.sum(axis=2) == np.prod(expected_shape())).all()
