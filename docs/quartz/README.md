@@ -1,7 +1,7 @@
 # Setting up environment on Quartz (IU)
 
 Quartz-specific setup. For the training workflow itself see
-[`../README.md`](../README.md). Info on the Quartz cluster can be found [here](https://servicenow.iu.edu/kb?id=kb_article_view&sysparm_article=KB0023985).
+the main [`README.md`](../../README.md). Info on the Quartz cluster can be found [here](https://servicenow.iu.edu/kb?id=kb_article_view&sysparm_article=KB0023985).
 
 Quartz: NVIDIA V100 / H100 GPUs.
 

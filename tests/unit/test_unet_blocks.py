@@ -1,11 +1,11 @@
-"""unet_blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
+"""blocks: padding/alignment helpers and the shared 3-d and 2-d building blocks."""
 
 import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from unet_blocks import (
+from conngafit.models.blocks import (
     ConvMapHead,
     DilatedResidualBlock,
     HalfResConvHead,
@@ -13,6 +13,7 @@ from unet_blocks import (
     SpectralAttentionPool,
     _ceil_conv_pad,
     _doubling_deconv_pads,
+    _film,
     _match_spatial,
 )
 
@@ -67,6 +68,12 @@ def test_match_spatial_pad_then_crop_round_trips():
     assert torch.equal(_match_spatial(padded, x), x)
 
 
+@pytest.mark.parametrize("spatial", [(5, 6), (4, 5, 6)])
+def test_film_with_zero_scale_and_shift_is_identity(spatial):
+    h = torch.randn(BATCH, CHANNELS, *spatial)
+    torch.testing.assert_close(_film(h, torch.zeros(BATCH, 2 * CHANNELS)), h)
+
+
 @pytest.mark.parametrize("dilation", [1, 2, 4, 8])
 def test_dilated_block_preserves_shape(dilation):
     block = DilatedResidualBlock(CHANNELS, KERNEL, dilation_rates=(dilation,))
@@ -109,7 +116,7 @@ def test_half_res_conv_head_shape(predict_variance, n_maps):
     outputs = head(torch.randn(BATCH, CHANNELS, n_spec, 4, 4), torch.randn(BATCH, CHANNELS, 2, 2, 2), map_shape)
     assert len(outputs) == (2 if predict_variance else 1)  # the mean, and the log-variance with predict_variance
     for out in outputs:
-        assert out.shape == (BATCH, n_maps, map_shape[0] * map_shape[1])  # each map flattened
+        assert out.shape == (BATCH, n_maps, *map_shape)  # one map per target
 
 
 def test_conv_map_head_rejects_negative_blocks():

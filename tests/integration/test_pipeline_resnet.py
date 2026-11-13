@@ -1,7 +1,7 @@
 """Smoke tests of the training and inference pipeline: every output configuration of the ResBlock U-Net, and one with
 several targets, trains on a single VOF image for two epochs, writes a valid checkpoint, and predicts outputs (and,
 with predict_variance, their 1-sigma uncertainties) of the expected size, both when training ends and when the
-checkpoint is reloaded by use_model.py. inference_template.py runs the committed demo network."""
+checkpoint is reloaded by use_model.py. run_inference.py runs the committed demo network."""
 
 import tomllib
 
@@ -9,12 +9,24 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import CONFIG_DIR, IMAGE, IMAGE_SHAPE, REPO, TARGET, expected_shape, saved_test_outputs
+from conftest import (
+    CONFIG_DIR,
+    GALAXY,
+    IMAGE,
+    IMAGE_SHAPE,
+    INCLINATION,
+    REPO,
+    SNAPSHOT,
+    TARGET,
+    expected_shape,
+    saved_test_outputs,
+)
 
-from use_model import load_model, predict, run_inferences
+from conngafit.train_model import train
+from conngafit.use_model import load_model, predict, run_inferences
 
-INFERENCE_SCRIPT = REPO / "inference_template.py"
-DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for inference_template.py
+INFERENCE_SCRIPT = REPO / "scripts" / "run_inference.py"
+DEMO_MODEL = REPO / "examples" / "demo_model" / "demo"  # a committed checkpoint, for run_inference.py
 
 # Overrides that make the default hyperparameters small enough to train in seconds on a CPU
 SMALL_HYPERPARAMS = dict(epochs=2, n_fc=8, n_filt0=2, k0=3, k1=3, label_scaling="one-sided")
@@ -127,3 +139,38 @@ def test_inference_script_runs_committed_network(tmp_path, run_script):
     )  # fmt: skip
     # the demo network predicts radial curves of one target
     assert (tmp_path / f"inference_{IMAGE.stem}_{TARGET}_radialPlot.hdf5").is_file()
+
+
+def test_train_from_python(tmp_path):
+    """train() runs with the parameters as dicts, as examples/demo.py calls it, returns the network's path and loss
+    history, and with save_diagnostics=False saves only the network and the loss history."""
+    with open(CONFIG_DIR / "hyperparams_resblock.toml", "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": "fc"}
+    galaxy = {GALAXY: SNAPSHOT}
+    datasets = {
+        "target": TARGET,
+        "augment": "none",
+        "inclinations": [INCLINATION],
+        "radial_bins": 0,
+        "radial_projection": "sky",
+        "data_dir": IMAGE.parents[2],  # The folder of the galaxy's folder
+        "training": galaxy,
+        "validation": galaxy,
+        "testing": galaxy,
+    }
+    result = train(
+        hyperparams,
+        datasets,
+        run_name="python",
+        network_dir=tmp_path / "nets",
+        output_dir=tmp_path / "diag",
+        save_diagnostics=False,
+    )
+    # check model files are saved
+    assert (tmp_path / "nets" / "python.pt").is_file() and result.model_path == str(tmp_path / "nets" / "python")
+    for history in (result.training_losses, result.validation_losses, result.training_mses, result.validation_mses):
+        assert len(history) == SMALL_HYPERPARAMS["epochs"] and np.isfinite(history).all()  # make sure losses are finite
+    assert np.isfinite(result.final_test_loss)  # ensure last test loss is finite
+    assert sorted(p.name for p in (tmp_path / "diag").rglob("*") if p.is_file()) == ["python_LossesAndAccuracies.hdf5"]
+    _, metadata = load_model(result.model_path)  # the checkpoint's generated parameter text loads back
+    assert tomllib.loads(metadata["hyperparams_text"]) == hyperparams

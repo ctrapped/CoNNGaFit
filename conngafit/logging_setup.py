@@ -1,6 +1,6 @@
 """Shared logging configuration for the command-line scripts.
 
-Used by train_model_unet.py and the inference/FITS scripts. Library modules only create a logger
+Used by the scripts in scripts/ and examples/. Library modules only create a logger
 (logging.getLogger(__name__)) and never configure output themselves.
 """
 

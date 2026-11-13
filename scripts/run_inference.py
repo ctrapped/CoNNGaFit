@@ -1,13 +1,14 @@
+"""Template for running inference with a previously trained CoNNGaFit network on a list of input datacubes. See
+use_model.run_inferences for the full parameter description.
+
+Run as: python scripts/run_inference.py [options]
+  Run with --help to see all options.
+"""
+
 import argparse
 
-from logging_setup import add_logging_arguments, configure_logging
-from use_model import read_image_list, run_inferences
-
-####Template for running inference with a previously trained CoNNGaFit network on a list of
-####input datacubes. See use_model.run_inferences for the full parameter description.
-#
-####Run as: python inference_template.py [options]
-####  Run with --help to see all options.
+from conngafit.logging_setup import add_logging_arguments, configure_logging
+from conngafit.use_model import read_image_list, run_inferences
 
 
 def parse_args():
@@ -27,13 +28,17 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         required=True,
-        help="Path to a checkpoint written by train_model_unet.py, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
+        help="Path to a checkpoint written by conngafit.train_model, without the .pt/.hdf5 extension, e.g. NetworkWeights/my_run.",
     )
     add_logging_arguments(parser)
     return parser.parse_args()
 
 
-args = parse_args()
-configure_logging(verbose=args.verbose, quiet=args.quiet)
+def main():
+    args = parse_args()
+    configure_logging(verbose=args.verbose, quiet=args.quiet)
+    run_inferences(args.model_path, read_image_list(args.image_list), args.output_prefix)
 
-run_inferences(args.model_path, read_image_list(args.image_list), args.output_prefix)
+
+if __name__ == "__main__":
+    main()

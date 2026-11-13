@@ -11,8 +11,7 @@ import h5py
 import pytest
 import torch
 
-import unet3d_dilated_resnet
-import unet3d_resblock
+from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
 
 INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
@@ -20,7 +19,7 @@ SEED = 0
 SCRIPT_TIMEOUT_S = 600
 
 REPO = Path(__file__).resolve().parents[1]
-TRAIN_SCRIPT = REPO / "train_model_unet.py"
+TRAIN_SCRIPT = REPO / "scripts" / "train_model_unet.py"
 CONFIG_DIR = REPO / "configs"
 
 # One committed VOF image (examples/demo_data/, made by examples/make_demo_data.py), used as the training,
@@ -71,25 +70,6 @@ def make_cube():
         return torch.randn(BATCH_SIZE, *input_shape)
 
     return make
-
-
-@pytest.fixture
-def record_shapes():
-    """Factory that hooks each of a list of modules; returns the list every forward pass then appends each module's
-    output (channels, spatial shape) to, in execution order."""
-
-    def record(modules):
-        recorded = []
-
-        def hook(module, inputs, out):
-            out = out[0] if isinstance(out, tuple) else out  # e.g. a stem that also returns its half-resolution map
-            recorded.append((out.shape[1], tuple(out.shape[2:])))
-
-        for module in modules:
-            module.register_forward_hook(hook)
-        return recorded
-
-    return record
 
 
 @pytest.fixture(scope="session")

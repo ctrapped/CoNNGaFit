@@ -15,4 +15,4 @@
 <!-- If either box is unchecked, explain what breaks and how to migrate. -->
 
 ## Documentation
-- [ ] README / Tutorials updated, or not needed
+- [ ] README / docs updated, or not needed

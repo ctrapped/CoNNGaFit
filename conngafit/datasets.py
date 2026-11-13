@@ -8,12 +8,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#### Dataset classes for training (VOF images with annotations) and inference (datacubes only)
-
-
 #### Finding VOF images ####
-# Where VOF's optically thin projection writes each datacube (with its annotations), under the
-# output directory given to VOF:
+# Standard file naming used by VOF when writing each datacube (with its annotations)
 #   <output>/i<inclination>/<galaxy>_i<inclination>_pa<position angle>_<snapshot>_image<outputSuffix>_fullSpectra.hdf5
 VOF_IMAGE_NAME = "*_image{suffix}_fullSpectra.hdf5"
 # The viewing angles and snapshot in a VOF filename, just before "_image"
@@ -21,12 +17,10 @@ VOF_VIEW = re.compile(r"_i(?P<inclination>[^_]+)_pa(?P<position_angle>[^_]+)_(?P
 
 
 def snapshot_range(snapshots, where):
-    """(minSnap, maxSnap) from a snapshot number or an inclusive [minSnap, maxSnap] pair."""
+    """(minSnap, maxSnap) from an integer snapshot number or an inclusive [minSnap, maxSnap] pair."""
     if isinstance(snapshots, int):
-        # One snapshot tha is an interger
         return snapshots, snapshots
     if isinstance(snapshots, (list, tuple)) and len(snapshots) == 2 and all(isinstance(v, int) for v in snapshots):
-        # A list of two snapshots, which are integers
         return snapshots[0], snapshots[1]
     raise ValueError(f"{where}: snapshots = {snapshots!r} should be a snapshot or [minSnap, maxSnap]")
 
@@ -40,17 +34,15 @@ def inclination_folders(inclinations, where):
         and inclinations
         and all(isinstance(v, (int, float)) for v in inclinations)
     ):
-        return [f"i{inclination:g}" for inclination in inclinations]  # :g writes 45 and 45.0 as "45", like VOF
+        return [f"i{inclination:g}" for inclination in inclinations]  # :g writes 45 and 45.0 as "45"
     raise ValueError(f'{where}: inclinations = {inclinations!r} should be "all" or a list such as [30, 45]')
 
 
 def find_vof_images(sources, inclinations="all", suffix=""):
     """Return the paths of every VOF datacube in each source directory's snapshot range, in source order.
 
-    sources maps each VOF output directory (the folder holding its i<inclination>/ folders) to a
-    snapshot or an inclusive [minSnap, maxSnap] range. inclinations ("all", or a list in degrees)
-    and suffix (VOF's outputSuffix, default "": files without one) apply to every source; every
-    position angle found is included.
+    sources are the directory and snapshot ranges from the datasets file.
+    inclinations = 'all' or a list of degrees. suffix adds a suffix to the image filename.
     """
     folders = inclination_folders(inclinations, "find_vof_images")
     filename = VOF_IMAGE_NAME.format(suffix=glob.escape(suffix))
@@ -78,8 +70,7 @@ def find_vof_images(sources, inclinations="all", suffix=""):
 def face_on_path(path):
     """Return the path of the face-on (inclination 0) VOF image for the same galaxy, snapshot, and suffix as path.
 
-    Uses the same position angle if that file exists; otherwise any face-on position angle (the
-    position angle only spins a face-on disk, so its radial curves are the same).
+    Uses the same position angle if that file exists; otherwise any face-on position angle (okay for radial curves)
     """
     name = os.path.basename(path)
     view = VOF_VIEW.search(name)
@@ -124,7 +115,6 @@ MOMENTUM_TARGETS = {"radial_momentum", "cylindrical_radial_momentum", "rotationa
 
 def label_map(hf, target):
     """target's map from an open VOF file: Msun (mass), km/s (velocities), or Msun km/s (momenta) per pixel."""
-    # e.g. radial momentum = mass * radial velocity, per pixel
     target_maps = TARGETS[target]
     if len(target_maps) > 1:
         # Multiply Mass and Velocities for Momenta
@@ -136,19 +126,13 @@ def label_map(hf, target):
 
 def radial_profile(hf, target, n_bins, values=None):
     """Reduce an open VOF file's annotation maps to a radial curve of target, in n_bins equal-width rings.
+    Velocities are the mass-weighted mean [km/s], zero in rings with no mass.
 
-    Radius is measured in the image plane from the image center, out to the image edge. Mass and
-    momentum are the totals in each ring [Msun, Msun km/s], and velocities the mass-weighted mean
-    [km/s], zero in rings with no mass.
     values: a map of target to bin in place of the file's own annotation (e.g. a network's prediction),
-    weighted by the file's mass like the annotation it replaces.
+    weighted by the file's mass.
     """
     mass = hf["mass_annotation"][()]
-    fov_kpc = hf.attrs["fov_kpc"]
-    y, x = np.indices(mass.shape)
-    radius = np.hypot(y - (mass.shape[0] - 1) / 2, x - (mass.shape[1] - 1) / 2) * fov_kpc / mass.shape[1]
-    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
-    ring = np.digitize(radius, edges) - 1
+    ring = ring_index(mass.shape, hf.attrs["fov_kpc"], n_bins)
     inside = ring < n_bins  # pixels in the corners, beyond the image edge, are left out
 
     def ring_sum(values):
@@ -165,13 +149,21 @@ def radial_profile(hf, target, n_bins, values=None):
     return np.divide(momentum, ring_mass, out=np.zeros(n_bins), where=ring_mass > 0)
 
 
+def ring_index(shape, fov_kpc, n_bins):
+    """Each pixel's ring in an image of shape (nY, nX) and fov_kpc across, split into n_bins equal-width rings by
+    radius from the image center out to the image edge; pixels in the corners, beyond the edge, are n_bins or more."""
+    y, x = np.indices(shape)
+    radius = np.hypot(y - (shape[0] - 1) / 2, x - (shape[1] - 1) / 2) * fov_kpc / shape[1]
+    edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
+    return np.digitize(radius, edges) - 1
+
+
 def ring_radii(fov_kpc, n_bins):
     """Centers (kpc) of radial_profile's n_bins rings, for an image fov_kpc across."""
     edges = np.linspace(0, fov_kpc / 2, n_bins + 1)
     return (edges[:-1] + edges[1:]) / 2
 
 
-#### Augmentation ####
 # Augmentations, as (number of 90-degree rotations, left-right flip). VOF puts the galaxy's major
 # axis along x; "major_axis" keeps it there, while "all" (every rotation/flip of a square image)
 # also includes 90/270-degree rotations that put it along y.
@@ -195,30 +187,30 @@ def augmentation_suffix(rotations, flip):
     return (f"_r{90 * rotations}" if rotations else "") + ("_lr" if flip else "")
 
 
-####Dataset class for training. Finds each galaxy's VOF datacubes; get loads one (optionally rotated/flipped) datacube and its target annotation maps or radial curves ('label')
 class CoNNGaFitImageDataset:
-    """PyTorch-style dataset of (datacube, label) pairs from VeryObservableFIRE's optically thin projection
+    """PyTorch-style dataset of training samples from VeryObservableFIRE's optically thin projection. Each sample is
+    (datacube, label, weights, index): the weights are mass ** mass_weight_power per pixel (or ring), or all
+    ones, and the index identifies the sample (e.g. its name in names) after the DataLoader shuffles the samples.
 
     sources: which VOF outputs to include, mapping each VOF output directory to its snapshots, e.g.
-        {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600} (see
-        find_vof_images); snapshot ranges are inclusive, and every position angle found is used.
+        {"/scratch/m12i/vof_outputs": (580, 600), "/scratch/m12f/vof_outputs": 600}
     targets: which annotations to learn, a list of TARGETS keys (e.g. ["mass", "rotational_momentum"]).
-        Labels are returned as an (n_targets, n_pixels) array, one flattened map per target in this
-        order, in Msun (mass), km/s (velocities), or Msun km/s (momenta).
+        Labels are returned as an (n_targets, nY, nX) array, one map per target in this order (or
+        (n_targets, radial_bins), one radial curve per target)
     transform / target_transform: callables applied to the loaded image / label respectively
         (e.g. torchvision ToTensor/Normalize for the image, label scaling for the label).
-    augment: None (default), "major_axis", or "all" (see AUGMENTATIONS): include each image's
-        rotations/flips as extra samples, with the label map transformed to match. "major_axis"
-        adds 3 (180-degree rotation, left-right flip, and both), keeping VOF's major axis along x;
-        "all" adds 7 (every 90-degree rotation, with and without the flip).
+    augment: None (default), "major_axis", or "all" (see AUGMENTATIONS):
+        "major_axis" adds 3 (180-degree rotation, left-right flips);
+        "all" adds 7 (90-degree rotations, left-right flips).
     radial_bins: if given, each target's label is a radial curve with this many rings (see radial_profile)
-        instead of a map; rotations and flips then leave it unchanged.
     radial_projection: where radial curves are measured. "face_on" (default) uses the same galaxy and
-        snapshot's face-on (inclination 0) VOF image, so radii are in the disk plane; "sky" uses
-        each image's own annotations, with radii in the sky plane.
+        snapshot's face-on (inclination 0) VOF image; "sky" uses
+        each image's own annotations.
     inclinations: which inclinations to include, "all" (default) or a list in degrees such as
         [30, 45], for every source.
     suffix: VOF's outputSuffix in the filenames to load (default "": files without one), for every source.
+    mass_weight_power: each sample's weights are its mass ** mass_weight_power (see mass_weights); 0 (the
+        default) gives all ones. Weights are used for loss calculations.
 
     The names attribute holds a short name for each sample (its filename without extension, plus
     an augmentation suffix such as "_r180_lr"), in dataset order.
@@ -235,6 +227,7 @@ class CoNNGaFitImageDataset:
         radial_projection="face_on",
         inclinations="all",
         suffix="",
+        mass_weight_power=0,
     ):
         if not targets:
             raise ValueError("targets is empty; name at least one annotation")
@@ -249,9 +242,11 @@ class CoNNGaFitImageDataset:
         self.transform = transform
         self.target_transform = target_transform
         self.radial_bins = radial_bins
+        self.mass_weight_power = mass_weight_power
 
         self.img_paths = find_vof_images(sources, inclinations, suffix)
-        # Sample idx is augmentation (idx % n) of file (idx // n)
+        # Each file gives one sample per augmentation, numbered file by file in the order of self.names. With n
+        # augmentations, sample idx is file idx // n, rotated/flipped by augmentation idx % n, which divmod(idx, n) gives together
         self.augmentations = AUGMENTATIONS[augment]
         self.names = []
         for path in self.img_paths:
@@ -284,7 +279,7 @@ class CoNNGaFitImageDataset:
         curve, stacked along the first axis."""
         if self.radial_bins is None:
             return np.stack([label_map(hf, target) for target in self.targets])
-        if file_idx not in self.curves:  # Have the radial curves already been computed?
+        if file_idx not in self.curves:
             with h5py.File(self.curve_paths[file_idx], "r") as hf_curve:
                 # Calculate Radial Curves if not already done
                 curves = [radial_profile(hf_curve, target, self.radial_bins) for target in self.targets]
@@ -297,15 +292,15 @@ class CoNNGaFitImageDataset:
             return np.array(hf["spectra"]).astype("float")
 
     def label(self, file_idx):
-        """The (n_targets, n_pixels) label of image file_idx before augmentation and target_transform (e.g. to compute
-        label scaling)."""
+        """The (n_targets, nY, nX) or (n_targets, radial_bins) label of image file_idx before augmentation and
+        target_transform (e.g. to compute label scaling)."""
         with h5py.File(self.img_paths[file_idx], "r") as hf:
-            return self._label(hf, file_idx).reshape(len(self.targets), -1).astype("float")
+            return self._label(hf, file_idx).astype("float")
 
     def mass_weights(self, idx, power):
-        """Sample idx's loss weights, mass ** power per pixel (or ring) with mean 1, as a (1, n_pixels) array that
-        broadcasts over every target of its label."""
-        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image, shaped
+        (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve)."""
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
         if file_idx not in self.masses:
             if self.radial_bins is None:
                 with h5py.File(self.img_paths[file_idx], "r") as hf:
@@ -316,17 +311,18 @@ class CoNNGaFitImageDataset:
         weights = self.masses[file_idx] ** power
         if self.radial_bins is None:
             weights = augment_array(weights, *self.augmentations[aug_idx])  # Rotated/flipped like the label
-        weights = weights.reshape(1, -1).astype("float")
+        weights = weights[None].astype("float")
         # Mean 1, so every image counts equally however massive; an image with no mass is weighted uniformly
         return weights / weights.mean() if weights.mean() > 0 else np.ones_like(weights)
 
     def radii(self, idx):
         """Ring centers (kpc) of sample idx's radial curve, from the field of view of the image it was measured on."""
-        with h5py.File(self.curve_paths[idx // len(self.augmentations)], "r") as hf:
+        file_idx = idx // len(self.augmentations)  # The file sample idx comes from (see __init__)
+        with h5py.File(self.curve_paths[file_idx], "r") as hf:
             return ring_radii(hf.attrs["fov_kpc"], self.radial_bins)
 
     def __getitem__(self, idx):
-        file_idx, aug_idx = divmod(idx, len(self.augmentations))
+        file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
         rotations, flip = self.augmentations[aug_idx]
         path = self.img_paths[file_idx]
         with h5py.File(path, "r") as hf:
@@ -342,16 +338,19 @@ class CoNNGaFitImageDataset:
             if label.shape[1:] != image.shape[:2]:
                 raise ValueError(f"{path}: {self.targets} maps are {label.shape[1:]}, but the image is {image.shape}")
             label = np.stack([augment_array(target_map, rotations, flip) for target_map in label])
-        label = label.reshape(len(self.targets), -1).astype("float")
+        label = label.astype("float")
 
         if self.transform:
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
-        return image, label
+        if self.mass_weight_power > 0:
+            weights = self.mass_weights(idx, self.mass_weight_power)
+        else:
+            weights = np.ones_like(label)
+        return image, label, weights, idx
 
 
-####Dataset class for inference. Loads datacubes with no labels, e.g. VOF images or real observations converted with fits_to_conngafit.py
 class CoNNGaFitImageInferenceDataset:
     """PyTorch-style dataset of datacubes to run a trained network on, with no labels.
 

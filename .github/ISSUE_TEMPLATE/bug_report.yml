@@ -24,7 +24,7 @@ body:
       options:
         - Training scripts
         - Inference (use_model / inference scripts)
-        - Networks (unet3d_resblock / unet3d_dilated_resnet / unet3d_ddpm / unet_blocks)
+        - Networks (unet3d_resblock / unet3d_dilated_resnet / unet3d_ddpm / blocks)
         - Datasets
         - FITS conversion
         - Plotting

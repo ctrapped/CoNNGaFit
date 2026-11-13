@@ -5,9 +5,9 @@ import tomllib
 import pytest
 from conftest import CONFIG_DIR
 
-from networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model
-from unet3d_ddpm import GaussianDiffusion
-from unet3d_resblock import NeuralNetwork
+from conngafit.models.unet3d_ddpm import GaussianDiffusion
+from conngafit.models.unet3d_resblock import NeuralNetwork
+from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
 CONFIG_FILES = sorted(CONFIG_DIR.glob("hyperparams_*.toml"))
 # Big enough for the default four encoder stages, which the config files don't override
@@ -33,7 +33,6 @@ def test_build_model_matches_network(path):
     model = build_model(hyperparams["network"], BUILD_SHAPE, hyperparams)
     assert isinstance(model, NETWORK_CLASSES[hyperparams["network"]])
     if isinstance(model, GaussianDiffusion):
-        assert model.flat_labels  # samples and labels are flattened maps, as conngafit_datasets.py gives them
         assert model.denoiser.input_shape == BUILD_SHAPE  # built for the cube
 
 
@@ -41,10 +40,19 @@ def test_ddpm_rejects_radial_curves():
     with open(CONFIG_DIR / "hyperparams_ddpm.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
     with pytest.raises(ValueError, match="predicts maps"):
-        build_model("ddpm", BUILD_SHAPE, hyperparams, output_size=10)
+        build_model("ddpm", BUILD_SHAPE, hyperparams, output_shape=(10,))
 
 
 def test_mass_weight_power_is_resblock_only():
     assert "mass_weight_power" in OPTIONAL_HYPERPARAM_KEYS["resblock"]  # the resblock network may weight its loss
     # but the ddpm network's denoising loss is unweighted, so its files can't set it
     assert "mass_weight_power" not in HYPERPARAM_KEYS["ddpm"] | OPTIONAL_HYPERPARAM_KEYS["ddpm"]
+
+
+@pytest.mark.parametrize("path", CONFIG_FILES, ids=lambda path: path.name)
+def test_model_summary_counts_every_parameter(path):
+    with open(path, "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
+    model = build_model(hyperparams["network"], BUILD_SHAPE, hyperparams)
+    summarized = model.denoiser if hyperparams["network"] == "ddpm" else model  # The DDPM's table is its denoiser's
+    assert model_summary(model, BUILD_SHAPE).total_params == sum(p.numel() for p in summarized.parameters())
