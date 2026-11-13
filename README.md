@@ -36,7 +36,7 @@ Trains a small network on VOF observations of six synthetic disk galaxies, each 
 
 ![Demo: the test galaxy's HI column density and line-of-sight velocity, its true and predicted rotation curves with predicted ±1σ at four position angles, the residuals, and the MSE and Gaussian NLL loss curves](examples/demo.png)
 
-`python examples/demo.py --predict map` trains the network on the rotational velocity map instead, with each pixel's 1σ, and bins the predicted map into the rotation curve (mass-weighted, as the true curve is). Its figure, `demo_map.png`, adds the true, predicted and residual velocity maps and the predicted 1σ map. Pass its network to `demo_inference.py` with `--model-path examples/demo_output/NetworkWeights/demo_map`.
+`python examples/demo.py --predict map` trains the network on the rotational velocity map instead, with each pixel's 1σ, and bins the predicted map into the rotation curve (mass-weighted, as the true curve is). Its figure, `demo_map.png`, adds the true and predicted velocity maps, their difference, and the prediction's signal-to-noise (predicted / 1σ). Pass its network to `demo_inference.py` with `--model-path examples/demo_output/NetworkWeights/demo_map`.
 
 To run a trained network on new datacubes without training, run
 
@@ -70,13 +70,13 @@ The hyperparameters file's `network` key chooses the network, and so which other
 ```toml
 target = "radial_momentum"      # mass, radial_velocity, cylindrical_radial_velocity, rotational_velocity,
                                 # radial_momentum, cylindrical_radial_momentum, rotational_momentum;
-                                # or a list, e.g. ["mass", "rotational_momentum"], to predict a map of each (resblock only)
+                                # or a list, e.g. ["mass", "rotational_momentum"], to predict a map of each
 augment = "major_axis"          # rotations/flips added to the training set: "major_axis", "all" or "none"
 inclinations = [45]             # inclinations to use in every set: "all", or a list in degrees
 radial_bins = 0                 # 0 trains on maps; N > 0 trains on N-bin radial curves
 radial_projection = "face_on"   # where radial curves are measured: "face_on" or "sky"
 suffix = ""                     # optional: VOF's outputSuffix in the filenames
-base_dir = "/path/to/VOF_outputs"  # optional: relative paths below are relative to this
+data_dir = "/path/to/VOF_outputs"  # optional: relative paths below are relative to this
 
 [training]
 "m12i/vof_outputs" = [500, 600]   # a VOF output directory = a snapshot, or an inclusive [min, max] range
@@ -103,7 +103,7 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | | `predict_every` | Predict the training and validation sets, and so score their accuracy and MSE, every `predict_every` epochs and on the final epoch; the loss is computed every epoch |
 | | `seed` | Random seed for weight initialization, dropout, batch order and the diffusion noise; the same seed, data and settings on the same machine give the same network |
 | ResBlock | `output_head` | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
-| | `n_fc` | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
+| | `n_fc` (optional) | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
 | | `dropout_rate` | Dropout before the output layer |
 | | `predict_variance` | `true` also predicts each value's 1σ uncertainty: the network outputs a mean and log-variance and trains with `nn.GaussianNLLLoss` instead of MSE. Needs `label_scaling = "symmetric"` or `"one-sided"` |
 | | `mass_weight_power` (optional) | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted, the default; 0.5 is a good start). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |
@@ -117,11 +117,24 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | `--run-name` | the targets, joined by `_` | Name of the checkpoint and every diagnostic output |
 | `--network-dir` | `NetworkWeights` | Where the trained model is written |
 | `--output-dir` | `DiagnosticOutputs` | Where diagnostic images and plots are written |
+| `--no-diagnostics` | | Save only the checkpoint and `diagnostics/<run-name>_LossesAndAccuracies.hdf5`, not the images and plots |
 | `--batch-size` | ~1/10 of the training set (at least 2) | Training batch size; `0` trains on the full set as one batch |
 | `--test-batch-size` | ~1/10 of the validation set | Validation/testing batch size |
 | `-v` / `-q` | | Show debug messages / only warnings and errors |
 
 Both output directories are created if missing. Run with `--help` for details.
+
+### Training from Python
+
+Training can also be run in a script with `conngafit.train_model.train`, which takes the two parameter sets as dicts with the same keys as the files. See [`examples/demo.py`](examples/demo.py) for an example:
+
+```python
+from conngafit.train_model import train
+
+result = train(hyperparams, datasets, run_name="my_run", save_diagnostics=False)
+result.model_path  # NetworkWeights/my_run, for conngafit.use_model.load_model
+result.validation_losses  # and the other per-epoch losses, MSEs and accuracies
+```
 
 ### Outputs
 
@@ -151,19 +164,20 @@ Predictions, labels and uncertainties in every saved output are in physical unit
 
 | Module | Description |
 |---|---|
+| `conngafit/train_model.py` | `train`, which trains any network from the hyperparameters and datasets, for `scripts/train_model_unet.py` and from Python |
 | `conngafit/networks.py` | Each network's hyperparameter keys, and `build_model`, which builds either network for `scripts/train_model_unet.py` and `conngafit/use_model.py` |
 | `conngafit/models/unet3d_resblock.py` | The residual U-Net, `network = "resblock"` |
 | `conngafit/models/unet3d_dilated_resnet.py` | A dilated residual network with no downsampling, with the same interface |
 | `conngafit/models/unet3d_ddpm.py` | A conditional diffusion model that samples maps from their posterior, `network = "ddpm"` |
-| `conngafit/models/blocks.py`, `conngafit/models/diagnostics.py` | Shared building blocks, and helpers for parameter counts and latent images |
+| `conngafit/models/blocks.py`, `conngafit/models/diagnostics.py` | Shared building blocks, and PNG dumps of intermediate activations (latent images) |
 
-Every network has a `summary()` method that prints its stages, shapes and parameter counts. [`examples/model_summaries.ipynb`](examples/model_summaries.ipynb) builds each one and checks its summary against a real forward pass.
+`conngafit.networks.model_summary(model, input_shape)` lists a network's layers with each one's output shape and parameter count (with [torchinfo](https://github.com/TylerYep/torchinfo)); training logs it at the start of every run. [`examples/model_summaries.ipynb`](examples/model_summaries.ipynb) prints it for each network.
 
 ## Observed data and inference
 
-`conngafit/fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, binning it down to the network's spatial size and trimming or padding its spectral axis. `scripts/fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
+`conngafit/fits_to_conngafit.py` converts an observed FITS datacube into CoNNGaFit's `.hdf5` input format, converting it from Jy/beam to HI column density per channel, averaging it down to the network's spatial size and trimming or padding its spectral axis. `scripts/fits_to_conngafit_template.py` shows example usage for four THINGS galaxies.
 
-`conngafit/use_model.py` runs a trained network on new datacubes; `scripts/run_inference.py` and `scripts/run_inference_validation.py` do so from the command line. DDPMs, and ResBlock networks trained with `predict_variance`, also return (`use_model.predict(..., return_std=True)`) and save each prediction's 1σ. `scripts/run_inference_validation.py --save-latent-images` also saves PNGs of a ResBlock network's intermediate activations.
+`conngafit/use_model.py` runs a trained network on new datacubes; `scripts/run_inference.py` does so from the command line. DDPMs, and ResBlock networks trained with `predict_variance`, also return (`use_model.predict(..., return_std=True)`) and save each prediction's 1σ. `use_model.run_inferences(..., save_latent_images=True)` also saves PNGs of a ResBlock network's intermediate activations.
 
 ## Development
 
@@ -175,7 +189,7 @@ pytest -m "not slow" # skip the demo-accuracy tests (about 2 minutes)
 pytest tests/unit    # only the unit tests (a few seconds)
 ```
 
-`tests/unit/` are simple unit tests. `tests/integration` includes pipeline smoke tests training and inference for each ResBlock output head and for the DDPM and a demo test `tests/integration/test_demo.py` (marked `slow`; CI runs it on pull requests) that trains a demo and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
+`tests/unit/` are simple unit tests. `tests/integration` includes pipeline smoke tests training and inference for each ResBlock output head and for the DDPM and a demo test `tests/integration/test_demo.py` (marked `slow`; CI runs it on pull requests) that trains the demo and checks the losses fall, the rotation curve is predicted accurately, and its predicted uncertainties are calibrated, for the newly trained and committed networks.
 
 `main` is protected: changes go through pull requests, and the tests (`.github/workflows/tests.yml`) must pass first. Work on a branch and add tests in `tests/unit/` or `tests/integration/` for new code.
 

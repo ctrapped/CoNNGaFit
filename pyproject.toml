@@ -14,6 +14,7 @@ authors = [{ name = "Cameron Trapp" }, { name = "Caleb Choban" }]
 dependencies = [
     "torch",
     "torchvision",
+    "torchinfo",
     "numpy",
     "pandas",
     "h5py",
@@ -35,7 +36,7 @@ addopts = "-ra"
 markers = ["slow: trains on the full demo data; skip with -m \"not slow\""]
 
 [tool.ruff]
-src = [".", "examples"]  # first-party modules, for import sorting
+src = [".", "examples", "experiments"]  # first-party modules, for import sorting
 line-length = 120
 target-version = "py311"
 

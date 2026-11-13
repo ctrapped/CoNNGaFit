@@ -18,9 +18,9 @@ pytestmark = pytest.mark.slow
 
 INFERENCE_DEMO = demo.REPO_ROOT / "examples" / "demo_inference.py"
 COMMITTED_MODEL = demo.REPO_ROOT / "examples" / "demo_model" / "demo"
-TEST_IMAGES = sorted((demo.DATA_DIR / demo.SPLITS["testing"][0]).rglob("*.hdf5"))
+TEST_IMAGES = sorted((demo.DATA_DIR / next(iter(demo.DATASETS["testing"]))).rglob("*.hdf5"))
 TRAINING_IMAGES = sorted(
-    path for galaxy in demo.SPLITS["training"] for path in (demo.DATA_DIR / galaxy).rglob("*.hdf5")
+    path for galaxy in demo.DATASETS["training"] for path in (demo.DATA_DIR / galaxy).rglob("*.hdf5")
 )
 
 # Limits for training and validation loss and rotation curve RMS error. Demo tests should be at least this accurate to pass.

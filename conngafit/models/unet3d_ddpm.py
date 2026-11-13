@@ -11,15 +11,8 @@ from conngafit.models.blocks import (
     SpectralAttentionPool,
     Stem,
     Upsample,
-    _check_stage_compatibility,
     _match_spatial,
-)
-from conngafit.models.summary import (
-    count_params,
-    layer_param_lines,
-    print_param_totals,
-    print_stage_rows,
-    unet_stage_shapes,
+    check_stage_compatibility,
 )
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
@@ -122,10 +115,9 @@ class DenoisingUNet3d(nn.Module):
       encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
       decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
-    Every block uses GroupNorm and is FiLM-conditioned on the timestep embedding. GroupNorm normalizes
-    each sample on its own; BatchNorm would mix samples at different noise levels and break at batch
-    size 1 during sampling. The cube and map sizes are fixed at
-    construction: input_shape is checked against n_stages (_check_stage_compatibility) and forward()
+    Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
+    FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
+    construction: input_shape is checked against n_stages (check_stage_compatibility) and forward()
     rejects any other size. No weight depends on them, so a trained denoiser's state_dict loads into
     one built for another size (with the same n_maps).
 
@@ -141,7 +133,7 @@ class DenoisingUNet3d(nn.Module):
         upsample_mode: 'trilinear' (default; no checkerboard artifacts, which would look like
             structured noise to the model) or 'conv_transpose'.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
-        map_shape: (H, W) of each map (default (nX, nY)).
+        output_shape: (H, W) of each map (default (nX, nY) from input).
         n_maps: number of maps denoised together (default 1).
     """
 
@@ -159,7 +151,7 @@ class DenoisingUNet3d(nn.Module):
         block_activation=nn.SiLU,
         upsample_mode="trilinear",
         max_groups=8,
-        map_shape=None,
+        output_shape=None,
         n_maps=1,
     ):
         super().__init__()
@@ -171,12 +163,13 @@ class DenoisingUNet3d(nn.Module):
         if len(input_shape) != 3:
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")
         self.input_shape = input_shape
-        self.map_shape = tuple(int(v) for v in map_shape) if map_shape is not None else input_shape[1:]
+        if output_shape is None:
+            output_shape = input_shape[1:]
+        self.output_shape = tuple(int(v) for v in output_shape)
         self.n_maps = n_maps
-        self.stem_out_shape = _check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
+        check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
         t_dim = t_dim or 4 * n_filt0
-        # kept for stage_shapes()/summary()
         self.n_filt0, self.t_dim, self.max_groups = n_filt0, t_dim, max_groups
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
@@ -191,10 +184,10 @@ class DenoisingUNet3d(nn.Module):
         self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
         # Encoder: stage 0 keeps the stem's shape, later stages halve every axis and double channels.
-        self.enc_channels = [n_filt0 * 2**i for i in range(n_stages)]
+        enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
         self.encoder = nn.ModuleList()
         prev = n_filt0
-        for i, ch in enumerate(self.enc_channels):
+        for i, ch in enumerate(enc_ch):
             self.encoder.append(
                 nn.ModuleList(
                     [
@@ -209,7 +202,7 @@ class DenoisingUNet3d(nn.Module):
         self.upsamples = nn.ModuleList()
         self.decoder = nn.ModuleList()
         for j in range(n_stages - 1):
-            in_ch, out_ch = self.enc_channels[n_stages - 1 - j], self.enc_channels[n_stages - 2 - j]
+            in_ch, out_ch = enc_ch[n_stages - 1 - j], enc_ch[n_stages - 2 - j]
             self.upsamples.append(Upsample(in_ch, out_ch, kernel1=self.kernel_coder, mode=upsample_mode))
             self.decoder.append(
                 nn.ModuleList(
@@ -224,12 +217,12 @@ class DenoisingUNet3d(nn.Module):
 
     def forward(self, cube, y_t, t):
         """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with
-        (H, W) = map_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
-        maps_shape = (self.n_maps, *self.map_shape)
+        (H, W) = output_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
+        maps_shape = (self.n_maps, *self.output_shape)
         if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
             raise ValueError(
                 f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
-                f"was built for: input_shape {self.input_shape}, (n_maps, *map_shape) {maps_shape}"
+                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
             )
         _, n_spec, n_x, n_y = cube.shape
         t_emb = self.time_embed(t)
@@ -255,118 +248,6 @@ class DenoisingUNet3d(nn.Module):
 
         return self.head(h, y_t, t_emb)
 
-    def stage_shapes(self):
-        """Analytically compute the tensor shape at every stage (no forward pass), for a cube of input_shape
-        and n_maps noisy maps of map_shape.
-        Returns a list of (label, n_features, dims) tuples in execution order, matching forward():
-        stem -> ceil(N/4) per axis, each later encoder stage -> ceil(N/2), each decoder stage
-        upsamples (2N-1 for 'conv_transpose', 2N for 'trilinear') then _match_spatial realigns it
-        to the encoder skip map, and the head collapses the spectral axis and resizes to map_shape.
-        """
-        input_shape, map_shape, stem = self.input_shape, self.map_shape, self.stem_out_shape
-        rows = [
-            ("input: cube + tiled noisy maps", 1 + self.n_maps, input_shape),
-            ("stem (conv + maxpool)", self.n_filt0, stem),
-        ]
-
-        rows += unet_stage_shapes(stem, self.enc_channels, [up.mode for up in self.upsamples])
-        shape = rows[-1][2]  # last decoder stage output
-
-        c = self.n_filt0
-        rows += [
-            ("head: spectral attention pool", c, shape[1:]),  # spectral axis removed
-            ("head: resize to map", c, map_shape),
-            ("head: + noisy maps y_t", c + self.n_maps, map_shape),
-        ]
-        rows += [(f"head: 2-d res block {k}", c, map_shape) for k in range(len(self.head.blocks))]
-        rows.append(("head: output conv -> eps", self.n_maps, map_shape))
-        return rows
-
-    def _param_groups(self):
-        """(label, [modules]) for every summary() row, in order: the timestep embedding, then the
-        stage_shapes() rows. Rows with no parameters (input, skip concat, resize, y_t concat) get []."""
-        mods = [[], [self.stem]] + [[stage] for stage in self.encoder]
-        for up, blocks in zip(self.upsamples, self.decoder):
-            mods += [[up], [], [blocks]]  # upsample, + skip (concat), deconv blocks
-        mods += [[self.head.pool], [], []] + [[b] for b in self.head.blocks] + [[self.head.out]]
-        rows = self.stage_shapes()
-        return [("timestep embedding", [self.time_embed])] + [(label, m) for (label, _, _), m in zip(rows, mods)]
-
-    def param_breakdown(self):
-        """(label, n_parameters) for every summary() row that holds parameters, in order. The counts
-        add up to the model's total parameter count."""
-        return [(label, count_params(mods)) for label, mods in self._param_groups() if mods]
-
-    def summary(self, print_fn=print, layers=True):
-        """Print the network structure for a cube of input_shape and n_maps maps of map_shape: input/output
-        dimensions, the data/feature-count progression through every layer, the number of parameters in
-        every block and layer, the activation and time conditioning at each stage, and the decoder's
-        upsample_mode. `print_fn` lets output be redirected (e.g. to a logger). layers: if True (default),
-        list each block's layers and their parameter counts under the block's row.
-        """
-        rows = self.stage_shapes()
-        n_spec, n_x, n_y = rows[0][2]
-        map_h, map_w = rows[-1][2]
-        label_width = max(len(label) for label, _, _ in rows + [("timestep embedding", 0, ())])
-        bar_width = label_width + 58
-
-        # Read activations and modes off the instantiated modules so this reflects what actually runs.
-        stem_act = type(self.stem.act).__name__
-        block_act = type(self.encoder[0][0].act1).__name__  # same class at every 3-d block/site
-        head_act = type(self.head.blocks[0].act1).__name__
-        time_act = type(self.time_embed.mlp[1]).__name__
-        upsample_mode = self.upsamples[0].mode  # same mode at every decoder stage
-
-        print_fn("=" * bar_width)
-        print_fn(
-            f"{type(self).__name__}  |  {self.n_stages} encoder stages, "
-            f"{self.n_stages - 1} decoder stages  |  kernel_stem={self.kernel_stem}  |  "
-            f"kernel_coder={self.kernel_coder}  |  upsample_mode={upsample_mode!r}  |  "
-            f"t_dim={self.t_dim}  |  GroupNorm max_groups={self.max_groups}  |  n_maps={self.n_maps}"
-        )
-        maps = f"(nBatch, {self.n_maps}, {map_h}, {map_w})"
-        print_fn(
-            f"input:  cube (nBatch, nSpec={n_spec}, nX={n_x}, nY={n_y}) + noisy maps {maps} "
-            f"+ t (nBatch,)  ->  output: eps {maps}"
-        )
-        print_fn(
-            f"timestep embedding: t -> {self.time_embed.dim} sinusoidal features -> MLP ({time_act}) "
-            f"-> {self.t_dim}; FiLM scale/shift into every encoder, decoder and head block"
-        )
-        print_fn(f"activations: stem={stem_act}  encoder/decoder blocks={block_act}  head blocks={head_act}")
-        print_fn("-" * bar_width)
-
-        def row_note(label):
-            if label.startswith("stem"):
-                return f"activation={stem_act}"
-            if label.startswith("encoder stage") or label.endswith("deconv block"):
-                return f"activation={block_act}  FiLM(t)"
-            if label.endswith(": upsample"):
-                return f"mode={upsample_mode!r}"
-            if label == "head: spectral attention pool":
-                return "softmax weights over nSpec"
-            if label == "head: resize to map":
-                return "bilinear"
-            if label.startswith("head: 2-d res block"):
-                return f"activation={head_act}  FiLM(t)"
-            if label.startswith("head: output conv"):
-                return "zero-initialised"
-            return None
-
-        groups = dict(self._param_groups())
-
-        # The timestep embedding has no spatial dims, so it gets its own line above the stage rows.
-        label = "timestep embedding"
-        print_fn(
-            f"  {label:<{label_width}}   features={self.t_dim:<6} params={count_params(groups[label]):<11,} "
-            f"t (nBatch,) -> (nBatch, {self.t_dim})"
-        )
-        if layers:
-            for line in layer_param_lines(groups[label]):
-                print_fn(line)
-        print_stage_rows(rows, groups, row_note, label_width, print_fn, layers)
-        print_param_totals(self, bar_width, print_fn)
-
 
 #### Diffusion process ####
 class GaussianDiffusion(nn.Module):
@@ -378,12 +259,10 @@ class GaussianDiffusion(nn.Module):
     sampling, Ho et al. 2020).
 
     Parameters:
-        denoiser: an eps-prediction network with input_shape, map_shape and n_maps, e.g. DenoisingUNet3d. Its
-            n_maps maps are sampled together at its map_shape (H, W).
+        denoiser: an eps-prediction network with input_shape, output_shape and n_maps, e.g. DenoisingUNet3d. Its
+            n_maps maps are sampled together at its output_shape (H, W).
         n_timesteps: number of diffusion steps T.
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
-        flat_labels: if True, labels may have each map flattened, (B, n_maps, H*W), as produced by
-            datasets.py, and samples are flattened the same way; otherwise both are (B, n_maps, H, W).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
 
@@ -396,16 +275,14 @@ class GaussianDiffusion(nn.Module):
         denoiser,
         n_timesteps=1000,
         schedule="cosine",
-        flat_labels=False,
         clip_range=(-1.0, 1.0),
     ):
         super().__init__()
         self.denoiser = denoiser
         self.n_timesteps = n_timesteps
         self.schedule = schedule
-        self.map_shape = tuple(denoiser.map_shape)
+        self.output_shape = tuple(denoiser.output_shape)
         self.n_maps = denoiser.n_maps
-        self.flat_labels = flat_labels
         self.clip_range = clip_range
         alpha_bar = torch.cumprod(1 - make_beta_schedule(schedule, n_timesteps), dim=0)
         # buffers move with .to(device) and are saved in state_dict
@@ -413,14 +290,6 @@ class GaussianDiffusion(nn.Module):
         # alpha_bar_{t-1} for every t, with alpha_bar_{-1} = 1 (no noise before the first step). Derived from
         # alpha_bar, so it is not saved (persistent=False) and checkpoints only hold alpha_bar.
         self.register_buffer("alpha_bar_prev", F.pad(self.alpha_bar[:-1], (1, 0), value=1.0), persistent=False)
-
-    # -- shape handling: accept flattened (B, n_maps, H*W) labels from datasets.py --
-    def _to_map(self, y):
-        if y.dim() == 4:
-            return y
-        if not self.flat_labels:
-            raise ValueError("flattened labels need flat_labels=True")
-        return y.view(y.shape[0], self.n_maps, *self.map_shape)
 
     def _gather(self, t, like):
         """abar_t reshaped to broadcast against (B, n_maps, H, W) maps."""
@@ -450,16 +319,16 @@ class GaussianDiffusion(nn.Module):
 
         t: (B,) integer timesteps; None draws them uniformly from 0..T-1, stratified across the batch
             (see sample_timesteps).
-        noise: the eps added to y0, shaped like y0 (flattened maps if flat_labels); None draws it from N(0, I).
+        noise: the eps added to y0, shaped like y0; None draws it from N(0, I).
         Passing fixed t and noise makes the loss repeatable, e.g. to score validation sets the same way every epoch.
         """
-        y0 = self._to_map(y0.float())
+        y0 = y0.float()
         if t is None:
             t = self.sample_timesteps(y0.shape[0], device=y0.device)
         if noise is None:
             noise = torch.randn_like(y0)
         else:
-            noise = self._to_map(noise.float())
+            noise = noise.float()
         return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
 
     # TODO: add DDIM sampling (Song et al. 2021): its update depends only on alpha_bar, so it can skip timesteps
@@ -472,17 +341,14 @@ class GaussianDiffusion(nn.Module):
 
         cube: (B, nSpec, nX, nY).
         max_batch: cap on cubes per denoiser call to bound memory.
-        Returns (n_samples, B, n_maps, H, W), or (n_samples, B, n_maps, H*W) if flat_labels, with (H, W) = map_shape.
+        Returns (n_samples, B, n_maps, H, W), with (H, W) = output_shape.
         """
         n_batch = cube.shape[0]
-        shape = (self.n_maps, *self.map_shape)
-        # Tile the whole batch n_samples times: [cube_0..cube_B-1, cube_0..cube_B-1, ...], so the view
-        # below puts the sample index first. Each copy starts from independent noise in _reverse.
-        cubes = cube.float().repeat(n_samples, 1, 1, 1)
+        shape = (self.n_maps, *self.output_shape)
+        cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
         chunk = max_batch or cubes.shape[0]
         out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
-        out = out.view(n_samples, n_batch, *shape)
-        return out.flatten(3) if self.flat_labels else out
+        return out.view(n_samples, n_batch, *shape)
 
     def _reverse(self, cube, shape):
         """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step
@@ -514,34 +380,3 @@ class GaussianDiffusion(nn.Module):
         samples = self.sample(cube, n_samples=n_samples, **sample_kw)
         std, mean = torch.std_mean(samples, dim=0)  # std uses the unbiased (n_samples - 1) estimator
         return mean, std
-
-    def summary(self, print_fn=print, layers=True):
-        """Print the diffusion settings (T, noise schedule, map shape, clipping, how much signal
-        survives at the first and last step), then the denoiser's own summary.
-        layers is passed on to the denoiser's summary (per-layer parameter counts).
-        """
-        map_shape = self.map_shape
-        ab = self.alpha_bar
-        bar = "=" * 60
-        print_fn(bar)
-        print_fn(
-            f"{type(self).__name__}  |  T={self.n_timesteps}  |  schedule={self.schedule!r}  |  "
-            f"n_maps={self.n_maps}  |  map_shape={map_shape}  |  clip_range={self.clip_range}"
-        )
-        print_fn(
-            f"signal fraction sqrt(alpha_bar): {ab[0].sqrt().item():.4f} at t=0 -> "
-            f"{ab[-1].sqrt().item():.2e} at t={self.n_timesteps - 1}"
-        )
-        print_fn(
-            "training: MSE(eps_theta(cube, y_t, t), eps) with t ~ U{0..T-1};  sampling: DDPM ancestral, all T steps"
-        )
-        print_fn(
-            f"maps: (nBatch, {self.n_maps}, {map_shape[0]}, {map_shape[1]})"
-            + (
-                f", labels flattened to (nBatch, {self.n_maps}, {map_shape[0] * map_shape[1]})"
-                if self.flat_labels
-                else ""
-            )
-        )
-        print_fn(bar)
-        self.denoiser.summary(print_fn=print_fn, layers=layers)
