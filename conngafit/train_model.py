@@ -24,7 +24,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
-from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep
+from conngafit.models.ddpm_diagnostics.recorder import TrainingDiagnostics
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
@@ -692,12 +692,13 @@ def train(
             validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
             start += n
 
-    ddpm_diagnostics = diagnostic_mode and network == "ddpm"
-    if diagnostic_mode and not ddpm_diagnostics:
+    diagnostics = None
+    if diagnostic_mode and network == "ddpm":
+        diagnostics = TrainingDiagnostics(
+            validation_dataloader, validation_draws, n_samples, targets, diagnostic_output, seed, device
+        )
+    elif diagnostic_mode:
         logger.warning("diagnostic_mode only records diagnostics of the ddpm network; ignored for %s", network)
-    losses_by_epoch = {}  # Each recorded epoch's validation loss per sample, at its fixed timestep
-    rank_counts_by_epoch, coverage_by_epoch = {}, {}  # Each recorded epoch's posterior calibration
-    diagnostic_rng = np.random.default_rng(seed)  # Its own generator, so the diagnostics leave training's alone
 
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
@@ -749,31 +750,8 @@ def train(
             plotting.save_correlation_plots(
                 validation_outputs, targets, diagnostic_output + "_ValidationCorrelationPlot", t
             )
-        if ddpm_diagnostics and predict:
-            # fork_rng restores the random number generators afterwards. Diagnostics would change every later
-            # random draw of training otherwise
-            with torch.random.fork_rng():
-                timesteps, losses_by_epoch[t] = loss_by_timestep.validation_losses_by_timestep(
-                    eval_model, validation_dataloader, validation_draws, device
-                )
-                samples, labels = calibration.validation_posterior_samples(
-                    eval_model, validation_dataloader, n_samples, device
-                )
-            rank_counts_by_epoch[t], coverage_by_epoch[t] = calibration.calibration_summary(
-                samples, labels, diagnostic_rng
-            )
-            calibration.plot_calibration(
-                rank_counts_by_epoch, coverage_by_epoch, targets, diagnostic_output + "_Calibration.png"
-            )
-            calibration.save_calibration(
-                rank_counts_by_epoch, coverage_by_epoch, targets, diagnostic_output + "_Calibration.hdf5"
-            )
-            loss_by_timestep.plot_loss_by_timestep(
-                timesteps, losses_by_epoch, targets, eval_model.n_timesteps, diagnostic_output + "_LossByTimestep.png"
-            )
-            loss_by_timestep.save_loss_by_timestep(
-                timesteps, losses_by_epoch, targets, diagnostic_output + "_LossByTimestep.hdf5"
-            )
+        if diagnostics is not None and predict:
+            diagnostics.record(t, eval_model)
 
     save_checkpoint(
         model_output_path,

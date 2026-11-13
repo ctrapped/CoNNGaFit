@@ -9,6 +9,7 @@ from torch import nn
 
 from conngafit.models import unet3d_ddpm as ddpm
 from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep
+from conngafit.models.ddpm_diagnostics.recorder import TrainingDiagnostics
 from conngafit.train_model import weighted_mse_loss
 
 N_TIMESTEPS = 10
@@ -149,3 +150,21 @@ def test_calibration_is_plotted_and_saved(tmp_path):
         np.testing.assert_array_equal(hf["coverage"][()], np.stack([coverage[1], coverage[3]]))
         np.testing.assert_array_equal(hf["rank_counts"][()], np.stack([rank_counts[1], rank_counts[3]]))
         assert [target.decode() for target in hf["targets"][()]] == TARGETS
+
+
+#### Recording during training ####
+def test_record_rewrites_every_diagnostic_with_each_recorded_epoch(diffusion, tmp_path):
+    n_samples = 3
+    batches = [(torch.randn(BATCH_SIZE, *INPUT_SHAPE), torch.rand(BATCH_SIZE, *MAPS_SHAPE), torch.ones(1), None)]
+    draws = [(torch.randint(0, N_TIMESTEPS, (BATCH_SIZE,)), torch.randn(BATCH_SIZE, *MAPS_SHAPE))]
+    diagnostics = TrainingDiagnostics(batches, draws, n_samples, TARGETS, str(tmp_path / "run"), seed=0, device="cpu")
+
+    rng_state = torch.get_rng_state()
+    for epoch in (1, 3):
+        diagnostics.record(epoch, diffusion)
+    assert torch.equal(torch.get_rng_state(), rng_state)  # Training's random draws are left alone
+
+    for name in ("LossByTimestep", "Calibration"):
+        assert (tmp_path / f"run_{name}.png").stat().st_size > 0
+        with h5py.File(tmp_path / f"run_{name}.hdf5", "r") as hf:
+            np.testing.assert_array_equal(hf["epochs"][()], [1, 3])  # Both recorded epochs
