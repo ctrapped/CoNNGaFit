@@ -124,6 +124,9 @@ def check_hyperparams(hyperparams):
     max_grad_norm = hyperparams["max_grad_norm"]  # 0: no gradient clipping
     if not max_grad_norm >= 0:
         raise ValueError(f"hyperparams: max_grad_norm = {max_grad_norm!r} should be 0 or more")
+    optimizer_name = hyperparams.get("optimizer", "adam")
+    if optimizer_name not in ("adam", "adamw"):
+        raise ValueError(f'hyperparams: optimizer = {optimizer_name!r} should be "adam" or "adamw"')
 
 
 def check_datasets(datasets):
@@ -549,6 +552,7 @@ def train(
     predict_variance = hyperparams.get("predict_variance", False)  # resblock only
     ema_decay = hyperparams.get("ema_decay", 0.999)  # 0 uses the raw weights
     max_grad_norm = hyperparams["max_grad_norm"]  # 0: no gradient clipping
+    optimizer_name = hyperparams.get("optimizer", "adam")
 
     # One target name, or a list of them: the network predicts a map (or radial curve) of each
     targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
@@ -629,24 +633,25 @@ def train(
     # What save_batch_outputs needs to name every output and convert it back to physical units
     output_settings = dict(targets=targets, to_physical=to_physical, label_scale=label_scale, radial_bins=radial_bins)
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=hyperparams["learning_rate"], weight_decay=hyperparams["weight_decay"]
-    )  # Can use different optimizers
-
-    # Alternative: AdamW. To use it, uncomment the block below in place of Adam above, and raise weight_decay in the
-    # hyperparameters (1e-2, PyTorch's AdamW default).
-    # Only conv and linear weights (ndim > 1), which set how strongly each layer responds to its input, are decayed.
-    # Biases and the GroupNorm/BatchNorm scales and shifts (ndim <= 1) set offsets and activation scales rather than
-    # model complexity, so decaying them would bias the outputs and fight the normalization instead of regularizing.
-    # decay_params = [p for p in model.parameters() if p.ndim > 1]
-    # no_decay_params = [p for p in model.parameters() if p.ndim <= 1]
-    # optimizer = torch.optim.AdamW(
-    #     [
-    #         {"params": decay_params, "weight_decay": hyperparams["weight_decay"]},
-    #         {"params": no_decay_params, "weight_decay": 0.0},
-    #     ],
-    #     lr=hyperparams["learning_rate"],
-    # )
+    learning_rate = hyperparams["learning_rate"]
+    weight_decay = hyperparams["weight_decay"]
+    if optimizer_name == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    else:
+        # Only conv and linear weights (ndim > 1), which set how strongly each layer responds to its input, are
+        # decayed. Biases and the GroupNorm/BatchNorm scales and shifts (ndim <= 1) set offsets and activation scales
+        # rather than model complexity, so decaying them would bias the outputs and fight the normalization instead
+        # of regularizing.
+        decay_params = [p for p in model.parameters() if p.ndim > 1]
+        no_decay_params = [p for p in model.parameters() if p.ndim <= 1]
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay_params, "weight_decay": weight_decay},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ],
+            lr=learning_rate,
+        )
+    logger.info("Optimizer: %s", optimizer_name)
 
     # Exponential moving average (EMA) of the weights. With a constant learning rate the raw weights jitter around a
     # minimum, by an amount set by the gradient noise of each batch (for the ddpm also the random t and noise of every

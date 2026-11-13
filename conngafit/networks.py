@@ -29,7 +29,7 @@ HYPERPARAM_KEYS = {
     "resblock": SHARED_KEYS | {"dropout_rate", "output_head", "predict_variance"},
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
-OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"n_fc", "mass_weight_power"}, "ddpm": set()}
+OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"n_fc", "mass_weight_power", "optimizer"}, "ddpm": {"optimizer"}}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):

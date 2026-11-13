@@ -5,6 +5,10 @@ network = "resblock"  # The residual U-Net in unet3d_resblock.py
 
 learning_rate = 1e-4
 weight_decay = 1e-3
+# Optional (default "adam"): "adam" adds weight_decay to the gradient as an L2 term on every parameter; "adamw"
+# decays only the conv and linear weights, decoupled from the gradient step (Loshchilov & Hutter 2019), and
+# typically needs a larger weight_decay (1e-2, PyTorch's default).
+optimizer = "adam"
 # Optional (default 0.999): evaluate, sample and save an exponential moving average (EMA) of the weights, which
 # smooths out step-to-step training noise. It averages over ~1 / (1 - ema_decay) optimizer steps, so keep that
 # well below the total number of steps (epochs * batches per epoch); 0 uses the raw weights.
