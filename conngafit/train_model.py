@@ -18,6 +18,7 @@ import h5py
 import numpy as np
 import torch
 from torch import nn
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, Normalize, ToTensor
 
@@ -117,6 +118,15 @@ def check_hyperparams(hyperparams):
     predict_every = hyperparams["predict_every"]
     if not (isinstance(predict_every, int) and predict_every >= 1):
         raise ValueError(f"hyperparams: predict_every = {predict_every!r} should be an integer of 1 or more")
+    ema_decay = hyperparams.get("ema_decay", 0.999)  # On by default for every network; 0 uses the raw weights
+    if not 0 <= ema_decay < 1:
+        raise ValueError(f"hyperparams: ema_decay = {ema_decay!r} should be in [0, 1)")
+    max_grad_norm = hyperparams["max_grad_norm"]  # 0: no gradient clipping
+    if not max_grad_norm >= 0:
+        raise ValueError(f"hyperparams: max_grad_norm = {max_grad_norm!r} should be 0 or more")
+    optimizer_name = hyperparams.get("optimizer", "adam")
+    if optimizer_name not in ("adam", "adamw"):
+        raise ValueError(f'hyperparams: optimizer = {optimizer_name!r} should be "adam" or "adamw"')
 
 
 def check_datasets(datasets):
@@ -159,33 +169,38 @@ def weighted_gaussian_nll_loss(pred, y, logvar, w):
     return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
 
 
-def compute_loss(model, x, y, w, predict=True, n_samples=None):
-    """
-    Returns (loss, prediction, 1-sigma) for a batch of cubes x and labels y, with weights by w. The
-    prediction and 1-sigma are None unless predict=True.
+def compute_loss(model, x, y, w, t=None, noise=None):
+    """The training loss for a batch of cubes x and labels y, each value weighted by w.
 
-    resblock: If the network predicts its variance, use Gaussian NLL of (mean, exp(logvar)) with sigma = exp(logvar / 2)
-              Otherwise, use MSE loss, with sigma = None.
-    ddpm: the denoising loss (unweighted), and the mean and standard deviation of n_samples posterior
-    samples, which are only drawn if predict since this has high compute cost.
+    resblock: Gaussian NLL of (mean, exp(logvar)) if the network predicts its variance, otherwise MSE.
+    ddpm: MSE between the noise added to y at timesteps t and the network's prediction of it. t and noise are drawn at random
+        unless specified.
     """
     if isinstance(model, GaussianDiffusion):
-        loss = model(x, y)
-        if not predict:
-            return loss, None, None
-        pred, sigma = model.predict_with_uncertainty(x, n_samples)
-        return loss, pred, sigma
+        pred_noise, noise = model(x, y, t=t, noise=noise)
+        return weighted_mse_loss(pred_noise, noise, w)
 
     output = model(x)
     if model.predict_variance:
         pred, logvar = output
-        loss, sigma = weighted_gaussian_nll_loss(pred, y, logvar, w), torch.exp(0.5 * logvar)
-    else:
-        pred, sigma = output, None
-        loss = weighted_mse_loss(pred, y, w)
-    if not predict:
-        return loss, None, None
-    return loss, pred, sigma
+        return weighted_gaussian_nll_loss(pred, y, logvar, w)
+    return weighted_mse_loss(output, y, w)
+
+
+def predict_batch(model, x, n_samples=None):
+    """(prediction, 1-sigma) for a batch of cubes x, in scaled label units.
+
+    resblock: the predicted mean, and its 1-sigma exp(logvar / 2) if the network predicts its variance, otherwise None.
+    ddpm: the mean and standard deviation of n_samples posterior samples.
+    """
+    if isinstance(model, GaussianDiffusion):
+        return model.predict_with_uncertainty(x, n_samples)
+
+    output = model(x)
+    if model.predict_variance:
+        pred, logvar = output
+        return pred, torch.exp(0.5 * logvar)
+    return output, None
 
 
 def count_accurate(pred, y, tolerance):
@@ -215,7 +230,7 @@ def save_batch_outputs(
     comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
     batches, after the target and after the epoch.
 
-    x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see compute_loss, or None), in
+    x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see predict_batch, or None), in
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
         plotting.save_correlation_plots.
@@ -253,12 +268,17 @@ def save_batch_outputs(
         saved.append((np_pred, np_y))
 
 
-def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, save_batch=None):
-    """Run one training epoch: iterate the dataloader and backprop compute_loss each batch.
+def train_loop(
+    model, dataloader, optimizer, device, predict, ema_model, max_grad_norm, n_samples=None, save_batch=None
+):
+    """Run one training epoch: iterate the dataloader and backprop compute_loss each batch. Clips the total
+    gradient norm to max_grad_norm (if > 0) and logs the epoch's mean gradient norm and how often it was clipped.
 
     predict: also predict each batch, to score the MSE of the predicted mean (made every predict_every epochs).
     save_batch: if given, called with each batch's (x, y, pred, sigma, idx) to save its outputs (see
-        save_batch_outputs).
+        save_batch_outputs); only called on batches that are predicted.
+    ema_model: an AveragedModel of model, updated after every optimizer step. Every prediction comes from it
+        instead of the raw model.
     Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
     batch was predicted.
     """
@@ -266,32 +286,49 @@ def train_loop(model, dataloader, optimizer, device, predict, n_samples=None, sa
     epoch_loss, epoch_mse = 0.0, 0.0
     n_predicted = 0  # Batches with predictions, made every predict_every epochs
     num_batches = len(dataloader)
+    epoch_grad_norm, n_clipped = 0.0, 0  # Total gradient norm before clipping, and how many batches were clipped
 
     for batch, (x, y, w, idx) in enumerate(dataloader):
         x = x.to(device)
         y = y.to(device)
         w = w.to(device)
 
-        loss, pred, sigma = compute_loss(model, x.float(), y.float(), w.float(), predict, n_samples)
+        loss = compute_loss(model, x.float(), y.float(), w.float())
         epoch_loss += loss.item()
-        if pred is not None:
-            n_predicted += 1
-            epoch_mse += nn.functional.mse_loss(pred, y.float()).item()
-        if save_batch is not None:
-            save_batch(x, y, pred, sigma, idx)
 
         # Backpropagation
         optimizer.zero_grad()
         loss.backward()
+        # clip_grad_norm_ rescales all gradients together (keeping their direction) when their total norm exceeds
+        # clip_at, and returns the norm before clipping; with an infinite limit it only measures it
+        clip_at = max_grad_norm if max_grad_norm > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_at).item()
+        epoch_grad_norm += grad_norm
+        if grad_norm > clip_at:
+            n_clipped += 1
         optimizer.step()
+        ema_model.update_parameters(model)
+
+        if predict:
+            with torch.no_grad():
+                pred, sigma = predict_batch(ema_model.module, x.float(), n_samples)
+            n_predicted += 1
+            epoch_mse += nn.functional.mse_loss(pred, y.float()).item()
+            if save_batch is not None:
+                save_batch(x, y, pred, sigma, idx)
 
         if batch % 100 == 0:
             logger.info("loss: %7f [%5d/%5d]", loss.item(), batch * len(x), len(dataloader.dataset))
 
+    logger.info(
+        "Mean gradient norm %.3g, clipped in %d of %d batches", epoch_grad_norm / num_batches, n_clipped, num_batches
+    )
     return epoch_loss / num_batches, (epoch_mse / n_predicted if n_predicted else np.nan)
 
 
-def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None):
+def evaluate(
+    model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None, fixed_draws=None
+):
     """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy": the
     percentage of values within accuracy_tolerance of their label. name ("Validation" or "Test") labels the log line.
 
@@ -299,6 +336,8 @@ def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_sam
         predict_every epochs and on the final epoch).
     save_batch: if given, called with each batch's (x, y, pred, sigma, idx) to save its outputs (see
         save_batch_outputs).
+    fixed_draws: for the ddpm network, one (t, noise) pair per batch, so every epoch's denoising
+        loss scores the same noisy maps; None draws new ones.
     Returns (loss, mse, accuracy, specific_accuracy) where mse is the MSE of the predicted mean and
     specific_accuracy is the accuracy of every sample in the set. The mse and accuracies are NaN without predict.
     """
@@ -309,15 +348,17 @@ def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_sam
     specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
-        for x, y, w, idx in dataloader:
+        for batch, (x, y, w, idx) in enumerate(dataloader):
             x = x.to(device)
             y = y.to(device)
             w = w.to(device)
 
-            loss, pred, sigma = compute_loss(model, x.float(), y.float(), w.float(), predict, n_samples)
+            t, noise = fixed_draws[batch] if fixed_draws is not None else (None, None)
+            loss = compute_loss(model, x.float(), y.float(), w.float(), t=t, noise=noise)
             summed_loss += loss.item()
-            if pred is None:  # Predictions are made every predict_every epochs
+            if not predict:  # Predictions are made every predict_every epochs
                 continue
+            pred, sigma = predict_batch(model, x.float(), n_samples)
             summed_mse += nn.functional.mse_loss(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
@@ -335,7 +376,6 @@ def evaluate(model, dataloader, device, predict, accuracy_tolerance, name, n_sam
     mse = summed_mse / num_batches if total else np.nan
     logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
 
-    model.train()
     return mean_loss, mse, accuracy, specific_accuracy
 
 
@@ -510,6 +550,9 @@ def train(
     label_scaling = hyperparams["label_scaling"]
     mass_weight_power = hyperparams.get("mass_weight_power", 0)  # 0: unweighted loss
     predict_variance = hyperparams.get("predict_variance", False)  # resblock only
+    ema_decay = hyperparams.get("ema_decay", 0.999)  # 0 uses the raw weights
+    max_grad_norm = hyperparams["max_grad_norm"]  # 0: no gradient clipping
+    optimizer_name = hyperparams.get("optimizer", "adam")
 
     # One target name, or a list of them: the network predicts a map (or radial curve) of each
     targets = [datasets["target"]] if isinstance(datasets["target"], str) else datasets["target"]
@@ -590,9 +633,51 @@ def train(
     # What save_batch_outputs needs to name every output and convert it back to physical units
     output_settings = dict(targets=targets, to_physical=to_physical, label_scale=label_scale, radial_bins=radial_bins)
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=hyperparams["learning_rate"], weight_decay=hyperparams["weight_decay"]
-    )  # Can use different optimizers
+    learning_rate = hyperparams["learning_rate"]
+    weight_decay = hyperparams["weight_decay"]
+    if optimizer_name == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    else:
+        # AdamW Optimizer
+        # Only conv and linear weights (ndim > 1), which set how strongly each layer responds to its input, are
+        # decayed. Biases and the GroupNorm/BatchNorm scales and shifts (ndim <= 1) set offsets and activation scales
+        # rather than model complexity, so decaying them would bias the outputs.
+        decay_params = [p for p in model.parameters() if p.ndim > 1]
+        no_decay_params = [p for p in model.parameters() if p.ndim <= 1]
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay_params, "weight_decay": weight_decay},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ],
+            lr=learning_rate,
+        )
+    logger.info("Optimizer: %s", optimizer_name)
+
+    # Exponential moving average (EMA) of the weights. With a constant learning rate the raw weights jitter around a
+    # minimum. Training (loss, gradients) still updates the raw weights, but validation, testing, the ddpm's posterior samples
+    # and the saved model all use the EMA.
+    # ema_decay = 0 copies the raw weights, which reproduces training without an EMA.
+    # use_buffers=True also averages buffers with the same EMA: the resblock network's BatchNorm running mean and
+    # variance then follow the averaged weights, rather than being the raw model's statistics (use_buffers=False).
+    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay), use_buffers=True)
+    eval_model = ema_model.module  # The weights every evaluation uses and that are saved
+    # The EMA copy is never trained, so it stays in eval mode: dropout is off whenever it is evaluated
+    eval_model.eval()
+
+    # Fixed validation noise (ddpm): one (t, noise) draw per validation batch, made once here, so every epoch's
+    # validation loss scores the same noisy maps and its changes reflect the model rather than the draw. The
+    # validation dataloader is not shuffled, so batch i holds the same cubes every epoch.
+    validation_draws = None
+    if network == "ddpm":
+        # One timestep per validation cube, stratified over the whole set (see GaussianDiffusion.sample_timesteps), so
+        # the fixed draws cover the noise levels evenly; batch i takes the next len(batch) of them, in dataset order.
+        validation_t = model.sample_timesteps(len(validation_data), device=device)
+        validation_draws = []
+        start = 0
+        for _, y, _, _ in validation_dataloader:
+            n = y.shape[0]
+            validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
+            start += n
 
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
@@ -627,10 +712,18 @@ def train(
                 **output_settings,
             )
         training_losses[t], training_mses[t] = train_loop(
-            model, train_dataloader, optimizer, device, predict, n_samples, save_training
+            model, train_dataloader, optimizer, device, predict, ema_model, max_grad_norm, n_samples, save_training
         )
         validation_losses[t], validation_mses[t], validation_accuracies[t], specific_accuracies[:, t] = evaluate(
-            model, validation_dataloader, device, predict, accuracy_tolerance, "Validation", n_samples, save_validation
+            eval_model,
+            validation_dataloader,
+            device,
+            predict,
+            accuracy_tolerance,
+            "Validation",
+            n_samples,
+            save_validation,
+            validation_draws,
         )
         if validation_outputs and radial_bins is None:  # Correlation plots compare maps
             plotting.save_correlation_plots(
@@ -639,7 +732,7 @@ def train(
 
     save_checkpoint(
         model_output_path,
-        model,
+        eval_model,  # The EMA weights, with the same keys as model
         image_stats=(training_mean, training_stdv),
         label_offset=label_offset,
         label_scale=label_scale,
@@ -667,7 +760,7 @@ def train(
             **output_settings,
         )
     final_test_loss, final_test_mse, final_test_accuracy, final_test_specific_accuracy = evaluate(
-        model, test_dataloader, device, True, accuracy_tolerance, "Test", n_samples, save_test
+        eval_model, test_dataloader, device, True, accuracy_tolerance, "Test", n_samples, save_test
     )
     if test_outputs and radial_bins is None:  # Correlation plots compare maps
         plotting.save_correlation_plots(test_outputs, targets, diagnostic_output + "_TestCorrelationPlot", epochs - 1)
