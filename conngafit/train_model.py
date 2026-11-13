@@ -24,6 +24,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
+from conngafit.models.ddpm_diagnostics import loss_by_timestep
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
 
@@ -518,6 +519,7 @@ def train(
     save_diagnostics=True,
     batch_size=None,
     test_batch_size=None,
+    diagnostic_mode=False,
 ):
     """Train the network hyperparams["network"] on datasets, and return a TrainingResult.
 
@@ -532,6 +534,10 @@ def train(
     batch_size: training batch size. Default: about a tenth of the training set (at least 2); 0 trains on the whole
         set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
+    diagnostic_mode: also record the ddpm diagnostics of models/ddpm_diagnostics every predict_every epochs and
+        on the final epoch, to <output_dir>/diagnostics/ (written even when save_diagnostics is False):
+        <run_name>_LossByTimestep.png and .hdf5, the validation loss of each sample at its fixed timestep.
+        Ignored, with a warning, for the other networks.
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)
@@ -684,6 +690,11 @@ def train(
             validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
             start += n
 
+    ddpm_diagnostics = diagnostic_mode and network == "ddpm"
+    if diagnostic_mode and not ddpm_diagnostics:
+        logger.warning("diagnostic_mode only records diagnostics of the ddpm network; ignored for %s", network)
+    losses_by_epoch = {}  # Each recorded epoch's validation loss per sample, at its fixed timestep
+
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
     validation_losses = np.zeros((epochs))
@@ -733,6 +744,19 @@ def train(
         if validation_outputs and radial_bins is None:  # Correlation plots compare maps
             plotting.save_correlation_plots(
                 validation_outputs, targets, diagnostic_output + "_ValidationCorrelationPlot", t
+            )
+        if ddpm_diagnostics and predict:
+            # fork_rng restores the random number generators afterwards. Diagnostics would change every later
+            # random draw of training otherwise
+            with torch.random.fork_rng():
+                timesteps, losses_by_epoch[t] = loss_by_timestep.validation_losses_by_timestep(
+                    eval_model, validation_dataloader, validation_draws, device
+                )
+            loss_by_timestep.plot_loss_by_timestep(
+                timesteps, losses_by_epoch, targets, eval_model.n_timesteps, diagnostic_output + "_LossByTimestep.png"
+            )
+            loss_by_timestep.save_loss_by_timestep(
+                timesteps, losses_by_epoch, targets, diagnostic_output + "_LossByTimestep.hdf5"
             )
 
     save_checkpoint(

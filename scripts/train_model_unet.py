@@ -81,6 +81,13 @@ def parse_args():
         help="Mini-batch size for validation/testing. Default: a reasonable division of the "
         "validation set into ~10 batches (floored at 1).",
     )
+    training.add_argument(
+        "--diagnostic-mode",
+        action="store_true",
+        help="Also record the ddpm diagnostics (conngafit/models/ddpm_diagnostics/) every predict_every epochs and "
+        "on the final epoch, to <output-dir>/diagnostics/: the validation loss of each sample at its diffusion "
+        "timestep (<run-name>_LossByTimestep.png and .hdf5). Ignored for the other networks.",
+    )
     add_logging_arguments(parser)
     return parser.parse_args()
 
@@ -97,6 +104,7 @@ def main():
         save_diagnostics=args.save_diagnostics,
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size,
+        diagnostic_mode=args.diagnostic_mode,
     )
 
 

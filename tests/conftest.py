@@ -110,9 +110,10 @@ def saved_test_outputs(run_dir, name, target=TARGET):
 @pytest.fixture(scope="session")
 def train_on_image(tmp_path_factory, run_script):
     """Run the training script on IMAGE with a hyperparameters dict, in a new folder, and return the folder. The
-    network is written to nets/<name>, the diagnostic outputs to diag/. target is a target name or a list of them."""
+    network is written to nets/<name>, the diagnostic outputs to diag/. target is a target name or a list of them;
+    extra_args are more command-line arguments for the script."""
 
-    def train(name, hyperparams, radial_bins=0, target=TARGET):
+    def train(name, hyperparams, radial_bins=0, target=TARGET, extra_args=()):
         run_dir = tmp_path_factory.mktemp(name)
         image_dir = run_dir / "vof" / GALAXY / f"i{INCLINATION}"
         image_dir.mkdir(parents=True)
@@ -135,6 +136,7 @@ def train_on_image(tmp_path_factory, run_script):
             "--run-name", name,
             "--network-dir", "nets",
             "--output-dir", "diag",
+            *extra_args,
             cwd=run_dir,
         )  # fmt: skip
         return run_dir

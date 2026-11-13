@@ -21,6 +21,7 @@ SMALL_HYPERPARAMS = dict(
 )
 # With 3 epochs and predict_every = 2, predictions are made on epoch 2 and the final epoch
 PREDICTED_EPOCHS = [False, True, True]
+DIAGNOSTIC_TARGETS = ["mass", "rotational_momentum"]
 
 
 @pytest.fixture(scope="module", params=RUNS, ids=[name for name, _ in RUNS])
@@ -87,3 +88,18 @@ def test_run_inferences_writes_mean_and_std_map(trained):
         with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
             assert hf["image"].shape == expected_shape()  # and an hdf5 of the posterior mean
             assert hf["uncertainty"].shape == expected_shape()  # with its standard deviation
+
+
+def test_diagnostic_mode_records_the_loss_by_timestep(train_on_image):
+    with open(CONFIG_DIR / "hyperparams_ddpm.toml", "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
+    name = "ddpm_diagnostics"
+    run_dir = train_on_image(name, hyperparams, target=DIAGNOSTIC_TARGETS, extra_args=["--diagnostic-mode"])
+    output = run_dir / "diag" / "diagnostics" / f"{name}_LossByTimestep"
+    assert output.with_suffix(".png").is_file()
+    recorded_epochs = [epoch for epoch, predicted in enumerate(PREDICTED_EPOCHS) if predicted]
+    with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
+        assert list(hf["epochs"][()]) == recorded_epochs  # recorded on every predicted epoch
+        # one loss per recorded epoch, validation sample (the single image) and target, all finite
+        assert hf["losses"].shape == (len(recorded_epochs), 1, len(DIAGNOSTIC_TARGETS))
+        assert np.isfinite(hf["losses"][()]).all()
