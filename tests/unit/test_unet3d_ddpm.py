@@ -219,3 +219,22 @@ def test_sampling_denoises_every_sample_at_every_timestep(make_diffusion):
     diffusion.predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), N_SAMPLES)
     # one call per timestep, from T - 1 down to 0, each denoising every sample of every cube
     assert timesteps == [[t] * N_SAMPLES * BATCH_SIZE for t in reversed(range(N_TIMESTEPS))]
+
+
+def test_sample_callback_sees_every_step_without_changing_the_samples(make_diffusion):
+    diffusion = make_diffusion(n_maps=N_MAPS, clip_range=(-1.0, 1.0))
+    randomize_output(diffusion.denoiser)
+    cube = torch.randn(BATCH_SIZE, *INPUT_SHAPE)
+    steps = []
+
+    def callback(t, y_t, y0_estimate):
+        steps.append((t, y_t.shape, y0_estimate.shape, y0_estimate.abs().max().item()))
+
+    torch.manual_seed(0)
+    samples = diffusion.sample(cube, n_samples=N_SAMPLES, callback=callback)
+    torch.manual_seed(0)
+    assert torch.equal(diffusion.sample(cube, n_samples=N_SAMPLES), samples)
+    # one call per timestep, from T - 1 down to 0, with the maps of every sample and the clipped estimate
+    shape = (N_SAMPLES * BATCH_SIZE, N_MAPS, *OUTPUT_SHAPE)
+    assert [step[:3] for step in steps] == [(t, shape, shape) for t in reversed(range(N_TIMESTEPS))]
+    assert max(step[3] for step in steps) <= 1.0

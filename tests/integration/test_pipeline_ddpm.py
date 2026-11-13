@@ -118,3 +118,10 @@ def test_diagnostic_mode_records_every_diagnostic(train_on_image):
     with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
         assert list(hf["epochs"][()]) == recorded_epochs
         np.testing.assert_allclose(hf["weights"][()].sum(axis=2), 1, rtol=1e-5)  # Normalized over channels
+    output = run_dir / "diag" / "diagnostics" / f"{name}_ReverseChain"
+    assert output.with_suffix(".png").is_file()
+    with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
+        assert list(hf["epochs"][()]) == recorded_epochs
+        n_timesteps = SMALL_HYPERPARAMS["n_timesteps"]
+        assert hf["errors"].shape == (len(recorded_epochs), n_timesteps, len(DIAGNOSTIC_TARGETS))
+        assert np.isfinite(hf["errors"][()]).all()

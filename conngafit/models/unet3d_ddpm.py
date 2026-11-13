@@ -336,23 +336,26 @@ class GaussianDiffusion(nn.Module):
     # deterministic given the starting noise). Expose its number of steps and eta as hyperparameters, and check the
     # calibration of the posterior standard deviation for each setting.
     @torch.no_grad()
-    def sample(self, cube, n_samples=1, max_batch=None):
+    def sample(self, cube, n_samples=1, max_batch=None, callback=None):
         """Draw joint posterior samples of the maps for each cube.
 
         cube: (B, nSpec, nX, nY).
         max_batch: cap on cubes per denoiser call to bound memory.
+        callback: called at every reverse step of each chunk of cubes, see _reverse (e.g. for diagnostics).
         Returns (n_samples, B, n_maps, H, W), with (H, W) = output_shape.
         """
         n_batch = cube.shape[0]
         shape = (self.n_maps, *self.output_shape)
         cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
         chunk = max_batch or cubes.shape[0]
-        out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
+        out = torch.cat([self._reverse(c, shape, callback) for c in cubes.split(chunk)])
         return out.view(n_samples, n_batch, *shape)
 
-    def _reverse(self, cube, shape):
+    def _reverse(self, cube, shape, callback=None):
         """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step
-        draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's estimate of y_0."""
+        draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's estimate of y_0.
+        callback: if given, called as callback(t, y_t, y0_estimate) at every step, from t = T-1 down to 0, with the
+        current noisy maps and the (clipped) estimate of the clean maps."""
         y = torch.randn(cube.shape[0], *shape, device=cube.device)
         for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
@@ -365,6 +368,8 @@ class GaussianDiffusion(nn.Module):
             y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()
             if self.clip_range is not None:
                 y0 = y0.clamp(*self.clip_range)
+            if callback is not None:
+                callback(t, y, y0)
 
             # Gaussian posterior q(y_{t-1} | y_t, y_0) (Ho et al. 2020, Eqs. 6-7): its mean weights y_0 and y_t,
             # and its variance beta~_t = (1 - abar_{t-1}) / (1 - abar_t) * beta_t is 0 at t = 0, so the last

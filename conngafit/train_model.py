@@ -535,11 +535,7 @@ def train(
         set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     diagnostic_mode: also record the ddpm diagnostics of models/ddpm_diagnostics every predict_every epochs and
-        on the final epoch, to <output_dir>/diagnostics/ (written even when save_diagnostics is False):
-        <run_name>_LossByTimestep.png and .hdf5, the validation loss of each sample at its fixed timestep, and
-        <run_name>_Calibration.png and .hdf5, the posterior calibration of the validation maps (this samples the
-        validation set a second time each recorded epoch), and <run_name>_SpectralAttention.png and .hdf5, where
-        along the line profile the head looks for the first validation sample at a few noise levels.
+        on the final epoch, to <output_dir>/diagnostics/.
         Ignored, with a warning, for the other networks.
     """
     check_hyperparams(hyperparams)

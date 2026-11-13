@@ -8,7 +8,7 @@ from conftest import BATCH_SIZE, INPUT_SHAPE
 from torch import nn
 
 from conngafit.models import unet3d_ddpm as ddpm
-from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep, spectral_attention
+from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep, reverse_chain, spectral_attention
 from conngafit.models.ddpm_diagnostics.activations import captured_outputs
 from conngafit.models.ddpm_diagnostics.recorder import TrainingDiagnostics
 from conngafit.train_model import weighted_mse_loss
@@ -221,6 +221,46 @@ def test_spectral_attention_is_plotted_and_saved(tmp_path):
         np.testing.assert_array_equal(hf["cube_velocity"][()], cube_velocity)
 
 
+#### Reverse chain ####
+def test_reverse_chain_ends_at_the_returned_sample(diffusion):
+    cube, y_true = torch.randn(1, *INPUT_SHAPE), torch.rand(1, *MAPS_SHAPE)
+    snapshot_timesteps = [9, 5, 0]
+
+    torch.manual_seed(0)
+    snapshots, errors = reverse_chain.reverse_chain(diffusion, cube, y_true, snapshot_timesteps)
+    torch.manual_seed(0)
+    sample = diffusion.sample(cube, n_samples=1)[0, 0]
+
+    assert snapshots.shape == (len(snapshot_timesteps), 2, *MAPS_SHAPE)
+    assert errors.shape == (N_TIMESTEPS, N_MAPS)
+    # At t = 0 the sample is the clean-map estimate, so its last snapshot and error are those of the sample
+    np.testing.assert_allclose(snapshots[-1, 1], sample.numpy(), rtol=1e-6)
+    expected = ((sample - y_true[0]) ** 2).flatten(1).mean(dim=1).numpy()
+    np.testing.assert_allclose(errors[0], expected, rtol=1e-5)
+
+
+def test_reverse_chain_is_plotted_and_saved(tmp_path):
+    rng = np.random.default_rng(0)
+    snapshot_timesteps = [9, 5, 0]
+    snapshots = {epoch: rng.normal(size=(len(snapshot_timesteps), 2, *MAPS_SHAPE)) for epoch in (1, 3)}
+    errors = {epoch: rng.random((N_TIMESTEPS, N_MAPS)) for epoch in (1, 3)}
+    y_true = rng.normal(size=MAPS_SHAPE)
+
+    reverse_chain.plot_reverse_chain(
+        snapshots[3], snapshot_timesteps, y_true, errors, TARGETS, 3, tmp_path / "chain.png"
+    )
+    reverse_chain.save_reverse_chain(snapshots, errors, snapshot_timesteps, y_true, TARGETS, tmp_path / "chain.hdf5")
+
+    assert (tmp_path / "chain.png").stat().st_size > 0
+    with h5py.File(tmp_path / "chain.hdf5", "r") as hf:
+        np.testing.assert_array_equal(hf["snapshots"][()], np.stack([snapshots[1], snapshots[3]]))
+        np.testing.assert_array_equal(hf["errors"][()], np.stack([errors[1], errors[3]]))
+        np.testing.assert_array_equal(hf["epochs"][()], [1, 3])
+        np.testing.assert_array_equal(hf["snapshot_timesteps"][()], snapshot_timesteps)
+        np.testing.assert_array_equal(hf["truth"][()], y_true)
+        assert [name.decode() for name in hf["targets"][()]] == TARGETS
+
+
 #### Recording during training ####
 def test_record_rewrites_every_diagnostic_with_each_recorded_epoch(diffusion, tmp_path):
     n_samples = 3
@@ -244,7 +284,10 @@ def test_record_rewrites_every_diagnostic_with_each_recorded_epoch(diffusion, tm
         diagnostics.record(epoch, diffusion)
     assert torch.equal(torch.get_rng_state(), rng_state)  # Training's random draws are left alone
 
-    for name in ("LossByTimestep", "Calibration", "SpectralAttention"):
+    for name in ("LossByTimestep", "Calibration", "SpectralAttention", "ReverseChain"):
         assert (tmp_path / f"run_{name}.png").stat().st_size > 0
         with h5py.File(tmp_path / f"run_{name}.hdf5", "r") as hf:
             np.testing.assert_array_equal(hf["epochs"][()], [1, 3])  # Both recorded epochs
+    with h5py.File(tmp_path / "run_ReverseChain.hdf5", "r") as hf:
+        errors = hf["errors"][()]
+    np.testing.assert_array_equal(errors[0], errors[1])  # The same model and noise path each epoch

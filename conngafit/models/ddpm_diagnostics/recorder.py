@@ -3,7 +3,7 @@
 import numpy as np
 import torch
 
-from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep, spectral_attention
+from conngafit.models.ddpm_diagnostics import calibration, loss_by_timestep, reverse_chain, spectral_attention
 
 
 class TrainingDiagnostics:
@@ -30,10 +30,12 @@ class TrainingDiagnostics:
         self.image_mean = image_mean
         self.image_stdv = image_stdv
         self.channel_width = channel_width
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.losses_by_epoch = {}  # Each recorded epoch's validation loss per sample, at its fixed timestep
         self.rank_counts_by_epoch, self.coverage_by_epoch = {}, {}  # Each recorded epoch's posterior calibration
         self.attention_by_epoch = {}  # Each recorded epoch's spectral attention for the first validation sample
+        self.chain_snapshots_by_epoch, self.chain_errors_by_epoch = {}, {}  # Its reverse chain each recorded epoch
 
     def record(self, epoch, model):
         """Record the diagnostics of model (a GaussianDiffusion in eval mode) at epoch, and rewrite every output."""
@@ -53,6 +55,12 @@ class TrainingDiagnostics:
             attention_timesteps = [round(f * (model.n_timesteps - 1)) for f in spectral_attention.TIMESTEP_FRACTIONS]
             self.attention_by_epoch[epoch] = spectral_attention.attention_weights(
                 model, cube, y0, noise, attention_timesteps
+            )
+        with torch.random.fork_rng():
+            torch.manual_seed(self.seed)  # The same noise path every recorded epoch, so their chains compare
+            chain_timesteps = [round(f * (model.n_timesteps - 1)) for f in reverse_chain.TIMESTEP_FRACTIONS]
+            self.chain_snapshots_by_epoch[epoch], self.chain_errors_by_epoch[epoch] = reverse_chain.reverse_chain(
+                model, cube, y0, chain_timesteps
             )
         self.rank_counts_by_epoch[epoch], self.coverage_by_epoch[epoch] = calibration.calibration_summary(
             samples, labels, self.rng
@@ -94,4 +102,21 @@ class TrainingDiagnostics:
             cube_velocity,
             attention_timesteps,
             self.output + "_SpectralAttention.hdf5",
+        )
+        reverse_chain.plot_reverse_chain(
+            self.chain_snapshots_by_epoch[epoch],
+            chain_timesteps,
+            y0[0].cpu().numpy(),
+            self.chain_errors_by_epoch,
+            self.targets,
+            epoch,
+            self.output + "_ReverseChain.png",
+        )
+        reverse_chain.save_reverse_chain(
+            self.chain_snapshots_by_epoch,
+            self.chain_errors_by_epoch,
+            chain_timesteps,
+            y0[0].cpu().numpy(),
+            self.targets,
+            self.output + "_ReverseChain.hdf5",
         )
