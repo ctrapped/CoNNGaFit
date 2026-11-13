@@ -75,13 +75,6 @@ def test_rejects_unknown_schedule():
 
 
 #### Time conditioning ####
-@pytest.mark.parametrize("spatial", [(5, 6), (4, 5, 6)])
-def test_film_with_zero_scale_and_shift_is_identity(spatial):
-    channels = 3
-    h = torch.randn(BATCH_SIZE, channels, *spatial)
-    torch.testing.assert_close(ddpm._film(h, torch.zeros(BATCH_SIZE, 2 * channels)), h)
-
-
 @pytest.mark.parametrize("dim", [8, 9])
 def test_timestep_embedding_shape_and_dependence_on_t(dim):
     out_dim = 16

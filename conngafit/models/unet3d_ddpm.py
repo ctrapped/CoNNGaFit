@@ -6,6 +6,7 @@ from torch import nn
 
 from conngafit.models.blocks import (
     DeconvBlock,
+    ResBlock2d,
     ResidualBlock,
     SpectralAttentionPool,
     Stem,
@@ -27,27 +28,7 @@ from conngafit.models.blocks import (
 # and number of maps.
 
 
-#### Small helpers ####
-def _film(h, scale_shift):
-    """FiLM: h * (1 + scale) + shift, with per-channel scale/shift broadcast over all spatial axes.
-    This is how the timestep tells each block how much noise to expect."""
-    scale, shift = scale_shift.chunk(2, dim=1)
-    view = scale.shape + (1,) * (h.dim() - 2)
-    return h * (1 + scale.view(view)) + shift.view(view)
-
-
-def _batch_to_group_norm(module, max_groups):
-    """Swap every BatchNorm3d in `module` for GroupNorm, in place.
-    BatchNorm statistics would mix samples at different noise levels within a batch and break at
-    batch size 1 during sampling; GroupNorm normalizes each sample independently."""
-    for name, child in module.named_children():
-        if isinstance(child, nn.BatchNorm3d):
-            c = child.num_features
-            setattr(module, name, nn.GroupNorm(math.gcd(c, max_groups), c))
-        else:
-            _batch_to_group_norm(child, max_groups)
-
-
+#### Noise schedule ####
 def make_beta_schedule(name, n_timesteps):
     """Per-step noise variances beta_t.
     'linear' - Ho et al. (2020). 'cosine' - Nichol & Dhariwal (2021); destroys signal more
@@ -70,7 +51,11 @@ def make_beta_schedule(name, n_timesteps):
 #### Timestep embedding ####
 class TimestepEmbedding(nn.Module):
     """Sinusoidal encoding of t (as in Transformers) followed by an MLP.
-    Gives the network a smooth, learnable representation of the noise level."""
+    Gives the network a smooth, learnable representation of the noise level.
+
+    dim // 2 frequencies are spaced geometrically from 1 down to 1/10000; each contributes sin(t*f)
+    and cos(t*f), so low frequencies separate distant timesteps and high ones separate neighbours.
+    An odd dim gets one zero-padded entry. out_dim: width of the embedding passed to every block."""
 
     def __init__(self, dim, out_dim, activation=nn.SiLU):
         super().__init__()
@@ -80,79 +65,14 @@ class TimestepEmbedding(nn.Module):
     def forward(self, t):
         half = self.dim // 2
         freqs = torch.exp(-math.log(10000.0) * torch.arange(half, device=t.device) / half)
-        args = t.float()[:, None] * freqs[None]
+        args = t.float()[:, None] * freqs[None]  # (B, dim // 2): every timestep times every frequency
         emb = torch.cat([args.sin(), args.cos()], dim=1)
         if self.dim % 2:  # pad odd dims
             emb = F.pad(emb, (0, 1))
         return self.mlp(emb)
 
 
-#### Time-conditioned versions of the shared blocks ####
-class ConditionalStem(Stem):
-    """The shared Stem (ceil(N/4) per axis), but accepting several input channels:
-    the datacube plus each noisy map broadcast along the spectral axis."""
-
-    def __init__(self, in_channels, out_channels, kernel_size, activation):
-        super().__init__(out_channels, kernel_size, activation)
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=2, padding=0)
-
-
-class TimeResidualBlock(ResidualBlock):
-    """Encoder ResidualBlock with GroupNorm and a FiLM time injection after the first conv."""
-
-    def __init__(
-        self, in_channels, out_channels, downsample, kernel1, t_dim, dropout_rate=0.0, activation=nn.SiLU, max_groups=8
-    ):
-        super().__init__(in_channels, out_channels, downsample, kernel1, dropout_rate, activation)
-        _batch_to_group_norm(self, max_groups)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-
-    def forward(self, x, t_emb):
-        shortcut = self.shortcut(x)
-        if self.downsample:
-            x = F.pad(x, self.down_pad)  # lands every axis on ceil(N/2)
-        x = self.act1(_film(self.bn1(self.conv1(x)), self.time_proj(t_emb)))
-        x = self.act2(self.bn2(self.conv2(x)))
-        return self.dropout(self.act3(x + shortcut))
-
-
-class TimeDeconvBlock(DeconvBlock):
-    """Decoder DeconvBlock with GroupNorm and a FiLM time injection after the first conv."""
-
-    def __init__(
-        self, in_channels, out_channels, upsample, kernel1, t_dim, dropout_rate=0.0, activation=nn.SiLU, max_groups=8
-    ):
-        super().__init__(in_channels, out_channels, upsample, kernel1, dropout_rate, activation)
-        _batch_to_group_norm(self, max_groups)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-
-    def forward(self, x, t_emb):
-        shortcut = self.shortcut(x)  # carries the target spatial shape
-        x = self.act1(_film(self.bn1(_match_spatial(self.convtran1(x), shortcut)), self.time_proj(t_emb)))
-        x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
-        return self.dropout(self.act3(x + shortcut))
-
-
 #### 3-d -> 2-d head ####
-class TimeResBlock2d(nn.Module):
-    """2-d residual block with GroupNorm + FiLM time conditioning, used at full map resolution."""
-
-    def __init__(self, in_channels, out_channels, t_dim, activation=nn.SiLU, max_groups=8):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
-        self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
-        self.act1, self.act2 = activation(), activation()
-        self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
-
-    def forward(self, x, t_emb):
-        h = self.act1(_film(self.norm1(self.conv1(x)), self.time_proj(t_emb)))
-        h = self.act2(self.norm2(self.conv2(h)))
-        return h + self.shortcut(x)
-
-
 class MapHead(nn.Module):
     """Turn 3-d decoder features into 2-d noise predictions, one per map, at the target map resolution.
 
@@ -166,7 +86,7 @@ class MapHead(nn.Module):
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList(
             [
-                TimeResBlock2d(channels + n_maps if i == 0 else channels, channels, t_dim, activation, max_groups)
+                ResBlock2d(channels + n_maps if i == 0 else channels, channels, activation, max_groups, t_dim=t_dim)
                 for i in range(n_blocks)
             ]
         )
@@ -191,11 +111,12 @@ class DenoisingUNet3d(nn.Module):
 
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
-      stem   - ConditionalStem, every axis -> ceil(N/4)
-      encoder- n_stages stages of 2 TimeResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
-      decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 TimeDeconvBlocks
+      stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
+      encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
+      decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
-    Every block is FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
+    Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
+    FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
     construction: input_shape is checked against n_stages (check_stage_compatibility) and forward()
     rejects any other size. No weight depends on them, so a trained denoiser's state_dict loads into
     one built for another size (with the same n_maps).
@@ -252,15 +173,15 @@ class DenoisingUNet3d(nn.Module):
         self.n_filt0, self.t_dim, self.max_groups = n_filt0, t_dim, max_groups
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
-            kernel1=tuple(kernel_coder),
-            t_dim=t_dim,
+            kernel1=self.kernel_coder,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
+            t_dim=t_dim,
         )
 
         self.time_embed = TimestepEmbedding(n_filt0, t_dim)
-        self.stem = ConditionalStem(1 + n_maps, n_filt0, tuple(kernel_stem), stem_activation)
+        self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
         # Encoder: stage 0 keeps the stem's shape, later stages halve every axis and double channels.
         enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
@@ -270,8 +191,8 @@ class DenoisingUNet3d(nn.Module):
             self.encoder.append(
                 nn.ModuleList(
                     [
-                        TimeResidualBlock(prev, ch, downsample=i > 0, **block_kw),
-                        TimeResidualBlock(ch, ch, downsample=False, **block_kw),
+                        ResidualBlock(prev, ch, downsample=i > 0, **block_kw),
+                        ResidualBlock(ch, ch, downsample=False, **block_kw),
                     ]
                 )
             )
@@ -282,12 +203,12 @@ class DenoisingUNet3d(nn.Module):
         self.decoder = nn.ModuleList()
         for j in range(n_stages - 1):
             in_ch, out_ch = enc_ch[n_stages - 1 - j], enc_ch[n_stages - 2 - j]
-            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=tuple(kernel_coder), mode=upsample_mode))
+            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=self.kernel_coder, mode=upsample_mode))
             self.decoder.append(
                 nn.ModuleList(
                     [
-                        TimeDeconvBlock(2 * out_ch, out_ch, upsample=True, **block_kw),
-                        TimeDeconvBlock(out_ch, out_ch, upsample=False, **block_kw),
+                        DeconvBlock(2 * out_ch, out_ch, upsample=True, **block_kw),
+                        DeconvBlock(out_ch, out_ch, upsample=False, **block_kw),
                     ]
                 )
             )
@@ -306,12 +227,14 @@ class DenoisingUNet3d(nn.Module):
         _, n_spec, n_x, n_y = cube.shape
         t_emb = self.time_embed(t)
 
-        # Put the noisy maps on the cube grid and tile them along the spectral axis.
-        # Interpolate noisy maps to the cube's spatial resolution if resolutions differ.
+        # Put the noisy maps on the cube grid (a no-op when map_shape == (nX, nY)) and tile them along
+        # the spectral axis, so the stem sees the cube and the current maps at every voxel.
         y_vol = F.interpolate(y_t, size=(n_x, n_y), mode="bilinear", align_corners=False)
         y_vol = y_vol.unsqueeze(2).expand(-1, -1, n_spec, -1, -1)
         h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
 
+        # Keep every encoder output except the deepest; the decoder pops them in reverse order, so each
+        # decoder stage pairs with the encoder stage at the same resolution.
         skips = []
         for i, (b1, b2) in enumerate(self.encoder):
             h = b2(b1(h, t_emb), t_emb)
@@ -342,6 +265,9 @@ class GaussianDiffusion(nn.Module):
         schedule: 'cosine' or 'linear' (see make_beta_schedule).
         clip_range: bounds for the predicted clean map during sampling (labels normalized with
             'symmetric' lie in [-1, 1]); None disables clipping.
+
+    alpha_bar is a buffer saved in state_dict, so a checkpoint only loads into a model built with the
+    same schedule and n_timesteps (a different n_timesteps raises a size mismatch on load).
     """
 
     def __init__(
@@ -361,13 +287,17 @@ class GaussianDiffusion(nn.Module):
         alpha_bar = torch.cumprod(1 - make_beta_schedule(schedule, n_timesteps), dim=0)
         # buffers move with .to(device) and are saved in state_dict
         self.register_buffer("alpha_bar", alpha_bar.float())
+        # alpha_bar_{t-1} for every t, with alpha_bar_{-1} = 1 (no noise before the first step). Derived from
+        # alpha_bar, so it is not saved (persistent=False) and checkpoints only hold alpha_bar.
+        self.register_buffer("alpha_bar_prev", F.pad(self.alpha_bar[:-1], (1, 0), value=1.0), persistent=False)
 
     def _gather(self, t, like):
         """abar_t reshaped to broadcast against (B, n_maps, H, W) maps."""
         return self.alpha_bar[t].view(-1, *([1] * (like.dim() - 1)))
 
     def q_sample(self, y0, t, noise):
-        """Forward process: jump straight from y_0 to y_t in closed form."""
+        """Forward process: jump straight from y_0 to y_t in closed form,
+        y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)."""
         ab = self._gather(t, y0)
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
@@ -404,16 +334,21 @@ class GaussianDiffusion(nn.Module):
         y = torch.randn(cube.shape[0], *shape, device=cube.device)
         for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
-            ab_prev = self.alpha_bar[t - 1] if t > 0 else torch.ones_like(ab)
-            alpha = ab / ab_prev
+            ab_prev = self.alpha_bar_prev[t]
+            alpha = ab / ab_prev  # alpha_t = 1 - beta_t
 
             eps = self.denoiser(cube, y, torch.full((cube.shape[0],), t, device=cube.device))
-            y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()  # current guess of the clean map
+            # Invert the forward process y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)
+            # for the current guess of the clean map.
+            y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()
             if self.clip_range is not None:
                 y0 = y0.clamp(*self.clip_range)
 
+            # Gaussian posterior q(y_{t-1} | y_t, y_0) (Ho et al. 2020, Eqs. 6-7): its mean weights y_0 and y_t,
+            # and its variance beta~_t = (1 - abar_{t-1}) / (1 - abar_t) * beta_t is 0 at t = 0, so the last
+            # step adds no noise.
             mean = ab_prev.sqrt() * (1 - alpha) / (1 - ab) * y0 + alpha.sqrt() * (1 - ab_prev) / (1 - ab) * y
-            variance = (1 - ab_prev) / (1 - ab) * (1 - alpha)  # 0 at t = 0, so the last step adds no noise
+            variance = (1 - ab_prev) / (1 - ab) * (1 - alpha)
             y = mean + variance.sqrt() * torch.randn_like(y)
         return y
 
@@ -421,4 +356,5 @@ class GaussianDiffusion(nn.Module):
         """Posterior mean and standard deviation per pixel of each map from n_samples draws. sample_kw goes to
         sample()."""
         samples = self.sample(cube, n_samples=n_samples, **sample_kw)
-        return samples.mean(dim=0), samples.std(dim=0)
+        std, mean = torch.std_mean(samples, dim=0)  # std uses the unbiased (n_samples - 1) estimator
+        return mean, std

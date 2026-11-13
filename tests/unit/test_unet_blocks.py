@@ -13,6 +13,7 @@ from conngafit.models.blocks import (
     SpectralAttentionPool,
     _ceil_conv_pad,
     _doubling_deconv_pads,
+    _film,
     _match_spatial,
 )
 
@@ -65,6 +66,12 @@ def test_match_spatial_pad_then_crop_round_trips():
     x = torch.randn(1, 1, 4, 5, 6)
     padded = _match_spatial(x, torch.zeros(1, 1, 7, 8, 9))
     assert torch.equal(_match_spatial(padded, x), x)
+
+
+@pytest.mark.parametrize("spatial", [(5, 6), (4, 5, 6)])
+def test_film_with_zero_scale_and_shift_is_identity(spatial):
+    h = torch.randn(BATCH, CHANNELS, *spatial)
+    torch.testing.assert_close(_film(h, torch.zeros(BATCH, 2 * CHANNELS)), h)
 
 
 @pytest.mark.parametrize("dilation", [1, 2, 4, 8])
