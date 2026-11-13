@@ -315,12 +315,12 @@ class GaussianDiffusion(nn.Module):
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
     def forward(self, cube, y0, t=None, noise=None):
-        """Training loss for a batch: MSE between true and predicted noise.
+        """Noise y0 to timesteps t and predict that noise: returns (predicted noise, true noise), each shaped like y0.
+        Passing fixed t and noise makes the outputs repeatable
 
         t: (B,) integer timesteps; None draws them uniformly from 0..T-1, stratified across the batch
             (see sample_timesteps).
         noise: the eps added to y0, shaped like y0; None draws it from N(0, I).
-        Passing fixed t and noise makes the loss repeatable, e.g. to score validation sets the same way every epoch.
         """
         y0 = y0.float()
         if t is None:
@@ -329,7 +329,7 @@ class GaussianDiffusion(nn.Module):
             noise = torch.randn_like(y0)
         else:
             noise = noise.float()
-        return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
+        return self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise
 
     # TODO: add DDIM sampling (Song et al. 2021): its update depends only on alpha_bar, so it can skip timesteps
     # for faster sampling, and its eta sets the noise added at each step (eta = 1 with all T steps is DDPM; eta = 0 is

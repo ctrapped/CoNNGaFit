@@ -174,12 +174,12 @@ def test_q_sample_mixes_signal_and_noise(make_diffusion):
 
 
 @pytest.mark.parametrize("n_maps", [1, N_MAPS])
-def test_training_loss_is_a_finite_scalar(make_diffusion, n_maps):
+def test_predicted_noise_matches_the_maps(make_diffusion, n_maps):
     diffusion = make_diffusion(n_maps=n_maps)
     y0 = torch.randn(BATCH_SIZE, n_maps, *OUTPUT_SHAPE)
-    loss = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0)
-    assert loss.shape == ()  # a single scalar to backpropagate
-    assert torch.isfinite(loss)  # no NaN/inf from the noising or denoiser
+    pred_noise, noise = diffusion(torch.randn(BATCH_SIZE, *INPUT_SHAPE), y0)
+    assert pred_noise.shape == noise.shape == y0.shape  # one predicted noise value per pixel of every map
+    assert torch.isfinite(pred_noise).all()  # no NaN/inf from the noising or denoiser
 
 
 @pytest.mark.parametrize(
