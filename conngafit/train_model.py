@@ -166,37 +166,38 @@ def weighted_gaussian_nll_loss(pred, y, logvar, w):
     return torch.mean(w * nn.functional.gaussian_nll_loss(pred, y, logvar.exp(), reduction="none"))
 
 
-def compute_loss(model, x, y, w, predict=True, n_samples=None, t=None, noise=None, sampling_model=None):
-    """
-    Returns (loss, prediction, 1-sigma) for a batch of cubes x and labels y, with weights by w. The
-    prediction and 1-sigma are None unless predict=True.
+def compute_loss(model, x, y, w, t=None, noise=None):
+    """The training loss for a batch of cubes x and labels y, each value weighted by w.
 
-    resblock: If the network predicts its variance, use Gaussian NLL of (mean, exp(logvar)) with sigma = exp(logvar / 2)
-              Otherwise, use MSE loss, with sigma = None.
-    ddpm: the denoising loss (unweighted) at timesteps t with noise (drawn at random if None), and the mean and
-        standard deviation of n_samples posterior samples, which are only drawn if predict is True.
-        t, noise and sampling_model are ignored by the resblock network.
-    sampling_model: the ddpm to draw posterior samples from (e.g. the EMA weights while the loss trains the raw ones);
-        None samples from model.
+    resblock: Gaussian NLL of (mean, exp(logvar)) if the network predicts its variance, otherwise MSE.
+    ddpm: MSE between the noise added to y at timesteps t and the network's prediction of it. t and noise are drawn at random
+        unless specified.
     """
     if isinstance(model, GaussianDiffusion):
-        loss = model(x, y, t=t, noise=noise)
-        if not predict:
-            return loss, None, None
-        sampler = sampling_model if sampling_model is not None else model
-        pred, sigma = sampler.predict_with_uncertainty(x, n_samples)
-        return loss, pred, sigma
+        pred_noise, noise = model(x, y, t=t, noise=noise)
+        return weighted_mse_loss(pred_noise, noise, w)
 
     output = model(x)
     if model.predict_variance:
         pred, logvar = output
-        loss, sigma = weighted_gaussian_nll_loss(pred, y, logvar, w), torch.exp(0.5 * logvar)
-    else:
-        pred, sigma = output, None
-        loss = weighted_mse_loss(pred, y, w)
-    if not predict:
-        return loss, None, None
-    return loss, pred, sigma
+        return weighted_gaussian_nll_loss(pred, y, logvar, w)
+    return weighted_mse_loss(output, y, w)
+
+
+def predict_batch(model, x, n_samples=None):
+    """(prediction, 1-sigma) for a batch of cubes x, in scaled label units.
+
+    resblock: the predicted mean, and its 1-sigma exp(logvar / 2) if the network predicts its variance, otherwise None.
+    ddpm: the mean and standard deviation of n_samples posterior samples.
+    """
+    if isinstance(model, GaussianDiffusion):
+        return model.predict_with_uncertainty(x, n_samples)
+
+    output = model(x)
+    if model.predict_variance:
+        pred, logvar = output
+        return pred, torch.exp(0.5 * logvar)
+    return output, None
 
 
 def count_accurate(pred, y, tolerance):
@@ -226,7 +227,7 @@ def save_batch_outputs(
     comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
     batches, after the target and after the epoch.
 
-    x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see compute_loss, or None), in
+    x, y, pred, sigma: the batch's cubes, labels, predictions and their 1-sigma (see predict_batch, or None), in
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
         plotting.save_correlation_plots.
@@ -272,10 +273,9 @@ def train_loop(
 
     predict: also predict each batch, to score the MSE of the predicted mean (made every predict_every epochs).
     save_batch: if given, called with each batch's (x, y, pred, sigma, idx) to save its outputs (see
-        save_batch_outputs).
-    ema_model: an AveragedModel of model, updated after every optimizer step. The ddpm samples its predictions
-        from it. The resblock network's training-set predictions come from the raw-weight, while validation and test
-        use the EMA.
+        save_batch_outputs); only called on batches that are predicted.
+    ema_model: an AveragedModel of model, updated after every optimizer step. Every prediction comes from it
+        instead of the raw model.
     Returns (loss, MSE of the predicted mean), each averaged over all batches in the epoch; the MSE is NaN if no
     batch was predicted.
     """
@@ -290,15 +290,8 @@ def train_loop(
         y = y.to(device)
         w = w.to(device)
 
-        loss, pred, sigma = compute_loss(
-            model, x.float(), y.float(), w.float(), predict, n_samples, sampling_model=ema_model.module
-        )
+        loss = compute_loss(model, x.float(), y.float(), w.float())
         epoch_loss += loss.item()
-        if pred is not None:
-            n_predicted += 1
-            epoch_mse += nn.functional.mse_loss(pred, y.float()).item()
-        if save_batch is not None:
-            save_batch(x, y, pred, sigma, idx)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -312,6 +305,14 @@ def train_loop(
             n_clipped += 1
         optimizer.step()
         ema_model.update_parameters(model)
+
+        if predict:
+            with torch.no_grad():
+                pred, sigma = predict_batch(ema_model.module, x.float(), n_samples)
+            n_predicted += 1
+            epoch_mse += nn.functional.mse_loss(pred, y.float()).item()
+            if save_batch is not None:
+                save_batch(x, y, pred, sigma, idx)
 
         if batch % 100 == 0:
             logger.info("loss: %7f [%5d/%5d]", loss.item(), batch * len(x), len(dataloader.dataset))
@@ -350,12 +351,11 @@ def evaluate(
             w = w.to(device)
 
             t, noise = fixed_draws[batch] if fixed_draws is not None else (None, None)
-            loss, pred, sigma = compute_loss(
-                model, x.float(), y.float(), w.float(), predict, n_samples, t=t, noise=noise
-            )
+            loss = compute_loss(model, x.float(), y.float(), w.float(), t=t, noise=noise)
             summed_loss += loss.item()
-            if pred is None:  # Predictions are made every predict_every epochs
+            if not predict:  # Predictions are made every predict_every epochs
                 continue
+            pred, sigma = predict_batch(model, x.float(), n_samples)
             summed_mse += nn.functional.mse_loss(pred, y.float()).item()
 
             np_pred = pred.cpu().float().detach().numpy()
@@ -651,8 +651,9 @@ def train(
     # Exponential moving average (EMA) of the weights. With a constant learning rate the raw weights jitter around a
     # minimum, by an amount set by the gradient noise of each batch (for the ddpm also the random t and noise of every
     # sample). The EMA,
-    #  Training (loss, gradients) still updates the raw weights, but validation, testing, the ddpm's posterior samples
-    # and the saved model all use the EMA. ema_decay = 0 copies the raw weights, which reproduces training without an EMA.
+    # Training (loss, gradients) still updates the raw weights, but validation, testing, the ddpm's posterior samples
+    # and the saved model all use the EMA. ema_decay = 0 copies the raw weights, which reproduces training without an
+    # EMA.
     # use_buffers=True also averages buffers with the same EMA: the resblock network's BatchNorm running mean and
     # variance then follow the averaged weights, rather than being the raw model's statistics (use_buffers=False),
     # which come from the raw weights' activations. The ddpm's only buffers are its fixed noise schedule, which
