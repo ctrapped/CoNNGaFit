@@ -638,10 +638,10 @@ def train(
     if optimizer_name == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     else:
+        # AdamW Optimizer
         # Only conv and linear weights (ndim > 1), which set how strongly each layer responds to its input, are
         # decayed. Biases and the GroupNorm/BatchNorm scales and shifts (ndim <= 1) set offsets and activation scales
-        # rather than model complexity, so decaying them would bias the outputs and fight the normalization instead
-        # of regularizing.
+        # rather than model complexity, so decaying them would bias the outputs.
         decay_params = [p for p in model.parameters() if p.ndim > 1]
         no_decay_params = [p for p in model.parameters() if p.ndim <= 1]
         optimizer = torch.optim.AdamW(
@@ -654,19 +654,14 @@ def train(
     logger.info("Optimizer: %s", optimizer_name)
 
     # Exponential moving average (EMA) of the weights. With a constant learning rate the raw weights jitter around a
-    # minimum, by an amount set by the gradient noise of each batch (for the ddpm also the random t and noise of every
-    # sample). The EMA,
-    # Training (loss, gradients) still updates the raw weights, but validation, testing, the ddpm's posterior samples
-    # and the saved model all use the EMA. ema_decay = 0 copies the raw weights, which reproduces training without an
-    # EMA.
+    # minimum. Training (loss, gradients) still updates the raw weights, but validation, testing, the ddpm's posterior samples
+    # and the saved model all use the EMA.
+    # ema_decay = 0 copies the raw weights, which reproduces training without an EMA.
     # use_buffers=True also averages buffers with the same EMA: the resblock network's BatchNorm running mean and
-    # variance then follow the averaged weights, rather than being the raw model's statistics (use_buffers=False),
-    # which come from the raw weights' activations. The ddpm's only buffers are its fixed noise schedule, which
-    # averages to itself.
+    # variance then follow the averaged weights, rather than being the raw model's statistics (use_buffers=False).
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay), use_buffers=True)
     eval_model = ema_model.module  # The weights every evaluation uses and that are saved
-    # The EMA copy is never trained, so it stays in eval mode: dropout is off whenever it is evaluated or
-    # sampled from.
+    # The EMA copy is never trained, so it stays in eval mode: dropout is off whenever it is evaluated
     eval_model.eval()
 
     # Fixed validation noise (ddpm): one (t, noise) draw per validation batch, made once here, so every epoch's
