@@ -96,7 +96,8 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 | Network | Key | Meaning |
 |---|---|---|
 | Both | `network` | `"resblock"` or `"ddpm"` (see above) |
-| | `learning_rate`, `weight_decay`, `epochs` | Adam optimizer settings and training length |
+| | `learning_rate`, `weight_decay`, `epochs` | Optimizer settings and training length |
+| | `optimizer` (optional) | `"adam"` (the default) or `"adamw"`, which decays only the conv and linear weights, decoupled from the gradient step, and typically needs a larger `weight_decay` (1e-2) |
 | | `n_filt0`, `k0`, `k1` | Filters in the first encoder stage (doubling at each later stage), stem kernel size, residual/deconv block kernel size |
 | | `block_dropout_rate` | Channel-wise dropout inside every block (off by default) |
 | | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]). The DDPM clips its samples to [-1, 1] unless `"none"` |

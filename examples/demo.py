@@ -55,6 +55,8 @@ HYPERPARAMS = {
     "mass_weight_power": 0,  # Weight each value's loss by mass to this power; 0 is unweighted
     "learning_rate": 1e-3,
     "weight_decay": 1e-3,
+    "ema_decay": 0,  # Evaluate and save the raw weights, not an exponential moving average of them
+    "max_grad_norm": 0,  # No gradient clipping
     "epochs": 200,
     "predict_every": 1,  # Score the training and validation predictions every epoch
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable

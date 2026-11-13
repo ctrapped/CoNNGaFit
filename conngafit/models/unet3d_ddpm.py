@@ -295,19 +295,41 @@ class GaussianDiffusion(nn.Module):
         """abar_t reshaped to broadcast against (B, n_maps, H, W) maps."""
         return self.alpha_bar[t].view(-1, *([1] * (like.dim() - 1)))
 
+    def sample_timesteps(self, n, device=None):
+        """n training timesteps, stratified over 0..T-1 (the low-discrepancy sampler of Kingma et al. 2021).
+
+        [0, 1) is split into n equal strata and every sample gets one stratum, so a batch always covers the noise
+        levels evenly instead of clumping by chance. A single random offset shifts all strata together and the
+        strata are handed out in random order, so each sample's t is still uniform over 0..T-1: the loss has the
+        same expectation as with independent draws, but less variance over t.
+        """
+        strata = (torch.arange(n, device=device) + torch.rand((), device=device)) / n
+        t = (strata * self.n_timesteps).long()[torch.randperm(n, device=device)]
+        # Float rounding can land the top stratum exactly on 1.0, which would give t = T
+        return t.clamp(max=self.n_timesteps - 1)
+
     def q_sample(self, y0, t, noise):
         """Forward process: jump straight from y_0 to y_t in closed form,
         y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)."""
         ab = self._gather(t, y0)
         return ab.sqrt() * y0 + (1 - ab).sqrt() * noise
 
-    def forward(self, cube, y0):
-        """Training loss for a batch of cubes and their (B, n_maps, H, W) maps y0: MSE between true and predicted
-        noise."""
+    def forward(self, cube, y0, t=None, noise=None):
+        """Noise y0 to timesteps t and predict that noise: returns (predicted noise, true noise), each shaped like y0.
+        Passing fixed t and noise makes the outputs repeatable
+
+        t: (B,) integer timesteps; None draws them uniformly from 0..T-1, stratified across the batch
+            (see sample_timesteps).
+        noise: the eps added to y0, shaped like y0; None draws it from N(0, I).
+        """
         y0 = y0.float()
-        t = torch.randint(0, self.n_timesteps, (y0.shape[0],), device=y0.device)
-        noise = torch.randn_like(y0)
-        return F.mse_loss(self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise)
+        if t is None:
+            t = self.sample_timesteps(y0.shape[0], device=y0.device)
+        if noise is None:
+            noise = torch.randn_like(y0)
+        else:
+            noise = noise.float()
+        return self.denoiser(cube.float(), self.q_sample(y0, t, noise), t), noise
 
     # TODO: add DDIM sampling (Song et al. 2021): its update depends only on alpha_bar, so it can skip timesteps
     # for faster sampling, and its eta sets the noise added at each step (eta = 1 with all T steps is DDPM; eta = 0 is
