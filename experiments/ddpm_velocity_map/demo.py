@@ -5,6 +5,7 @@ Needs no simulation data and runs in several minutes on a laptop CPU. From the r
 
     python experiments/ddpm_velocity_map/demo.py    # writes experiments/ddpm_velocity_map/output/ddpm_velocity.png
     python experiments/ddpm_velocity_map/demo.py --epochs 10 --output DIR
+    python experiments/ddpm_velocity_map/demo.py --diagnostic-mode  # also records the DDPM's training diagnostics
 
 The data (examples/demo_data/, made by examples/make_demo_data.py) are VOF observations of six synthetic disk
 galaxies, each rotating at a different speed: four to train on, one to validate on, and one to test on. The model

@@ -36,33 +36,50 @@ def reverse_chain(model, cube, y_true, snapshot_timesteps):
 
 
 def plot_reverse_chain(snapshots, snapshot_timesteps, y_true, errors_by_epoch, targets, epoch, output):
-    """Plot, for each target, y_t (top row) and the clean-map estimate (bottom row) at each snapshot timestep next
-    to the true map, and below them the estimate's error against t for every recorded epoch.
+    """Plot, for each target, y_t (top row), the clean-map estimate next to the true map (middle row) and the
+    estimate minus the true map (bottom row) at each snapshot timestep, and below them the estimate's error against
+    t for every recorded epoch.
 
     snapshots: (n_snap, 2, n_maps, H, W) from reverse_chain. snapshot_timesteps: its n_snap timesteps.
     y_true: (n_maps, H, W) true maps. errors_by_epoch: dict of epoch -> (T, n_maps) errors. targets: the n_maps
     target names. epoch: the epoch of the snapshots, shown in the title. output: the image file to write.
-    Maps are in scaled label units; the estimates and the truth share a colour scale.
+    Maps are in scaled label units. y_t, the estimates and the truth share the true map's colour scale, so values
+    outside its range are drawn saturated. The differences share a symmetric scale set by the sample's difference
+    at the lowest snapshot timestep.
     """
     n_snap, n_maps = len(snapshot_timesteps), len(targets)
     n_cols = n_snap + 1  # The snapshots, then the true map
-    fig = plt.figure(figsize=(2.4 * n_cols, 2.4 * (2 * n_maps + 1.5)))
-    grid = fig.add_gridspec(2 * n_maps + 1, n_cols, height_ratios=[1] * (2 * n_maps) + [1.5])
+    n_rows = 3  # Rows of maps per target
+    fig = plt.figure(figsize=(2.4 * n_cols + 0.6, 2.4 * (n_rows * n_maps + 1.5)))
+    grid = fig.add_gridspec(
+        n_rows * n_maps + 1,
+        n_cols + 1,  # The last, narrow column holds each row's colour bar
+        height_ratios=[1] * (n_rows * n_maps) + [1.5],
+        width_ratios=[1] * n_cols + [0.08],
+    )
     for m, target in enumerate(targets):
-        noise_limit = np.abs(snapshots[:, 0, m]).max()
         map_style = dict(cmap="viridis", vmin=y_true[m].min(), vmax=y_true[m].max(), origin="lower")
-        for col, t in enumerate(snapshot_timesteps):
-            ax = fig.add_subplot(grid[2 * m, col])
-            ax.imshow(snapshots[col, 0, m], cmap="RdBu_r", vmin=-noise_limit, vmax=noise_limit, origin="lower")
-            ax.set(title=f"t = {t}", xticks=[], yticks=[])
-            if col == 0:
-                ax.set_ylabel(f"{target}\nnoisy maps y_t")
-            ax = fig.add_subplot(grid[2 * m + 1, col])
-            ax.imshow(snapshots[col, 1, m], **map_style)
-            ax.set(xticks=[], yticks=[])
-            if col == 0:
-                ax.set_ylabel(f"{target}\nclean-map estimate")
-        ax = fig.add_subplot(grid[2 * m + 1, n_snap])
+        differences = snapshots[:, 1, m] - y_true[m]
+        # The sample's (lowest timestep's) difference sets the scale; earlier, noisier estimates saturate
+        difference_limit = np.abs(differences[np.argmin(snapshot_timesteps)]).max()
+        difference_style = dict(cmap="RdBu_r", vmin=-difference_limit, vmax=difference_limit, origin="lower")
+        rows = [
+            (snapshots[:, 0, m], map_style, "noisy maps y_t"),
+            (snapshots[:, 1, m], map_style, "clean-map estimate ŷ0"),
+            (differences, difference_style, "ŷ0 - truth"),
+        ]
+        for r, (images, style, label) in enumerate(rows):
+            row = n_rows * m + r
+            for col, t in enumerate(snapshot_timesteps):
+                ax = fig.add_subplot(grid[row, col])
+                image = ax.imshow(images[col], **style)
+                ax.set(xticks=[], yticks=[])
+                if r == 0:
+                    ax.set_title(f"t = {t}")
+                if col == 0:
+                    ax.set_ylabel(f"{target}\n{label}")
+            fig.colorbar(image, cax=fig.add_subplot(grid[row, -1]), label="scaled units")
+        ax = fig.add_subplot(grid[n_rows * m + 1, n_snap])
         ax.imshow(y_true[m], **map_style)
         ax.set(title="true map", xticks=[], yticks=[])
 
@@ -73,10 +90,14 @@ def plot_reverse_chain(snapshots, snapshot_timesteps, y_true, errors_by_epoch, t
         ax = fig.add_subplot(grid[-1, m * span : (m + 1) * span])
         for each_epoch, color in zip(epochs, colors):
             ax.plot(errors_by_epoch[each_epoch][:, m], color=color, label=f"epoch {each_epoch}")
-        ax.set(yscale="log", xlabel="timestep t (sampling runs left to right)", ylabel="estimate MSE", title=target)
+        ax.set(
+            yscale="log",
+            xlabel="timestep t",
+            ylabel="MSE ŷ0 - truth (scaled units)",
+            title=target,
+        )
         ax.invert_xaxis()
     ax.legend(fontsize="small")
-    fig.suptitle(f"Reverse chain of one posterior sample, epoch {epoch}")
     fig.tight_layout()
     fig.savefig(output)
     plt.close(fig)
