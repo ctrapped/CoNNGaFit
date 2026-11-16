@@ -70,6 +70,10 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- **Breaking:** the DDPM's timestep conditioning is wider. The sinusoidal encoding defaults to 128 dims (optional
+  `time_encoding_dim` hyperparameter) instead of `n_filt0`, and the learned embedding passed to every block is as
+  wide as the widest encoder stage instead of `4 * n_filt0`. The blocks' `t_dim` argument is renamed
+  `time_embed_dim`. DDPM checkpoints saved before this change no longer load.
 - **Breaking:** `CoNNGaFitImageDataset` samples are `(image, label, loss weights, index)`, and the dataset takes a
   `mass_weight_power` option; the weights and index were added by a wrapper in the training script. The index
   names each saved output after the DataLoader shuffles the samples.

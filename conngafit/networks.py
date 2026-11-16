@@ -29,7 +29,10 @@ HYPERPARAM_KEYS = {
     "resblock": SHARED_KEYS | {"dropout_rate", "output_head", "predict_variance"},
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
-OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"n_fc", "mass_weight_power", "optimizer"}, "ddpm": {"optimizer"}}
+OPTIONAL_HYPERPARAM_KEYS = {
+    "resblock": {"n_fc", "mass_weight_power", "optimizer"},
+    "ddpm": {"optimizer", "time_encoding_dim"},
+}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
@@ -57,6 +60,8 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
         raise ValueError(
             "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_shape must be set to None."
         )
+    # Otherwise the denoiser's default
+    encoding_dim = {"time_encoding_dim": hyperparams["time_encoding_dim"]} if "time_encoding_dim" in hyperparams else {}
     denoiser = DenoisingUNet3d(
         input_shape,
         hyperparams["n_filt0"],
@@ -64,6 +69,7 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
         kernel_coder,
         block_dropout_rate=hyperparams["block_dropout_rate"],
         n_maps=n_maps,
+        **encoding_dim,
     )
     return GaussianDiffusion(
         denoiser,

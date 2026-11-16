@@ -50,24 +50,25 @@ def make_beta_schedule(name, n_timesteps):
 
 #### Timestep embedding ####
 class TimestepEmbedding(nn.Module):
-    """Sinusoidal encoding of t (as in Transformers) followed by an MLP.
+    """Fixed sinusoidal encoding of t (as in Transformers) followed by a learned MLP.
     Gives the network a smooth, learnable representation of the noise level.
 
-    dim // 2 frequencies are spaced geometrically from 1 down to 1/10000; each contributes sin(t*f)
+    encoding_dim // 2 frequencies are spaced geometrically from 1 down to 1/10000; each contributes sin(t*f)
     and cos(t*f), so low frequencies separate distant timesteps and high ones separate neighbours.
-    An odd dim gets one zero-padded entry. out_dim: width of the embedding passed to every block."""
+    An odd encoding_dim gets one zero-padded entry. embed_dim: width of the learned embedding passed to every
+    block."""
 
-    def __init__(self, dim, out_dim, activation=nn.SiLU):
+    def __init__(self, encoding_dim, embed_dim, activation=nn.SiLU):
         super().__init__()
-        self.dim = dim
-        self.mlp = nn.Sequential(nn.Linear(dim, out_dim), activation(), nn.Linear(out_dim, out_dim))
+        self.encoding_dim = encoding_dim
+        self.mlp = nn.Sequential(nn.Linear(encoding_dim, embed_dim), activation(), nn.Linear(embed_dim, embed_dim))
 
     def forward(self, t):
-        half = self.dim // 2
+        half = self.encoding_dim // 2
         freqs = torch.exp(-math.log(10000.0) * torch.arange(half, device=t.device) / half)
         args = t.float()[:, None] * freqs[None]  # (B, dim // 2): every timestep times every frequency
         emb = torch.cat([args.sin(), args.cos()], dim=1)
-        if self.dim % 2:  # pad odd dims
+        if self.encoding_dim % 2:  # pad odd dims
             emb = F.pad(emb, (0, 1))
         return self.mlp(emb)
 
@@ -81,12 +82,18 @@ class MapHead(nn.Module):
     about each pixel); this skip supplies the pixel-level noise pattern to subtract.
     """
 
-    def __init__(self, channels, t_dim, n_blocks=2, activation=nn.SiLU, max_groups=8, n_maps=1):
+    def __init__(self, channels, time_embed_dim, n_blocks=2, activation=nn.SiLU, max_groups=8, n_maps=1):
         super().__init__()
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList(
             [
-                ResBlock2d(channels + n_maps if i == 0 else channels, channels, activation, max_groups, t_dim=t_dim)
+                ResBlock2d(
+                    channels + n_maps if i == 0 else channels,
+                    channels,
+                    activation,
+                    max_groups,
+                    time_embed_dim=time_embed_dim,
+                )
                 for i in range(n_blocks)
             ]
         )
@@ -116,7 +123,9 @@ class DenoisingUNet3d(nn.Module):
       decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
     Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
-    FiLM-conditioned on the timestep embedding. The cube and map sizes are fixed at
+    FiLM-conditioned on the timestep embedding, which is as wide as the widest encoder stage
+    (n_filt0 * 2**(n_stages - 1)) so it can set the scale and shift of every channel there. The cube and map sizes
+    are fixed at
     construction: input_shape is checked against n_stages (check_stage_compatibility) and forward()
     rejects any other size. No weight depends on them, so a trained denoiser's state_dict loads into
     one built for another size (with the same n_maps).
@@ -126,7 +135,7 @@ class DenoisingUNet3d(nn.Module):
         n_filt0: channels of encoder stage 0 (doubles per stage).
         kernel_stem, kernel_coder: 3-tuple kernel sizes for the stem and all encoder/decoder blocks.
         n_stages: encoder depth (>= 2).
-        t_dim: timestep-embedding width (default 4 * n_filt0).
+        time_encoding_dim: width of the fixed sinusoidal timestep encoding (default 128, as in Ho et al. 2020).
         n_head_blocks: number of full-resolution 2-d blocks in the head.
         block_dropout_rate: channel-wise dropout inside every 3-d block.
         stem_activation, block_activation: zero-arg callables returning nn.Modules.
@@ -144,7 +153,7 @@ class DenoisingUNet3d(nn.Module):
         kernel_stem,
         kernel_coder,
         n_stages=4,
-        t_dim=None,
+        time_encoding_dim=128,
         n_head_blocks=2,
         block_dropout_rate=0.0,
         stem_activation=nn.LeakyReLU,
@@ -169,22 +178,23 @@ class DenoisingUNet3d(nn.Module):
         self.n_maps = n_maps
         check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
-        t_dim = t_dim or 4 * n_filt0
-        self.n_filt0, self.t_dim, self.max_groups = n_filt0, t_dim, max_groups
+        # Encoder channels: stage 0 keeps n_filt0, later stages double it.
+        enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
+        time_embed_dim = enc_ch[-1]  # As wide as the widest encoder stage
+        self.n_filt0, self.time_embed_dim, self.max_groups = n_filt0, time_embed_dim, max_groups
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
         block_kw = dict(
             kernel1=self.kernel_coder,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
-            t_dim=t_dim,
+            time_embed_dim=time_embed_dim,
         )
 
-        self.time_embed = TimestepEmbedding(n_filt0, t_dim)
+        self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
         self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
-        # Encoder: stage 0 keeps the stem's shape, later stages halve every axis and double channels.
-        enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
+        # Encoder: stage 0 keeps the stem's shape, later stages halve every axis.
         self.encoder = nn.ModuleList()
         prev = n_filt0
         for i, ch in enumerate(enc_ch):
@@ -213,7 +223,7 @@ class DenoisingUNet3d(nn.Module):
                 )
             )
 
-        self.head = MapHead(n_filt0, t_dim, n_head_blocks, block_activation, max_groups, n_maps=n_maps)
+        self.head = MapHead(n_filt0, time_embed_dim, n_head_blocks, block_activation, max_groups, n_maps=n_maps)
 
     def forward(self, cube, y_t, t):
         """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with

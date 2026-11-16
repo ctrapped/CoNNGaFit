@@ -208,8 +208,8 @@ class ResidualBlock(nn.Module):
     When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
     to ceil(N/2) and the skip is projected through a strided 1x1x1 conv + norm to match.
 
-    FiLM time conditioning is applied only when the block is built with t_dim AND forward() is
-    given t_emb (as in the DDPM denoiser). With t_dim=None (the default, used by the regression
+    FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
+    given t_emb (as in the DDPM denoiser). With time_embed_dim=None (the default, used by the regression
     networks) the block has no time_proj layer and forward() must be called without t_emb.
 
     Parameters:
@@ -219,8 +219,8 @@ class ResidualBlock(nn.Module):
         dropout_rate: probability for the channel-wise nn.Dropout3d on the block output.
             0.0 disables it.
         activation: zero-arg callable returning an nn.Module, e.g. nn.ReLU or lambda: nn.LeakyReLU(0.2).
-        t_dim: width of the timestep embedding t_emb. If set, a time_proj layer
-            (SiLU -> Linear(t_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
+        time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
+            (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after the first norm. None disables time conditioning.
         max_groups: Used with GroupNorm for FiLM blocks. Sets the maximum number of groups for the GroupNorm3D
             layers.
@@ -234,12 +234,12 @@ class ResidualBlock(nn.Module):
         kernel1,
         dropout_rate=0.0,
         activation=nn.ReLU,
-        t_dim=None,
+        time_embed_dim=None,
         max_groups=8,
     ):
         super().__init__()
         self.downsample = downsample
-        if t_dim is None:
+        if time_embed_dim is None:
             max_groups = None
         if downsample:
             # conv1 pads 0; forward() applies F.pad first so any kernel lands on ceil(N/2).
@@ -263,15 +263,15 @@ class ResidualBlock(nn.Module):
         self.act1 = activation()
         self.act2 = activation()
         self.act3 = activation()
-        if t_dim is not None:
-            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
+        if time_embed_dim is not None:
+            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D', H', W'), where
         D'/H'/W' are ceil(0.5* D/H/W) if downsample=True.
 
-        t_emb: (nBatch, t_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
-        block to be built with t_dim). If None, the block runs without time conditioning.
+        t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
+        block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
         shortcut = self.shortcut(x)
         if self.downsample:
@@ -346,7 +346,7 @@ class DeconvBlock(nn.Module):
     Main path: convtran1 -> norm -> [FiLM(t)] -> activation -> convtran2 -> norm -> activation.
     A skip is added, followed by a final activation and channel-wise dropout.
 
-    FiLM time conditioning is applied only when the block is built with t_dim AND forward() is
+    FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb, exactly as in ResidualBlock.
 
     Parameters:
@@ -356,7 +356,7 @@ class DeconvBlock(nn.Module):
         dropout_rate: probability for the channel-wise nn.Dropout3d on the block output
             (0.0 disables).
         activation: zero-arg callable returning an nn.Module.
-        max_groups, t_dim: as in ResidualBlock.
+        max_groups, time_embed_dim: as in ResidualBlock.
     """
 
     def __init__(
@@ -368,7 +368,7 @@ class DeconvBlock(nn.Module):
         dropout_rate=0.0,
         activation=nn.ReLU,
         max_groups=None,
-        t_dim=None,
+        time_embed_dim=None,
     ):
         super().__init__()
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
@@ -392,14 +392,14 @@ class DeconvBlock(nn.Module):
         self.act1 = activation()
         self.act2 = activation()
         self.act3 = activation()
-        if t_dim is not None:
-            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
+        if time_embed_dim is not None:
+            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D, H, W).
 
-        t_emb: (nBatch, t_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
-        block to be built with t_dim). If None, the block runs without time conditioning.
+        t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
+        block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
         shortcut = self.shortcut(x)  # carries the target spatial shape
         x = self.bn1(_match_spatial(self.convtran1(x), shortcut))
@@ -482,7 +482,7 @@ class ResBlock2d(nn.Module):
     plus a skip (1x1 conv when the channel count changes). GroupNorm normalizes each sample on its
     own, so the block behaves the same at batch size 1 (inference, MC dropout) as in training.
 
-    FiLM time conditioning is applied only when the block is built with t_dim AND forward() is
+    FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb.
 
     Parameters:
@@ -490,27 +490,27 @@ class ResBlock2d(nn.Module):
         activation: zero-arg callable returning an nn.Module.
         max_groups: upper bound on GroupNorm groups (actual = gcd(out_channels, max_groups)).
         kernel_size: kernel size of both 2-d convs.
-        t_dim: width of the timestep embedding t_emb. If set, a time_proj layer
-            (SiLU -> Linear(t_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
+        time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
+            (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after norm1. None disables time conditioning.
     """
 
-    def __init__(self, in_channels, out_channels, activation=nn.ReLU, max_groups=8, kernel_size=3, t_dim=None):
+    def __init__(self, in_channels, out_channels, activation=nn.ReLU, max_groups=8, kernel_size=3, time_embed_dim=None):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding="same")
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding="same")
         self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
         self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        if t_dim is not None:
-            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(t_dim, 2 * out_channels))
+        if time_embed_dim is not None:
+            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
         self.act1, self.act2 = activation(), activation()
         self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, H, W) -> (nBatch, out_channels, H, W).
 
-        t_emb: (nBatch, t_dim) timestep embedding. If given, FiLM is applied after norm1 (requires the
-        block to be built with t_dim). If None, the block runs without time conditioning.
+        t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after norm1 (requires the
+        block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
         h = self.norm1(self.conv1(x))
         if t_emb is not None:
