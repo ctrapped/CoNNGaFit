@@ -73,6 +73,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Default: %(default)s")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "output")
+    parser.add_argument(
+        "--diagnostic-mode",
+        action="store_true",
+        help="Also record the DDPM's training diagnostics on every predicted epoch, in "
+        "OUTPUT/DiagnosticOutputs/diagnostics/: the loss by timestep, the posterior calibration, the spectral "
+        "attention and the reverse chain",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -81,7 +88,7 @@ def main():
     with open(CONFIG, "rb") as f:
         hyperparams = {**tomllib.load(f), **HYPERPARAMS, "epochs": args.epochs}
     datasets = {**DATASETS, "target": CURVE_TARGET, "radial_bins": 0}
-    model_path = train(output, RUN_NAME, hyperparams, datasets)
+    model_path = train(output, RUN_NAME, hyperparams, datasets, diagnostic_mode=args.diagnostic_mode)
 
     # Sample the test galaxy's velocity map from its posterior at every position angle
     paths, position_angles = testing_images(DATA_DIR, SPLITS["testing"][0])
@@ -137,6 +144,9 @@ def main():
     print(f"Within predicted 1σ: {within_sigma:.0%} of rings ({within_3sigma:.0%} within 3σ)")  # noqa: T201
     [error] = map_errors(true_velocity, maps)
     print(f"{CURVE_TARGET} map RMS error: {error:.0%} of the true map's RMS")  # noqa: T201
+
+    if args.diagnostic_mode:
+        print(f"Training diagnostics: {output / 'DiagnosticOutputs' / 'diagnostics' / RUN_NAME}_*")  # noqa: T201
 
 
 if __name__ == "__main__":

@@ -45,9 +45,10 @@ MAP_PANELS = {
 
 
 #### Loaders ####
-def train(output, run_name, hyperparams, datasets):
+def train(output, run_name, hyperparams, datasets, diagnostic_mode=False):
     """Train on the demo data with conngafit.train_model.train, saving into output; returns the network's path.
-    datasets needs no galaxies or data_dir: every split's galaxies in SPLITS, at SNAPSHOT, are added."""
+    datasets needs no galaxies or data_dir: every split's galaxies in SPLITS, at SNAPSHOT, are added.
+    diagnostic_mode: also record the ddpm's training diagnostics (see conngafit.train_model.train)."""
     configure_logging()  # Show the training's progress
     splits = {split: {galaxy: SNAPSHOT for galaxy in galaxies} for split, galaxies in SPLITS.items()}
     result = train_model.train(
@@ -56,6 +57,7 @@ def train(output, run_name, hyperparams, datasets):
         run_name=run_name,
         network_dir=output / "NetworkWeights",
         output_dir=output / "DiagnosticOutputs",
+        diagnostic_mode=diagnostic_mode,
     )
     return Path(result.model_path)
 
