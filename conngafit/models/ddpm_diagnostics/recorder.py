@@ -102,15 +102,16 @@ class TrainingDiagnostics:
             intensity, spectral_attention.channel_velocities(n_channels, self.channel_width)
         )
         attention_velocities = spectral_attention.channel_velocities(n_channels, self.channel_width, n_pooled)
-        attention_mean, attention_spread = spectral_attention.attention_moments(
-            self.attention_by_epoch[epoch], attention_velocities
-        )
+        attention_mean, _ = spectral_attention.attention_summary(self.attention_by_epoch[epoch], attention_velocities)
+        entropy_by_epoch = {
+            each_epoch: spectral_attention.attention_summary(weights, attention_velocities)[1]
+            for each_epoch, weights in self.attention_by_epoch.items()
+        }
         spectral_attention.plot_spectral_attention(
             cube_velocity,
             attention_mean,
-            attention_spread,
+            entropy_by_epoch,
             attention_timesteps,
-            epoch,
             self.output + "_SpectralAttention.png",
         )
         spectral_attention.save_spectral_attention(

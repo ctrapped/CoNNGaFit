@@ -1,9 +1,11 @@
 """Where along the 21 cm line profile the DDPM's head looks, from its spectral attention weights.
 
 The head's SpectralAttentionPool collapses the spectral axis with a softmax over velocity channels for every pixel.
-Its attention-weighted mean velocity and spread show which part of the line each pixel's prediction uses (e.g. the
-line centre or its wings), and comparing them with the cube's intensity-weighted mean velocity shows whether the
-attention follows the emission. They are shown at a few noise levels t, as the denoiser's task changes with t.
+Its attention-weighted mean velocity shows which part of the line each pixel's prediction uses, and comparing it
+with the cube's intensity-weighted mean velocity shows whether the attention follows the emission. The normalized
+entropy of the weights shows how concentrated the attention is: 1 for uniform weights, which make the pool a plain
+mean over the spectral axis, and 0 for a single channel. They are shown at a few noise levels t, as the denoiser's
+task changes with t, and the entropy at every recorded epoch shows whether the attention learns to concentrate.
 
 The head works after the stem, at ~1/4 of the cube's spectral and spatial resolution, so its channel velocities are
 those of evenly spread pooled channels and approximate to within the stem's receptive field (a few channels).
@@ -13,6 +15,7 @@ import h5py
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from scipy.special import entr
 
 from conngafit.models.ddpm_diagnostics.activations import captured_outputs
 
@@ -44,16 +47,16 @@ def channel_velocities(n_channels, channel_width, n_pooled=None):
     return centers * channel_width
 
 
-def attention_moments(weights, velocities):
-    """Attention-weighted mean velocity and spread (standard deviation) of every pixel.
+def attention_summary(weights, velocities):
+    """Attention-weighted mean velocity and normalized entropy of every pixel's attention weights.
 
     weights: (..., S', X', Y') attention weights summing to 1 over S'. velocities: (S',) channel velocities.
-    Returns (mean, spread) arrays of shape (..., X', Y').
+    Returns (mean, entropy) arrays of shape (..., X', Y'): entropy is 1 for uniform weights and 0 for weights all on
+    one channel.
     """
-    v = velocities[:, None, None]
-    mean = (weights * v).sum(axis=-3)
-    spread = np.sqrt((weights * (v - mean[..., None, :, :]) ** 2).sum(axis=-3))
-    return mean, spread
+    mean = (weights * velocities[:, None, None]).sum(axis=-3)
+    entropy = entr(weights).sum(axis=-3) / np.log(weights.shape[-3])
+    return mean, entropy
 
 
 def cube_mean_velocity(cube, velocities):
@@ -65,30 +68,43 @@ def cube_mean_velocity(cube, velocities):
     return np.divide(weighted, total, out=np.full(total.shape, np.nan), where=total > 0)
 
 
-def plot_spectral_attention(cube_velocity, attention_mean, attention_spread, timesteps, epoch, output):
-    """Plot one row per timestep: the cube's intensity-weighted mean velocity, the attention-weighted mean velocity
-    and the attention's velocity spread.
+def plot_spectral_attention(cube_velocity, attention_mean, entropy_by_epoch, timesteps, output):
+    """Plot the cube's intensity-weighted mean velocity and the attention's median entropy against epoch (top row),
+    then one row per timestep of the latest epoch's attention-weighted mean velocity and entropy.
 
-    cube_velocity: (nX, nY) from cube_mean_velocity. attention_mean, attention_spread: (n_t, X', Y') from
-    attention_moments. timesteps: the n_t timesteps. epoch: the epoch shown in the title. output: the image file.
-    Every panel spans the same field of view, so the coarser attention maps line up with the cube's.
+    cube_velocity: (nX, nY) from cube_mean_velocity. attention_mean: (n_t, X', Y') mean velocities of the latest
+    epoch, from attention_summary. entropy_by_epoch: dict of epoch -> (n_t, X', Y') entropies from
+    attention_summary. timesteps: the n_t timesteps. output: the image file to write.
+    Every map spans the same field of view, so the coarser attention maps line up with the cube's, and the
+    velocity maps share a colour scale.
     """
+    epochs = sorted(entropy_by_epoch)
     extent = (0, cube_velocity.shape[1], 0, cube_velocity.shape[0])  # The full map, in cube pixels
     v_max = np.nanmax(np.abs(np.concatenate([cube_velocity.ravel(), attention_mean.ravel()])))
     velocity_style = dict(cmap="RdBu_r", vmin=-v_max, vmax=v_max, origin="lower", extent=extent)
-    spread_style = dict(cmap="viridis", vmin=0, vmax=attention_spread.max(), origin="lower", extent=extent)
+    entropy_style = dict(cmap="viridis", vmin=0, vmax=1, origin="lower", extent=extent)
 
-    fig, axes = plt.subplots(len(timesteps), 3, figsize=(12, 3.6 * len(timesteps)), squeeze=False)
+    fig, axes = plt.subplots(len(timesteps) + 1, 2, figsize=(8.4, 3.6 * (len(timesteps) + 1)), squeeze=False)
+    ax = axes[0, 0]
+    fig.colorbar(ax.imshow(cube_velocity, **velocity_style), ax=ax, label="km/s")
+    ax.set(title="cube: intensity-weighted velocity", xticks=[], yticks=[])
+    ax = axes[0, 1]
+    median_entropy = np.array([np.median(entropy_by_epoch[epoch], axis=(1, 2)) for epoch in epochs])  # (E, n_t)
+    for row, t in enumerate(timesteps):
+        ax.plot(epochs, median_entropy[:, row], "o-", label=f"t = {t}")
+    ax.axhline(1, color="k", linestyle="--", label="uniform")
+    ax.set(ylim=(0, 1.05), xlabel="epoch", ylabel="median normalized entropy", title="attention concentration")
+    ax.legend(fontsize="small")
+
     for row, t in enumerate(timesteps):
         panels = [
-            (cube_velocity, velocity_style, "cube: intensity-weighted velocity", "km/s"),
             (attention_mean[row], velocity_style, f"t = {t}: attention-weighted velocity", "km/s"),
-            (attention_spread[row], spread_style, f"t = {t}: attention velocity spread", "km/s"),
+            (entropy_by_epoch[epochs[-1]][row], entropy_style, f"t = {t}: attention entropy", "1 = uniform"),
         ]
-        for ax, (image, style, title, unit) in zip(axes[row], panels):
-            fig.colorbar(ax.imshow(image, **style), ax=ax, label=unit)
+        for ax, (image, style, title, label) in zip(axes[row + 1], panels):
+            fig.colorbar(ax.imshow(image, **style), ax=ax, label=label)
             ax.set(title=title, xticks=[], yticks=[])
-    fig.suptitle(f"Spectral attention of the head, epoch {epoch}")
+    fig.suptitle(f"Spectral attention of the head, epoch {epochs[-1]}")
     fig.tight_layout()
     fig.savefig(output)
     plt.close(fig)

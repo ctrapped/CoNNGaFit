@@ -187,13 +187,14 @@ def test_channel_velocities_are_centred_on_zero(n_channels, n_pooled, expected):
     np.testing.assert_allclose(spectral_attention.channel_velocities(n_channels, 10.0, n_pooled), expected)
 
 
-def test_attention_on_one_channel_gives_its_velocity_and_no_spread():
+def test_attention_summary_of_concentrated_and_uniform_weights():
     velocities = np.array([-20.0, 0.0, 20.0])
     weights = np.zeros((3, 2, 2))
-    weights[2] = 1  # Every pixel attends only to the last channel
-    mean, spread = spectral_attention.attention_moments(weights, velocities)
-    np.testing.assert_allclose(mean, 20.0)
-    np.testing.assert_allclose(spread, 0.0)
+    weights[2, 0] = 1  # The first row of pixels attends only to the last channel
+    weights[:, 1] = 1 / 3  # The second attends uniformly
+    mean, entropy = spectral_attention.attention_summary(weights, velocities)
+    np.testing.assert_allclose(mean, [[20.0, 20.0], [0.0, 0.0]], atol=1e-12)
+    np.testing.assert_allclose(entropy, [[0.0, 0.0], [1.0, 1.0]])
 
 
 def test_cube_mean_velocity_follows_the_emission():
@@ -210,9 +211,12 @@ def test_spectral_attention_is_plotted_and_saved(tmp_path):
     weights = {epoch: rng.dirichlet(np.ones(4), size=(3, 3, 3)).transpose(0, 3, 1, 2) for epoch in (1, 3)}
     velocities = spectral_attention.channel_velocities(16, 10.0, 4)
     cube_velocity = rng.normal(size=(12, 12))
-    mean, spread = spectral_attention.attention_moments(weights[3], velocities)
+    mean, _ = spectral_attention.attention_summary(weights[3], velocities)
+    entropy_by_epoch = {epoch: spectral_attention.attention_summary(w, velocities)[1] for epoch, w in weights.items()}
 
-    spectral_attention.plot_spectral_attention(cube_velocity, mean, spread, timesteps, 3, tmp_path / "attention.png")
+    spectral_attention.plot_spectral_attention(
+        cube_velocity, mean, entropy_by_epoch, timesteps, tmp_path / "attention.png"
+    )
     spectral_attention.save_spectral_attention(
         weights, velocities, cube_velocity, timesteps, tmp_path / "attention.hdf5"
     )
