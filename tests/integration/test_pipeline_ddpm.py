@@ -100,9 +100,11 @@ def test_diagnostic_mode_records_every_diagnostic(train_on_image):
     recorded_epochs = [epoch for epoch, predicted in enumerate(PREDICTED_EPOCHS) if predicted]
     with h5py.File(output.with_suffix(".hdf5"), "r") as hf:
         assert list(hf["epochs"][()]) == recorded_epochs  # recorded on every predicted epoch
-        # one loss per recorded epoch, validation sample (the single image) and target, all finite
-        assert hf["losses"].shape == (len(recorded_epochs), 1, len(DIAGNOSTIC_TARGETS))
-        assert np.isfinite(hf["losses"][()]).all()
+        # losses per recorded epoch, timestep of the grid, validation sample (the single image) and target, all finite
+        n_grid = len(hf["timesteps"][()])
+        for losses in ("noise_losses", "clean_map_losses"):
+            assert hf[losses].shape == (len(recorded_epochs), n_grid, 1, len(DIAGNOSTIC_TARGETS))
+            assert np.isfinite(hf[losses][()]).all()
     output = run_dir / "diag" / "diagnostics" / f"{name}_Calibration"
     assert output.with_suffix(".png").is_file()
     with h5py.File(output.with_suffix(".hdf5"), "r") as hf:

@@ -10,7 +10,8 @@ class TrainingDiagnostics:
     """Records the DDPM diagnostics of models/ddpm_diagnostics while it trains, keeping every recorded epoch's
     results and rewriting their outputs each time, so they can be inspected while training runs.
 
-    dataloader: the (unshuffled) validation dataloader. fixed_draws: its fixed (t, noise) pair per batch.
+    dataloader: the (unshuffled) validation dataloader. fixed_draws: its fixed (t, noise) pair per batch, whose
+    noise is reused at every timestep the diagnostics score.
     n_samples: posterior samples per validation sample, for the calibration. targets: the target names, one per map.
     output: the path prefix of every output (e.g. <output_dir>/diagnostics/<run_name>). seed: seeds the diagnostics'
     own NumPy generator, so they leave training's random draws alone. device: where the validation batches go.
@@ -32,7 +33,8 @@ class TrainingDiagnostics:
         self.channel_width = channel_width
         self.seed = seed
         self.rng = np.random.default_rng(seed)
-        self.losses_by_epoch = {}  # Each recorded epoch's validation loss per sample, at its fixed timestep
+        # Each recorded epoch's validation losses per sample at the timestep grid, of the noise and the clean maps
+        self.noise_losses_by_epoch, self.clean_map_losses_by_epoch = {}, {}
         self.rank_counts_by_epoch, self.coverage_by_epoch = {}, {}  # Each recorded epoch's posterior calibration
         self.attention_by_epoch = {}  # Each recorded epoch's spectral attention for the first validation sample
         self.chain_snapshots_by_epoch, self.chain_errors_by_epoch = {}, {}  # Its reverse chain each recorded epoch
@@ -42,8 +44,14 @@ class TrainingDiagnostics:
         # fork_rng restores the random number generators afterwards. Diagnostics would change every later
         # random draw of training otherwise
         with torch.random.fork_rng():
-            timesteps, self.losses_by_epoch[epoch] = loss_by_timestep.validation_losses_by_timestep(
-                model, self.dataloader, self.fixed_draws, self.device
+            loss_timesteps = np.unique(
+                np.linspace(0, model.n_timesteps - 1, loss_by_timestep.N_GRID_TIMESTEPS).round().astype(int)
+            )
+            noises = [noise for _, noise in self.fixed_draws]
+            self.noise_losses_by_epoch[epoch], self.clean_map_losses_by_epoch[epoch] = (
+                loss_by_timestep.validation_losses_by_timestep(
+                    model, self.dataloader, noises, loss_timesteps, self.device
+                )
             )
             samples, labels = calibration.validation_posterior_samples(
                 model, self.dataloader, self.n_samples, self.device
@@ -67,10 +75,19 @@ class TrainingDiagnostics:
         )
 
         loss_by_timestep.plot_loss_by_timestep(
-            timesteps, self.losses_by_epoch, self.targets, model.n_timesteps, self.output + "_LossByTimestep.png"
+            loss_timesteps,
+            self.noise_losses_by_epoch,
+            self.clean_map_losses_by_epoch,
+            self.targets,
+            model.n_timesteps,
+            self.output + "_LossByTimestep.png",
         )
         loss_by_timestep.save_loss_by_timestep(
-            timesteps, self.losses_by_epoch, self.targets, self.output + "_LossByTimestep.hdf5"
+            loss_timesteps,
+            self.noise_losses_by_epoch,
+            self.clean_map_losses_by_epoch,
+            self.targets,
+            self.output + "_LossByTimestep.hdf5",
         )
         calibration.plot_calibration(
             self.rank_counts_by_epoch, self.coverage_by_epoch, self.targets, self.output + "_Calibration.png"

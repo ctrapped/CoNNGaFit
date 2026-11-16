@@ -37,7 +37,7 @@ def test_per_sample_loss_averages_to_the_training_loss():
     torch.testing.assert_close(losses.mean(), weighted_mse_loss(pred_noise, noise, w))
 
 
-def test_validation_losses_are_each_samples_loss_at_its_fixed_timestep(diffusion):
+def test_validation_losses_score_every_sample_at_every_timestep(diffusion):
     n_batches = 2
     batches = [
         (
@@ -48,37 +48,42 @@ def test_validation_losses_are_each_samples_loss_at_its_fixed_timestep(diffusion
         )
         for _ in range(n_batches)
     ]
-    draws = [
-        (torch.randint(0, N_TIMESTEPS, (BATCH_SIZE,)), torch.randn(BATCH_SIZE, *MAPS_SHAPE)) for _ in range(n_batches)
-    ]
-    t, losses = loss_by_timestep.validation_losses_by_timestep(diffusion, batches, draws, "cpu")
+    noises = [torch.randn(BATCH_SIZE, *MAPS_SHAPE) for _ in range(n_batches)]
+    timesteps = [0, 4, 9]
+    diffusion.clip_range = None  # So the clean-map error is the noise error times (1 - abar_t) / abar_t
+    noise_losses, clean_map_losses = loss_by_timestep.validation_losses_by_timestep(
+        diffusion, batches, noises, timesteps, "cpu"
+    )
 
-    assert t.shape == (n_batches * BATCH_SIZE,) and losses.shape == (n_batches * BATCH_SIZE, N_MAPS)
-    np.testing.assert_array_equal(t, torch.cat([draw_t for draw_t, _ in draws]).numpy())  # In dataset order
+    assert noise_losses.shape == clean_map_losses.shape == (len(timesteps), n_batches * BATCH_SIZE, N_MAPS)
+    x, y, w, _ = batches[1]  # The second batch follows the first, in dataset order
     with torch.no_grad():
-        x, y, w, _ = batches[0]
-        draw_t, draw_noise = draws[0]
-        expected = loss_by_timestep.per_sample_loss(*diffusion(x, y, t=draw_t, noise=draw_noise), w)
-    np.testing.assert_allclose(losses[:BATCH_SIZE], expected.numpy(), rtol=1e-5)
+        t = torch.full((BATCH_SIZE,), timesteps[1])
+        expected = loss_by_timestep.per_sample_loss(*diffusion(x, y, t=t, noise=noises[1]), w)
+    np.testing.assert_allclose(noise_losses[1, BATCH_SIZE:], expected.numpy(), rtol=1e-5)
+    ab = diffusion.alpha_bar[timesteps].numpy()
+    np.testing.assert_allclose(clean_map_losses, noise_losses * ((1 - ab) / ab)[:, None, None], rtol=1e-4)
 
 
 def test_loss_by_timestep_is_plotted_and_saved(tmp_path):
-    n_samples = 4
-    t = np.array([7, 1, 5, 3])
-    losses_by_epoch = {epoch: np.random.rand(n_samples, N_MAPS) for epoch in (1, 3)}
+    timesteps = np.array([0, 3, 6, 9])
+    noise_losses = {epoch: np.random.rand(len(timesteps), 4, N_MAPS) for epoch in (1, 3)}
+    clean_map_losses = {epoch: np.random.rand(len(timesteps), 4, N_MAPS) for epoch in (1, 3)}
 
-    loss_by_timestep.plot_loss_by_timestep(t, losses_by_epoch, TARGETS, N_TIMESTEPS, tmp_path / "loss.png")
-    loss_by_timestep.save_loss_by_timestep(t, losses_by_epoch, TARGETS, tmp_path / "loss.hdf5")
+    loss_by_timestep.plot_loss_by_timestep(
+        timesteps, noise_losses, clean_map_losses, TARGETS, N_TIMESTEPS, tmp_path / "loss.png"
+    )
+    loss_by_timestep.save_loss_by_timestep(timesteps, noise_losses, clean_map_losses, TARGETS, tmp_path / "loss.hdf5")
 
     assert (tmp_path / "loss.png").stat().st_size > 0
     with h5py.File(tmp_path / "loss.hdf5", "r") as hf:
-        np.testing.assert_array_equal(hf["timesteps"][()], t)
+        np.testing.assert_array_equal(hf["timesteps"][()], timesteps)
         np.testing.assert_array_equal(hf["epochs"][()], [1, 3])
-        np.testing.assert_array_equal(hf["losses"][()], np.stack([losses_by_epoch[1], losses_by_epoch[3]]))
+        np.testing.assert_array_equal(hf["noise_losses"][()], np.stack([noise_losses[1], noise_losses[3]]))
+        np.testing.assert_array_equal(hf["clean_map_losses"][()], np.stack([clean_map_losses[1], clean_map_losses[3]]))
         assert [target.decode() for target in hf["targets"][()]] == TARGETS
 
 
-#### Calibration ####
 N_DRAWS = 19  # Posterior samples per pixel in the calibration tests: ranks 0 to 19
 N_PIXELS = 20000
 
