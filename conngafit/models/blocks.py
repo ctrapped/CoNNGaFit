@@ -200,10 +200,12 @@ def check_stage_compatibility(input_shape, n_stages):
 
 #### Encoder-side residual block ####
 class ResidualBlock(nn.Module):
-    """One residual block on the encoder (downsampling) side of the U-Net.
+    """One residual block on the encoder (downsampling) side of the U-Net, in one of two architectures:
 
-    Main path: conv1 -> norm -> [FiLM(t)] -> activation -> conv2 -> norm -> activation
-    A skip is added, followed by a final activation and channel-wise dropout.
+      - 'post_activation' (default): conv1 -> norm -> [FiLM(t)] -> activation -> conv2 -> norm -> activation -> + skip -> activation -> dropout.
+
+      - 'identity_skip': conv1 -> norm -> [FiLM(t)] -> activation -> dropout -> conv2 -> norm -> + skip.
+        Initialize second norm's weight to zero (i.e. block starts at identity) for easy initial training.
 
     When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
     to ceil(N/2) and the skip is projected through a strided 1x1x1 conv + norm to match.
@@ -216,14 +218,14 @@ class ResidualBlock(nn.Module):
         in_channels, out_channels: channel counts of the block's input and output.
         downsample: if True, halve every axis (ceil(N/2)) and use a projected skip.
         kernel1: 3-tuple conv kernel size (used by conv1 and conv2).
-        dropout_rate: probability for the channel-wise nn.Dropout3d on the block output.
-            0.0 disables it.
+        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables it).
         activation: zero-arg callable returning an nn.Module, e.g. nn.ReLU or lambda: nn.LeakyReLU(0.2).
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after the first norm. None disables time conditioning.
         max_groups: Used with GroupNorm for FiLM blocks. Sets the maximum number of groups for the GroupNorm3D
             layers.
+        architecture: 'post_activation' or 'identity_skip', as described above.
     """
 
     def __init__(
@@ -236,8 +238,10 @@ class ResidualBlock(nn.Module):
         activation=nn.ReLU,
         time_embed_dim=None,
         max_groups=8,
+        architecture="post_activation",
     ):
         super().__init__()
+        # Shared by every architecture
         self.downsample = downsample
         if time_embed_dim is None:
             max_groups = None
@@ -254,17 +258,23 @@ class ResidualBlock(nn.Module):
         else:
             self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
             self.shortcut = nn.Sequential()
-
         # conv2 keeps the shape fixed
         self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
         self.bn1 = _norm3d(out_channels, max_groups)
         self.bn2 = _norm3d(out_channels, max_groups)
         self.dropout = nn.Dropout3d(p=dropout_rate)
         self.act1 = activation()
-        self.act2 = activation()
-        self.act3 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
+
+        self.architecture = architecture
+        if architecture == "post_activation":
+            self.act2 = activation()
+            self.act3 = activation()
+        elif architecture == "identity_skip":
+            nn.init.zeros_(self.bn2.weight)  # The block starts as its skip
+        else:
+            raise ValueError(f"unknown architecture {architecture!r}; use 'post_activation' or 'identity_skip'")
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D', H', W'), where
@@ -273,17 +283,28 @@ class ResidualBlock(nn.Module):
         t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
         block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
-        shortcut = self.shortcut(x)
-        if self.downsample:
-            x = F.pad(x, self.down_pad)
-        x = self.bn1(self.conv1(x))
-        if t_emb is not None:
-            x = _film(x, self.time_proj(t_emb))
-        x = self.act1(x)
-        x = self.act2(self.bn2(self.conv2(x)))
-        x = x + shortcut
-        x = self.act3(x)
-        return self.dropout(x)
+        if self.architecture == "post_activation":
+            shortcut = self.shortcut(x)
+            if self.downsample:
+                x = F.pad(x, self.down_pad)
+            x = self.bn1(self.conv1(x))
+            if t_emb is not None:
+                x = _film(x, self.time_proj(t_emb))
+            x = self.act1(x)
+            x = self.act2(self.bn2(self.conv2(x)))
+            x = self.act3(x + shortcut)
+            return self.dropout(x)
+
+        if self.architecture == "identity_skip":
+            shortcut = self.shortcut(x)
+            if self.downsample:
+                x = F.pad(x, self.down_pad)
+            x = self.bn1(self.conv1(x))
+            if t_emb is not None:
+                x = _film(x, self.time_proj(t_emb))
+            x = self.act1(x)
+            x = self.bn2(self.conv2(self.dropout(x)))
+            return x + shortcut
 
 
 #### Decoder-side spatial upsampler ####
@@ -342,9 +363,13 @@ class DeconvBlock(nn.Module):
 
     Spatial upsampling is done beforehand by Upsample. Here every conv runs at stride 1, so
     the spatial shape is fixed; the block only changes the channel count. With upsample=True
-    it reduces in_channels -> out_channels.
-    Main path: convtran1 -> norm -> [FiLM(t)] -> activation -> convtran2 -> norm -> activation.
-    A skip is added, followed by a final activation and channel-wise dropout.
+    it reduces in_channels -> out_channels. The two architectures are those of ResidualBlock:
+
+      - 'post_activation' (default): convtran1 -> norm -> [FiLM(t)] -> activation -> convtran2 -> norm ->
+        activation -> + skip -> activation -> dropout.
+
+      - 'identity_skip': convtran1 -> norm -> [FiLM(t)] -> activation -> dropout -> convtran2 -> norm -> + skip.
+      The second norm's weight starts at zero, so the block starts as its skip.
 
     FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb, exactly as in ResidualBlock.
@@ -353,10 +378,9 @@ class DeconvBlock(nn.Module):
         in_channels, out_channels: channel counts of the block's input and output.
         upsample: if True, project the skip to out_channels; if False, use an identity skip.
         kernel1: 3-tuple conv kernel size.
-        dropout_rate: probability for the channel-wise nn.Dropout3d on the block output
-            (0.0 disables).
+        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables).
         activation: zero-arg callable returning an nn.Module.
-        max_groups, time_embed_dim: as in ResidualBlock.
+        max_groups, time_embed_dim, architecture: as in ResidualBlock.
     """
 
     def __init__(
@@ -369,8 +393,10 @@ class DeconvBlock(nn.Module):
         activation=nn.ReLU,
         max_groups=None,
         time_embed_dim=None,
+        architecture="post_activation",
     ):
         super().__init__()
+        # Shared by every architecture
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
         self.convtran1 = nn.ConvTranspose3d(
             in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
@@ -382,7 +408,6 @@ class DeconvBlock(nn.Module):
             )
         else:
             self.shortcut = nn.Sequential()
-
         self.convtran2 = nn.ConvTranspose3d(
             out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
         )
@@ -390,10 +415,17 @@ class DeconvBlock(nn.Module):
         self.bn2 = _norm3d(out_channels, max_groups)
         self.dropout = nn.Dropout3d(p=dropout_rate)
         self.act1 = activation()
-        self.act2 = activation()
-        self.act3 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
+
+        self.architecture = architecture
+        if architecture == "post_activation":
+            self.act2 = activation()
+            self.act3 = activation()
+        elif architecture == "identity_skip":
+            nn.init.zeros_(self.bn2.weight)  # The block starts as its skip
+        else:
+            raise ValueError(f"unknown architecture {architecture!r}; use 'post_activation' or 'identity_skip'")
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, D, H, W).
@@ -401,15 +433,24 @@ class DeconvBlock(nn.Module):
         t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after bn1 (requires the
         block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
-        shortcut = self.shortcut(x)  # carries the target spatial shape
-        x = self.bn1(_match_spatial(self.convtran1(x), shortcut))
-        if t_emb is not None:
-            x = _film(x, self.time_proj(t_emb))
-        x = self.act1(x)
-        x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
-        x = x + shortcut
-        x = self.act3(x)
-        return self.dropout(x)
+        if self.architecture == "post_activation":
+            shortcut = self.shortcut(x)  # carries the target spatial shape
+            x = self.bn1(_match_spatial(self.convtran1(x), shortcut))
+            if t_emb is not None:
+                x = _film(x, self.time_proj(t_emb))
+            x = self.act1(x)
+            x = self.act2(self.bn2(_match_spatial(self.convtran2(x), shortcut)))
+            x = self.act3(x + shortcut)
+            return self.dropout(x)
+
+        if self.architecture == "identity_skip":
+            shortcut = self.shortcut(x)  # carries the target spatial shape
+            x = self.bn1(_match_spatial(self.convtran1(x), shortcut))
+            if t_emb is not None:
+                x = _film(x, self.time_proj(t_emb))
+            x = self.act1(x)
+            x = self.bn2(_match_spatial(self.convtran2(self.dropout(x)), shortcut))
+            return x + shortcut
 
 
 #### Dilated residual block (unet3d_dilated_resnet's Process stack) ####
@@ -478,9 +519,16 @@ class SpectralAttentionPool(nn.Module):
 
 
 class ResBlock2d(nn.Module):
-    """2-d residual block: conv -> GroupNorm -> [FiLM(t)] -> act -> conv -> GroupNorm -> act,
-    plus a skip (1x1 conv when the channel count changes). GroupNorm normalizes each sample on its
-    own, so the block behaves the same at batch size 1 (inference, MC dropout) as in training.
+    """2-d residual block with a skip (1x1 conv when the channel count changes), in one of two architectures:
+
+      - 'post_activation' (default): conv -> GroupNorm -> [FiLM(t)] -> act -> conv -> GroupNorm -> act, plus the
+        skip.
+
+      - 'identity_skip': conv -> GroupNorm -> [FiLM(t)] -> act -> conv -> GroupNorm, plus the skip, so the main path
+        adds a signed correction. The second GroupNorm's weight starts at zero, so the block starts as its skip.
+
+    GroupNorm normalizes each sample on its own, so the block behaves the same at batch size 1 (inference,
+    MC dropout) as in training.
 
     FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb.
@@ -493,18 +541,37 @@ class ResBlock2d(nn.Module):
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after norm1. None disables time conditioning.
+        architecture: 'post_activation' or 'identity_skip', as described above.
     """
 
-    def __init__(self, in_channels, out_channels, activation=nn.ReLU, max_groups=8, kernel_size=3, time_embed_dim=None):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        activation=nn.ReLU,
+        max_groups=8,
+        kernel_size=3,
+        time_embed_dim=None,
+        architecture="post_activation",
+    ):
         super().__init__()
+        # Shared by every architecture
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding="same")
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding="same")
         self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
         self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
-        self.act1, self.act2 = activation(), activation()
+        self.act1 = activation()
         self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+
+        self.architecture = architecture
+        if architecture == "post_activation":
+            self.act2 = activation()
+        elif architecture == "identity_skip":
+            nn.init.zeros_(self.norm2.weight)  # The block starts as its skip
+        else:
+            raise ValueError(f"unknown architecture {architecture!r}; use 'post_activation' or 'identity_skip'")
 
     def forward(self, x, t_emb=None):
         """x: (nBatch, in_channels, H, W) -> (nBatch, out_channels, H, W).
@@ -512,12 +579,21 @@ class ResBlock2d(nn.Module):
         t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after norm1 (requires the
         block to be built with time_embed_dim). If None, the block runs without time conditioning.
         """
-        h = self.norm1(self.conv1(x))
-        if t_emb is not None:
-            h = _film(h, self.time_proj(t_emb))
-        h = self.act1(h)
-        h = self.act2(self.norm2(self.conv2(h)))
-        return h + self.shortcut(x)
+        if self.architecture == "post_activation":
+            h = self.norm1(self.conv1(x))
+            if t_emb is not None:
+                h = _film(h, self.time_proj(t_emb))
+            h = self.act1(h)
+            h = self.act2(self.norm2(self.conv2(h)))
+            return h + self.shortcut(x)
+
+        if self.architecture == "identity_skip":
+            h = self.norm1(self.conv1(x))
+            if t_emb is not None:
+                h = _film(h, self.time_proj(t_emb))
+            h = self.act1(h)
+            h = self.norm2(self.conv2(h))
+            return h + self.shortcut(x)
 
 
 class ConvMapHead(nn.Module):
@@ -534,14 +610,26 @@ class ConvMapHead(nn.Module):
         activation: zero-arg callable returning an nn.Module.
         dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+        architecture: architecture of every ResBlock2d, 'post_activation' (default) or 'identity_skip'.
     """
 
-    def __init__(self, channels, out_channels=1, n_blocks=2, activation=nn.ReLU, dropout_rate=0.0, max_groups=8):
+    def __init__(
+        self,
+        channels,
+        out_channels=1,
+        n_blocks=2,
+        activation=nn.ReLU,
+        dropout_rate=0.0,
+        max_groups=8,
+        architecture="post_activation",
+    ):
         super().__init__()
         if n_blocks < 0:
             raise ValueError("n_blocks must be >= 0")
         self.pool = SpectralAttentionPool(channels)
-        self.blocks = nn.ModuleList([ResBlock2d(channels, channels, activation, max_groups) for _ in range(n_blocks)])
+        self.blocks = nn.ModuleList(
+            [ResBlock2d(channels, channels, activation, max_groups, architecture=architecture) for _ in range(n_blocks)]
+        )
         self.dropout = nn.Dropout2d(p=dropout_rate)
         self.out = nn.Conv2d(channels, out_channels, 3, padding=1)
 
