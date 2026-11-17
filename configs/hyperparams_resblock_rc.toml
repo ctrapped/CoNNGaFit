@@ -34,6 +34,10 @@ block_dropout_rate = 0.0
 # correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
 # the addition. See blocks.ResidualBlock.
 block_architecture = "post_activation"
+# Optional (default []): encoder stages (0 = the stem's resolution) followed by self-attention over every voxel,
+# in the encoder and in the decoder stage at the same resolution. Its cost grows as the square of the stage's
+# voxel count: stage 2 of a 128^3 cube has 8^3 voxels.
+attention_stages = []
 
 # Output head, see NeuralNetwork in unet3d_resblock.py. Both conv heads predict each pixel from
 # its neighborhood (needed for 128x128/512x512 images):

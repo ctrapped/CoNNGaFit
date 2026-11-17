@@ -13,6 +13,7 @@ from conngafit.models.blocks import (
     DeconvBlock,
     HalfResConvHead,
     ResidualBlock,
+    SelfAttention3d,
     Stem,
     Upsample,
     _match_spatial,
@@ -38,6 +39,8 @@ class NeuralNetwork(nn.Module):
       - Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
         `upsample_mode`), realigns the result to the matching encoder skip map with _match_spatial,
         concatenates channel-wise, then a DeconvBlock pair halves the channel count.
+      - Attention: SelfAttention3d after the residual blocks of every stage in `attention_stages`, in the
+        encoder and in the decoder stage at the same resolution.
       - Head, chosen by `head`:
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
         `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
@@ -111,6 +114,8 @@ class NeuralNetwork(nn.Module):
         head_channels: channel count of head='conv_halfres''s two 3x3 convolutions (default 64).
         block_architecture: architecture of every ResidualBlock/DeconvBlock and of head='conv''s 2-d residual
             blocks, 'post_activation' (default) or 'identity_skip' (see blocks.ResidualBlock).
+        attention_stages: encoder stage indices (0 to n_stages - 1) that get self-attention (default none).
+            Its cost grows as the square of the stage's voxel count, so use coarse stages.
     """
 
     def __init__(
@@ -137,6 +142,7 @@ class NeuralNetwork(nn.Module):
         head_channels=64,
         n_maps=1,
         block_architecture="post_activation",
+        attention_stages=(),
     ):
         super().__init__()
         self.predict_variance = predict_variance
@@ -234,6 +240,25 @@ class NeuralNetwork(nn.Module):
                     ),
                 )
             )
+
+        # Self-attention after each listed stage's residual blocks, in the encoder and in the decoder stage at the
+        # same resolution (decoder stage j is at encoder stage n_stages - 2 - j); nn.Identity at every other stage
+        attention_stages = set(attention_stages)
+        if not attention_stages <= set(range(n_stages)):
+            raise ValueError(f"attention_stages {sorted(attention_stages)} must be within 0..{n_stages - 1}")
+        self.encoder_attention = nn.ModuleList()
+        for i, ch in enumerate(enc_channels):
+            if i in attention_stages:
+                self.encoder_attention.append(SelfAttention3d(ch))
+            else:
+                self.encoder_attention.append(nn.Identity())
+        self.decoder_attention = nn.ModuleList()
+        for j in range(n_stages - 1):
+            stage = n_stages - 2 - j
+            if stage in attention_stages:
+                self.decoder_attention.append(SelfAttention3d(enc_channels[stage]))
+            else:
+                self.decoder_attention.append(nn.Identity())
 
         if head == "conv_halfres":
             # One more decoder stage, up to the stem conv's half resolution, with a skip
@@ -348,8 +373,9 @@ class NeuralNetwork(nn.Module):
 
         # Encoder: run every stage, keep all but the last as skip connections
         skips = []
-        for i, stage in enumerate(self.encoder):
+        for i, (stage, attention) in enumerate(zip(self.encoder, self.encoder_attention)):
             x = stage(x)
+            x = attention(x)
             if save_latent_images:
                 save_summed_spectral_channels(x, step, self.save_itr)
                 step += 1
@@ -358,12 +384,13 @@ class NeuralNetwork(nn.Module):
         bottleneck = x
 
         # Decoder: upsample, align to the matching skip map, concatenate, reduce channels
-        for up, dc in zip(self.upsamples, self.dc_layers):
+        for up, dc, attention in zip(self.upsamples, self.dc_layers, self.decoder_attention):
             x = up(x)
             skip = skips.pop()
             x = _match_spatial(x, skip)
             x = torch.cat([x, skip], dim=1)
             x = dc(x)
+            x = attention(x)
             if save_latent_images:
                 save_summed_spectral_channels(x, step, self.save_itr)
                 step += 1

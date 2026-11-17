@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `blocks.SelfAttention3d`: self-attention over every voxel of a 3-d feature map (GroupNorm, 1x1x1 q/k/v,
+  scaled dot-product attention and a zero-initialised output projection added to the input). The DDPM and the
+  ResBlock U-Net add it after the residual blocks of the encoder and decoder stages listed in the optional
+  `attention_stages` hyperparameter (default `[]`); the DDPM and ResBlock configs set `[2]`.
 - `ResidualBlock`, `DeconvBlock` and `ResBlock2d` take an `architecture` argument: `"post_activation"` (default,
   the existing layout) or `"identity_skip"`, which adds each block's correction to an unchanged skip and
   zero-initialises its last norm so the block starts as its skip. The DDPM and the ResBlock U-Net (including

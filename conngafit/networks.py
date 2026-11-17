@@ -30,12 +30,12 @@ HYPERPARAM_KEYS = {
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
 OPTIONAL_HYPERPARAM_KEYS = {
-    "resblock": {"n_fc", "mass_weight_power", "optimizer", "block_architecture"},
+    "resblock": {"n_fc", "mass_weight_power", "optimizer", "block_architecture", "attention_stages"},
     "ddpm": {"optimizer", "time_encoding_dim", "block_architecture", "attention_stages"},
 }
 # Optional keys passed straight to each network's constructor; any left out take its defaults
 NETWORK_KEYS = {
-    "resblock": ("n_fc", "block_architecture"),
+    "resblock": ("n_fc", "block_architecture", "attention_stages"),
     "ddpm": ("time_encoding_dim", "block_architecture", "attention_stages"),
 }
 
