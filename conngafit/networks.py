@@ -31,10 +31,13 @@ HYPERPARAM_KEYS = {
 }
 OPTIONAL_HYPERPARAM_KEYS = {
     "resblock": {"n_fc", "mass_weight_power", "optimizer", "block_architecture"},
-    "ddpm": {"optimizer", "time_encoding_dim", "block_architecture"},
+    "ddpm": {"optimizer", "time_encoding_dim", "block_architecture", "attention_stages"},
 }
 # Optional keys passed straight to each network's constructor; any left out take its defaults
-NETWORK_KEYS = {"resblock": ("n_fc", "block_architecture"), "ddpm": ("time_encoding_dim", "block_architecture")}
+NETWORK_KEYS = {
+    "resblock": ("n_fc", "block_architecture"),
+    "ddpm": ("time_encoding_dim", "block_architecture", "attention_stages"),
+}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):

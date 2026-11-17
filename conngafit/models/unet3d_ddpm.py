@@ -8,6 +8,7 @@ from conngafit.models.blocks import (
     DeconvBlock,
     ResBlock2d,
     ResidualBlock,
+    SelfAttention3d,
     SpectralAttentionPool,
     Stem,
     Upsample,
@@ -131,6 +132,8 @@ class DenoisingUNet3d(nn.Module):
       stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
       encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
       decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
+      attention- SelfAttention3d after the residual blocks of every stage in attention_stages, in the encoder
+               and in the decoder stage at the same resolution
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
     Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
     FiLM-conditioned on the timestep embedding, which is as wide as the widest encoder stage
@@ -156,6 +159,8 @@ class DenoisingUNet3d(nn.Module):
         n_maps: number of maps denoised together (default 1).
         block_architecture: architecture of every residual block, 'post_activation' (default) or 'identity_skip'
             (see blocks.ResidualBlock).
+        attention_stages: encoder stage indices (0 to n_stages - 1) that get self-attention (default none). Its
+            cost grows as the square of the stage's voxel count, so use coarse stages.
     """
 
     def __init__(
@@ -175,6 +180,7 @@ class DenoisingUNet3d(nn.Module):
         output_shape=None,
         n_maps=1,
         block_architecture="post_activation",
+        attention_stages=(),
     ):
         super().__init__()
         if n_stages < 2:
@@ -237,6 +243,25 @@ class DenoisingUNet3d(nn.Module):
                 )
             )
 
+        # Self-attention after each listed stage's residual blocks, in the encoder and in the decoder stage at the
+        # same resolution (decoder stage j is at encoder stage n_stages - 2 - j); nn.Identity at every other stage
+        attention_stages = set(attention_stages)
+        if not attention_stages <= set(range(n_stages)):
+            raise ValueError(f"attention_stages {sorted(attention_stages)} must be within 0..{n_stages - 1}")
+        self.encoder_attention = nn.ModuleList()
+        for i, ch in enumerate(enc_ch):
+            if i in attention_stages:
+                self.encoder_attention.append(SelfAttention3d(ch, max_groups=max_groups))
+            else:
+                self.encoder_attention.append(nn.Identity())
+        self.decoder_attention = nn.ModuleList()
+        for j in range(n_stages - 1):
+            stage = n_stages - 2 - j
+            if stage in attention_stages:
+                self.decoder_attention.append(SelfAttention3d(enc_ch[stage], max_groups=max_groups))
+            else:
+                self.decoder_attention.append(nn.Identity())
+
         self.head = MapHead(
             n_filt0,
             time_embed_dim,
@@ -268,15 +293,17 @@ class DenoisingUNet3d(nn.Module):
         # Keep every encoder output except the deepest; the decoder pops them in reverse order, so each
         # decoder stage pairs with the encoder stage at the same resolution.
         skips = []
-        for i, (b1, b2) in enumerate(self.encoder):
+        for i, ((b1, b2), attention) in enumerate(zip(self.encoder, self.encoder_attention)):
             h = b2(b1(h, t_emb), t_emb)
+            h = attention(h)
             if i < self.n_stages - 1:
                 skips.append(h)
 
-        for up, (b1, b2) in zip(self.upsamples, self.decoder):
+        for up, (b1, b2), attention in zip(self.upsamples, self.decoder, self.decoder_attention):
             skip = skips.pop()
             h = torch.cat([_match_spatial(up(h), skip), skip], dim=1)
             h = b2(b1(h, t_emb), t_emb)
+            h = attention(h)
 
         return self.head(h, y_t, t_emb)
 
