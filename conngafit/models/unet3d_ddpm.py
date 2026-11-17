@@ -82,7 +82,16 @@ class MapHead(nn.Module):
     about each pixel); this skip supplies the pixel-level noise pattern to subtract.
     """
 
-    def __init__(self, channels, time_embed_dim, n_blocks=2, activation=nn.SiLU, max_groups=8, n_maps=1):
+    def __init__(
+        self,
+        channels,
+        time_embed_dim,
+        n_blocks=2,
+        activation=nn.SiLU,
+        max_groups=8,
+        n_maps=1,
+        architecture="post_activation",
+    ):
         super().__init__()
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList(
@@ -93,6 +102,7 @@ class MapHead(nn.Module):
                     activation,
                     max_groups,
                     time_embed_dim=time_embed_dim,
+                    architecture=architecture,
                 )
                 for i in range(n_blocks)
             ]
@@ -144,6 +154,8 @@ class DenoisingUNet3d(nn.Module):
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
         output_shape: (H, W) of each map (default (nX, nY) from input).
         n_maps: number of maps denoised together (default 1).
+        block_architecture: architecture of every residual block, 'post_activation' (default) or 'identity_skip'
+            (see blocks.ResidualBlock).
     """
 
     def __init__(
@@ -162,6 +174,7 @@ class DenoisingUNet3d(nn.Module):
         max_groups=8,
         output_shape=None,
         n_maps=1,
+        block_architecture="post_activation",
     ):
         super().__init__()
         if n_stages < 2:
@@ -189,6 +202,7 @@ class DenoisingUNet3d(nn.Module):
             activation=block_activation,
             max_groups=max_groups,
             time_embed_dim=time_embed_dim,
+            architecture=block_architecture,
         )
 
         self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
@@ -223,7 +237,15 @@ class DenoisingUNet3d(nn.Module):
                 )
             )
 
-        self.head = MapHead(n_filt0, time_embed_dim, n_head_blocks, block_activation, max_groups, n_maps=n_maps)
+        self.head = MapHead(
+            n_filt0,
+            time_embed_dim,
+            n_head_blocks,
+            block_activation,
+            max_groups,
+            n_maps=n_maps,
+            architecture=block_architecture,
+        )
 
     def forward(self, cube, y_t, t):
         """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with

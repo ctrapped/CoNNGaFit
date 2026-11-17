@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `ResidualBlock`, `DeconvBlock` and `ResBlock2d` take an `architecture` argument: `"post_activation"` (default,
+  the existing layout) or `"identity_skip"`, which adds each block's correction to an unchanged skip and
+  zero-initialises its last norm so the block starts as its skip. The DDPM and the ResBlock U-Net (including
+  `ConvMapHead`'s 2-d blocks) set it for every block with the optional `block_architecture` hyperparameter
+  (default `"post_activation"`). Models saved without the key rebuild with `"post_activation"`.
 - Several targets at once: `target` in the datasets file may be a list (e.g. `["mass", "rotational_momentum"]`),
   and the ResBlock U-Net (and the dilated ResNet, through its new `n_maps` argument) predicts a map or radial
   curve of each from one shared network. The DDPM denoises the maps of every target together, so each sample is

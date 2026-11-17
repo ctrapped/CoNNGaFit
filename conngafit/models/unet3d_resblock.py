@@ -80,12 +80,9 @@ class NeuralNetwork(nn.Module):
             (or once before the output Linear, with no hidden layers) for the fc head, and a channel-wise
             Dropout2d before the output conv for the conv heads. 0.0 disables. Active in training mode only.
         block_dropout_rate: probability for a channel-wise nn.Dropout3d (drops whole feature
-            channels) inside every ResidualBlock/DeconvBlock, after the residual add + final
-            activation. 0.0 disables. Enable it only if head_dropout_rate alone leaves a
-            train/validation gap, and start low (~0.1-0.15).
+            channels) inside every ResidualBlock/DeconvBlock. 0.0 disables.
         stem_activation: activation for the stem (default nn.LeakyReLU).
-        block_activation: activation at all three sites in every ResidualBlock/DeconvBlock
-            (post-conv1, post-conv2, post residual-add; default nn.ReLU).
+        block_activation: activation in every ResidualBlock/DeconvBlock (default nn.ReLU).
         head_activation: activation in the output head: between the fc head's hidden layers, in the conv
             head's 2-d residual blocks, and after each of conv_halfres's 3x3 convolutions. Default: nn.ReLU for
             head='conv', nn.LeakyReLU otherwise.
@@ -112,6 +109,8 @@ class NeuralNetwork(nn.Module):
             or (n_bins,) for 1-d outputs such as radial curves (head='fc' only). Stored as self.output_shape.
         n_head_blocks: number of 2-d residual blocks in head='conv' (>= 0; default 2).
         head_channels: channel count of head='conv_halfres''s two 3x3 convolutions (default 64).
+        block_architecture: architecture of every ResidualBlock/DeconvBlock and of head='conv''s 2-d residual
+            blocks, 'post_activation' (default) or 'identity_skip' (see blocks.ResidualBlock).
     """
 
     def __init__(
@@ -137,6 +136,7 @@ class NeuralNetwork(nn.Module):
         n_head_blocks=2,
         head_channels=64,
         n_maps=1,
+        block_architecture="post_activation",
     ):
         super().__init__()
         self.predict_variance = predict_variance
@@ -188,6 +188,7 @@ class NeuralNetwork(nn.Module):
                         kernel1=kernel_coder,
                         dropout_rate=block_dropout_rate,
                         activation=block_activation,
+                        architecture=block_architecture,
                     ),
                     ResidualBlock(
                         ch,
@@ -196,6 +197,7 @@ class NeuralNetwork(nn.Module):
                         kernel1=kernel_coder,
                         dropout_rate=block_dropout_rate,
                         activation=block_activation,
+                        architecture=block_architecture,
                     ),
                 )
             )
@@ -219,6 +221,7 @@ class NeuralNetwork(nn.Module):
                         kernel1=kernel_coder,
                         dropout_rate=block_dropout_rate,
                         activation=block_activation,
+                        architecture=block_architecture,
                     ),
                     DeconvBlock(
                         out_ch,
@@ -227,6 +230,7 @@ class NeuralNetwork(nn.Module):
                         kernel1=kernel_coder,
                         dropout_rate=block_dropout_rate,
                         activation=block_activation,
+                        architecture=block_architecture,
                     ),
                 )
             )
@@ -243,6 +247,7 @@ class NeuralNetwork(nn.Module):
                     kernel1=kernel_coder,
                     dropout_rate=block_dropout_rate,
                     activation=block_activation,
+                    architecture=block_architecture,
                 ),
                 DeconvBlock(
                     n_filt0,
@@ -251,6 +256,7 @@ class NeuralNetwork(nn.Module):
                     kernel1=kernel_coder,
                     dropout_rate=block_dropout_rate,
                     activation=block_activation,
+                    architecture=block_architecture,
                 ),
             )
 
@@ -266,6 +272,7 @@ class NeuralNetwork(nn.Module):
                 n_blocks=n_head_blocks,
                 activation=head_activation,
                 dropout_rate=head_dropout_rate,
+                architecture=block_architecture,
             )
         elif head == "conv_halfres":
             # Head: fold the half-resolution spectral axis into channels -> HalfResConvHead

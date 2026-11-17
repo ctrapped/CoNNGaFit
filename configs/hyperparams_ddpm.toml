@@ -25,6 +25,10 @@ block_dropout_rate = 0.0  # Channel-wise dropout inside every block
 # time_encoding_dim // 2 frequencies spaced geometrically from 1 to 1/10000 rad per step. The learned embedding it
 # feeds is as wide as the widest encoder stage.
 time_encoding_dim = 128
+# Optional (default "post_activation"): architecture of every residual block. "identity_skip" adds each block's
+# correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
+# the addition. See blocks.ResidualBlock.
+block_architecture = "post_activation"
 
 # Diffusion: the denoiser learns to remove Gaussian noise added via the schedular to the label map
 # over n_timesteps steps
