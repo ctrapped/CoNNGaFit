@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `blocks.SelfAttention3d`: self-attention over every voxel of a 3-d feature map (GroupNorm, 1x1x1 q/k/v,
+  scaled dot-product attention and a zero-initialised output projection added to the input). The DDPM and the
+  ResBlock U-Net add it after the residual blocks of the encoder and decoder stages listed in the optional
+  `attention_stages` hyperparameter (default `[]`); the DDPM and ResBlock configs set `[2]`.
+- `ResidualBlock`, `DeconvBlock` and `ResBlock2d` take an `architecture` argument: `"post_activation"` (default,
+  the existing layout) or `"identity_skip"`, which adds each block's correction to an unchanged skip and
+  zero-initialises its last norm so the block starts as its skip. The DDPM and the ResBlock U-Net (including
+  `ConvMapHead`'s 2-d blocks) set it for every block with the optional `block_architecture` hyperparameter
+  (default `"post_activation"`). Models saved without the key rebuild with `"post_activation"`.
 - Several targets at once: `target` in the datasets file may be a list (e.g. `["mass", "rotational_momentum"]`),
   and the ResBlock U-Net (and the dilated ResNet, through its new `n_maps` argument) predicts a map or radial
   curve of each from one shared network. The DDPM denoises the maps of every target together, so each sample is
@@ -70,6 +79,10 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- **Breaking:** the DDPM's timestep conditioning is wider. The sinusoidal encoding defaults to 128 dims (optional
+  `time_encoding_dim` hyperparameter) instead of `n_filt0`, and the learned embedding passed to every block is as
+  wide as the widest encoder stage instead of `4 * n_filt0`. The blocks' `t_dim` argument is renamed
+  `time_embed_dim`. DDPM checkpoints saved before this change no longer load.
 - **Breaking:** `CoNNGaFitImageDataset` samples are `(image, label, loss weights, index)`, and the dataset takes a
   `mass_weight_power` option; the weights and index were added by a wrapper in the training script. The index
   names each saved output after the DataLoader shuffles the samples.

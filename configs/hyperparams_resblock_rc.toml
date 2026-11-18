@@ -30,6 +30,13 @@ dropout_rate = 0.3  # Dropout in the output head, to regularize it
 # reusing dropout_rate's 0.3 - the deepest encoder stage shrinks to a tiny spatial size where
 # dropping whole channels removes a large fraction of that stage's information.
 block_dropout_rate = 0.0
+# Optional (default "post_activation"): architecture of every residual block. "identity_skip" adds each block's
+# correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
+# the addition. See blocks.ResidualBlock.
+block_architecture = "post_activation"
+# Optional (default []): list of encoder stages (0 = the stem's resolution) followed by self-attention over every voxel,
+# in the encoder and in the decoder stage at the same resolution, e.g. [1,2]. Cost grows as stage's voxel count squared.
+attention_stages = []
 
 # Output head, see NeuralNetwork in unet3d_resblock.py. Both conv heads predict each pixel from
 # its neighborhood (needed for 128x128/512x512 images):

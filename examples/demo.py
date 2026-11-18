@@ -39,8 +39,8 @@ RUN_NAME = "demo"
 N_RINGS = 10  # Rings in each rotation curve
 
 #### Step 1: Choose a network and set its hyperparameters ####
-# Every key is required (see configs/hyperparams_resblock_rc.toml for more on each). These are small enough to train
-# in a few minutes on a CPU.
+# Every key is required unless marked optional (see configs/hyperparams_resblock_rc.toml for more on each). These are
+# small enough to train in a few minutes on a CPU.
 HYPERPARAMS = {
     "network": "resblock",  # The residual U-Net in conngafit/models/unet3d_resblock.py
     "n_filt0": 4,  # Filters in the first encoder stage; doubles at each later stage
@@ -60,6 +60,8 @@ HYPERPARAMS = {
     "epochs": 200,
     "predict_every": 1,  # Score the training and validation predictions every epoch
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
+    "block_architecture": "post_activation",  # Optional: residual block layout. "post_activation" (default) or "identity_skip". See blocks.ResidualBlock.
+    "attention_stages": [],  # Optional: list of encoder stages (0 = finest, to 3 = coarsest) followed by self-attention over every voxel, e.g. [1,2] or [2]. [] (default) adds none.
 }
 
 #### Step 2: Set the datasets ####
