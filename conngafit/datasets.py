@@ -261,7 +261,9 @@ class CoNNGaFitImageDataset:
             augment,
         )
 
-        self.masses = {}  # mass map or ring masses per file, for mass_weights
+        # Ring masses per file, for mass_weights with radial curves. Mass maps aren't cached: each DataLoader worker
+        # would keep its own cache, growing every epoch toward a copy of every training file's map per worker
+        self.ring_masses = {}
 
         if radial_bins is not None:
             # Where each image's radial curve comes from; check every face-on file exists up front
@@ -297,20 +299,26 @@ class CoNNGaFitImageDataset:
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).astype("float")
 
-    def mass_weights(self, idx, power):
+    def mass_weights(self, idx, power, hf=None):
         """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image, shaped
-        (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve)."""
+        (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve).
+
+        hf: sample idx's image file, already open (as in __getitem__), to read its mass map from; if None, it's
+        opened here. Radial curves' ring masses come from the file the curve is measured on, cached per file.
+        """
         file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
-        if file_idx not in self.masses:
-            if self.radial_bins is None:
-                with h5py.File(self.img_paths[file_idx], "r") as hf:
-                    self.masses[file_idx] = hf["mass_annotation"][()]
-            else:  # The mass in each ring, from the file the curve is measured on
-                with h5py.File(self.curve_paths[file_idx], "r") as hf:
-                    self.masses[file_idx] = radial_profile(hf, "mass", self.radial_bins)
-        weights = self.masses[file_idx] ** power
         if self.radial_bins is None:
-            weights = augment_array(weights, *self.augmentations[aug_idx])  # Rotated/flipped like the label
+            if hf is None:
+                with h5py.File(self.img_paths[file_idx], "r") as image_file:
+                    mass = image_file["mass_annotation"][()]
+            else:
+                mass = hf["mass_annotation"][()]
+            weights = augment_array(mass**power, *self.augmentations[aug_idx])  # Rotated/flipped like the label
+        else:
+            if file_idx not in self.ring_masses:  # The mass in each ring, from the file the curve is measured on
+                with h5py.File(self.curve_paths[file_idx], "r") as curve_file:
+                    self.ring_masses[file_idx] = radial_profile(curve_file, "mass", self.radial_bins)
+            weights = self.ring_masses[file_idx] ** power
         weights = weights[None].astype("float")
         # Mean 1, so every image counts equally however massive; an image with no mass is weighted uniformly
         return weights / weights.mean() if weights.mean() > 0 else np.ones_like(weights)
@@ -328,6 +336,8 @@ class CoNNGaFitImageDataset:
         with h5py.File(path, "r") as hf:
             image = np.array(hf["spectra"]).astype("float")
             label = self._label(hf, file_idx)
+            # Read while the file is open; computed before the label is augmented, as mass_weights augments them itself
+            weights = self.mass_weights(idx, self.mass_weight_power, hf) if self.mass_weight_power > 0 else None
         if rotations % 2 and image.shape[0] != image.shape[1]:
             raise ValueError(
                 f"{path}: 90-degree rotations need a square image, not {image.shape[:2]}; use augment='major_axis'"
@@ -344,9 +354,7 @@ class CoNNGaFitImageDataset:
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
-        if self.mass_weight_power > 0:
-            weights = self.mass_weights(idx, self.mass_weight_power)
-        else:
+        if weights is None:
             weights = np.ones_like(label)
         return image, label, weights, idx
 
