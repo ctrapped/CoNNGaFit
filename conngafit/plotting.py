@@ -372,10 +372,10 @@ def plot_loss(losses, title, ylabel, output):
     plt.close()
 
 
-def plot_history(output, result, validation_names, loss_label, accuracy_tolerance):
+def plot_history(output, result, validation_names, loss_label, accuracy_label):
     """Plot a run's training and validation losses (loss_label names the training objective), its validation
     accuracy, and each validation sample's accuracy, to output + "_trainingLoss.png" and so on. result is
-    train_model.train's TrainingResult; accuracy_tolerance is the accuracy's tolerance, in label standard deviations."""
+    train_model.train's TrainingResult; accuracy_label says what counts as accurate (e.g. "within predicted 1-sigma")."""
     plot_loss(result.training_losses, "Training Loss", loss_label, output + "_trainingLoss.png")
     plot_loss(result.validation_losses, "Validation Loss", loss_label, output + "_validationLoss.png")
 
@@ -385,7 +385,7 @@ def plot_history(output, result, validation_names, loss_label, accuracy_toleranc
 
     plt.figure()
     plt.plot(epoch_numbers[predicted], result.validation_accuracies[predicted], marker="o", ms=3)
-    plt.title(f"Validation Accuracy (within {accuracy_tolerance:g} label std. dev.)")
+    plt.title(f"Validation Accuracy ({accuracy_label})")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy [%]")
     plt.ylim([0, 101])

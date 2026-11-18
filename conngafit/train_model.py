@@ -205,7 +205,8 @@ def predict_batch(model, x, n_samples=None):
 
 def count_accurate(pred, y, tolerance):
     """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels:
-    the values within tolerance of their label."""
+    the values within tolerance of their label. tolerance is a number, or an array (such as each value's predicted
+    1-sigma) that broadcasts against pred."""
     within = np.abs(pred - y) < tolerance
     return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
 
@@ -341,8 +342,11 @@ def train_loop(
 def evaluate(
     model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None, fixed_draws=None
 ):
-    """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy": the
-    percentage of values within accuracy_tolerance of their label. name ("Validation" or "Test") labels the log line.
+    """Evaluate the model on the validation or test set (no gradient updates) and compute an "accuracy": the
+    percentage of values (pixels or rings) whose predicted 1-sigma interval includes their label, if the model gives
+    an uncertainty (predict_variance, or the ddpm's posterior spread), otherwise the percentage within
+    accuracy_tolerance of their label. With an uncertainty, the log line also gives the percentage within 3-sigma.
+    name ("Validation" or "Test") labels the log line.
 
     predict: also predict each batch, to score the MSE of the predicted mean and the accuracy (made every
         predict_every epochs and on the final epoch).
@@ -356,7 +360,9 @@ def evaluate(
     model.eval()
     num_batches = len(dataloader)
     summed_loss, summed_mse, correct = 0, 0, 0
+    correct_3sigma = 0  # Values within 3-sigma of their label, with an uncertainty
     total = 0
+    has_sigma = False
     specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
@@ -376,7 +382,13 @@ def evaluate(
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
 
-            specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
+            if sigma is not None:  # Accurate if the label is within the predicted 1-sigma
+                has_sigma = True
+                np_sigma = sigma.cpu().float().detach().numpy()
+                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, np_sigma)
+                correct_3sigma += count_accurate(np_pred, np_y, 3 * np_sigma)[1]
+            else:
+                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
             correct += n_correct
             total += np.size(np_y)
 
@@ -386,7 +398,17 @@ def evaluate(
     accuracy = correct / total * 100 if total else np.nan
     mean_loss = summed_loss / num_batches
     mse = summed_mse / num_batches if total else np.nan
-    logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
+    if has_sigma:
+        logger.info(
+            "%s: accuracy (within 1-sigma) %.1f%%, within 3-sigma %.1f%%, avg loss %8f, avg MSE %8f",
+            name,
+            accuracy,
+            correct_3sigma / total * 100,
+            mean_loss,
+            mse,
+        )
+    else:
+        logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
 
     return mean_loss, mse, accuracy, specific_accuracy
 
@@ -858,6 +880,9 @@ def train(
         final_test_specific_accuracy=final_test_specific_accuracy,
     )
     if save_diagnostics:
-        plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, ACCURACY_TOLERANCE)
+        # The accuracy counts values within their predicted 1-sigma if the network gives one
+        has_sigma = predict_variance or network == "ddpm"
+        accuracy_label = "within predicted 1-sigma" if has_sigma else f"within {ACCURACY_TOLERANCE:g} label std. dev."
+        plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, accuracy_label)
     save_history(diagnostic_output, result, training_data.names, validation_data.names, testing_names)
     return result
