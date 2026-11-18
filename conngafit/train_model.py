@@ -225,6 +225,7 @@ def save_batch_outputs(
     radial_bins,
     comp_images=True,
     saved=None,
+    only=None,
 ):
     """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and, with comp_images, a
     comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
@@ -234,6 +235,7 @@ def save_batch_outputs(
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
         plotting.save_correlation_plots.
+    only: if given, save only the samples with these dataset indices.
     """
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
@@ -246,6 +248,8 @@ def save_batch_outputs(
         param_label, unit_label, bin_op = TARGET_SETTINGS[target]
         target_sigma = None if np_sigma is None else np_sigma[:, m]
         for tt in range(len(idx)):
+            if only is not None and int(idx[tt]) not in only:
+                continue
             output_name = f"{image_output}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
             if comp_images:
                 # Radial curves are plotted against the radius of each ring, from the image's field of view
@@ -266,6 +270,14 @@ def save_batch_outputs(
             plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
     if saved is not None:
         saved.append((np_pred, np_y))
+
+
+def snapshot_samples(dataset, n_examples):
+    """The dataset indices of n_examples images spread evenly through dataset, each unaugmented (a file's first
+    sample is its unrotated, unflipped copy), for the snapshots made every snapshot_every epochs."""
+    n_files, n_augmentations = len(dataset.img_paths), len(dataset.augmentations)
+    files = np.linspace(0, n_files - 1, min(n_examples, n_files)).astype(int)
+    return set((files * n_augmentations).tolist())
 
 
 def train_loop(
@@ -547,6 +559,8 @@ def train(
     batch_size=None,
     test_batch_size=None,
     num_workers=None,
+    snapshot_every=0,
+    snapshot_examples=4,
 ):
     """Train the network hyperparams["network"] on datasets, and return a TrainingResult.
 
@@ -563,6 +577,11 @@ def train(
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     num_workers: data loading worker processes. 0 loads every batch in the main process.
         Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
+    snapshot_every: every this many epochs, save an hdf5 snapshot and a comparison image of snapshot_examples
+        training images and snapshot_examples validation images (the same ones every time, spread evenly through each
+        set and unaugmented), to watch them improve over training. The training snapshots are predicted by the EMA
+        weights right after their batch's step, as the training MSE is. Saved in <output_dir>/images whether or not
+        save_diagnostics is set. 0 saves none.
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)
@@ -599,7 +618,7 @@ def train(
 
     # Output directories
     os.makedirs(network_dir, exist_ok=True)
-    if save_diagnostics:
+    if save_diagnostics or snapshot_every > 0:
         os.makedirs(os.path.join(output_dir, "images"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "diagnostics"), exist_ok=True)
 
@@ -710,6 +729,10 @@ def train(
             validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
             start += n
 
+    # The training and validation images snapshotted every snapshot_every epochs
+    training_snapshots = snapshot_samples(training_data, snapshot_examples)
+    validation_snapshots = snapshot_samples(validation_data, snapshot_examples)
+
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
     validation_losses = np.zeros((epochs))
@@ -722,7 +745,9 @@ def train(
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
         final = t == epochs - 1
-        predict = final or (t + 1) % predict_every == 0  # The ddpm doesn't predict every epoch: sampling is slow
+        snapshot = snapshot_every > 0 and (t + 1) % snapshot_every == 0
+        # The ddpm doesn't predict every epoch: sampling is slow. Snapshots need the epoch's predictions
+        predict = final or snapshot or (t + 1) % predict_every == 0
         save_training = save_validation = None
         validation_outputs = []  # The final epoch's validation predictions and labels, for the correlation plots
         if final and save_diagnostics:  # Save every sample's prediction/label snapshot of the final epoch
@@ -740,6 +765,23 @@ def train(
                 image_output=image_output_validation,
                 epoch=t,
                 saved=validation_outputs,
+                **output_settings,
+            )
+        elif snapshot:  # Save only the snapshot images (the final epoch's full save above already includes them)
+            save_training = partial(
+                save_batch_outputs,
+                dataset=training_data,
+                image_output=image_output_training,
+                epoch=t,
+                only=training_snapshots,
+                **output_settings,
+            )
+            save_validation = partial(
+                save_batch_outputs,
+                dataset=validation_data,
+                image_output=image_output_validation,
+                epoch=t,
+                only=validation_snapshots,
                 **output_settings,
             )
         training_losses[t], training_mses[t] = train_loop(
