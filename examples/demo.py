@@ -60,8 +60,8 @@ HYPERPARAMS = {
     "epochs": 200,
     "predict_every": 1,  # Score the training and validation predictions every epoch
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
-    "block_architecture": "post_activation", # Optional: residual block layout. "post_activation" (default) or "identity_skip". See blocks.ResidualBlock.
-    "attention_stages": [], # Optional: list of encoder stages (0 = finest, to 3 = coarsest) followed by self-attention over every voxel, e.g. [1,2] or [2]. [] (default) adds none.
+    "block_architecture": "post_activation",  # Optional: residual block layout. "post_activation" (default) or "identity_skip". See blocks.ResidualBlock.
+    "attention_stages": [],  # Optional: list of encoder stages (0 = finest, to 3 = coarsest) followed by self-attention over every voxel, e.g. [1,2] or [2]. [] (default) adds none.
 }
 
 #### Step 2: Set the datasets ####

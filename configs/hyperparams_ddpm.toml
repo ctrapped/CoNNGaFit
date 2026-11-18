@@ -29,9 +29,8 @@ time_encoding_dim = 128
 # correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
 # the addition. See blocks.ResidualBlock.
 block_architecture = "post_activation"
-# Optional (default []): encoder stages (0 = the stem's resolution) followed by self-attention over every voxel,
-# in the encoder and in the decoder stage at the same resolution. Its cost grows as the square of the stage's
-# voxel count.
+# Optional (default []): list of encoder stages (0 = the stem's resolution) followed by self-attention over every voxel,
+# in the encoder and in the decoder stage at the same resolution, e.g. [1,2]. Cost grows as stage's voxel count squared.
 attention_stages = [2]
 
 # Diffusion: the denoiser learns to remove Gaussian noise added via the schedular to the label map
