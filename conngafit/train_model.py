@@ -455,7 +455,7 @@ def make_dataloaders(training_data, validation_data, test_data, batch_size=None,
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set, at least 1
         (evaluation uses BatchNorm's stored statistics, so 1 is safe); with batch_size 0, the whole validation set.
     num_workers: worker processes that read and transform samples in parallel, preparing the next batches while the
-        GPU trains on the current one. 0 loads each batch in the main process. 
+        GPU trains on the current one. 0 loads each batch in the main process.
     """
     if batch_size is None:
         batch_size = max(2, len(training_data) // 10)
@@ -561,7 +561,7 @@ def train(
     batch_size: training batch size. Default: about a tenth of the training set (at least 2); 0 trains on the whole
         set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
-    num_workers: data loading worker processes. 0 loads every batch in the main process. 
+    num_workers: data loading worker processes. 0 loads every batch in the main process.
         Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
     """
     check_hyperparams(hyperparams)

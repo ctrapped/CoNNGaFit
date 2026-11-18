@@ -24,7 +24,6 @@ from conngafit.train_model import train
 from conngafit.use_model import load_model, predict
 from demo_utils import curve_errors, map_curve
 
-
 DATA_DIR = Path("/N/project/choban_group/CONGA_project/VOF_outputs/low_res/FIRE-2")
 OUTPUT_DIR = Path("/N/slate/cwtrapp/connga_jobs/fire2_lowres_test")
 
@@ -32,10 +31,10 @@ RUN_NAME = "fire2_lowres_test"
 N_RINGS = 15  # Rings in each rotation curve
 # cm^-2: pixels with a lower HI column density are left out of the map figure's statistics and hidden on its maps.
 # Set it for this data's noise
-DETECTION = 5*4e19
+DETECTION = 5 * 4e19
 
 #### Step 1: Choose a network and set its hyperparameters ####
-# Every key is required (see configs/hyperparams_resblock_rc.toml for more on each). 
+# Every key is required (see configs/hyperparams_resblock_rc.toml for more on each).
 HYPERPARAMS = {
     "network": "resblock",  # The residual U-Net in conngafit/models/unet3d_resblock.py
     "n_filt0": 6,  # Filters in the first encoder stage; doubles at each later stage
@@ -68,25 +67,25 @@ DATASETS = {
     "augment": "major_axis",  # Add rotated and flipped copies of each training image
     "data_dir": DATA_DIR,  # The galaxies' folders below are in here
     "training": {
-        "core_md/m12b_res7100": [500,600],
-        "core_md/m12_elvis_RomeoJuliet_r3500": [500,600],
-        "core_md/m12_elvis_RomulusRemus_r4000": [500,600],
-        "core_md/m12_elvis_ThelmaLouise_r4000": [500,600],
-        "core_md/m12m_res7100": [500,600],
+        "core_md/m12b_res7100": [500, 600],
+        "core_md/m12_elvis_RomeoJuliet_r3500": [500, 600],
+        "core_md/m12_elvis_RomulusRemus_r4000": [500, 600],
+        "core_md/m12_elvis_ThelmaLouise_r4000": [500, 600],
+        "core_md/m12m_res7100": [500, 600],
         "core_md/m12i_res7100": [500, 600],
-        "core_md/m12r_res7100": [500,600],
-        "core_md/m12f_res7100": [500,600],
-        "cosmic_ray/m12b_res7100": [500,600],
-        "cosmic_ray/m12f_res7100": [500,600],
-        "cosmic_ray/m12i_res7100": [500,600],
-        "cosmic_ray/m12m_res7100": [500,600],
-        "cosmic_ray/m12z_res4200": [500,600],
-        "mhd/m12f_res7100": [500,600],
-        "mhd/m12i_res7100": [500,600],
-        "mhd/m12m_res7100": [500,600],
+        "core_md/m12r_res7100": [500, 600],
+        "core_md/m12f_res7100": [500, 600],
+        "cosmic_ray/m12b_res7100": [500, 600],
+        "cosmic_ray/m12f_res7100": [500, 600],
+        "cosmic_ray/m12i_res7100": [500, 600],
+        "cosmic_ray/m12m_res7100": [500, 600],
+        "cosmic_ray/m12z_res4200": [500, 600],
+        "mhd/m12f_res7100": [500, 600],
+        "mhd/m12i_res7100": [500, 600],
+        "mhd/m12m_res7100": [500, 600],
     },
-    "validation": {"core_md/m12w_res7100": [500,600]},
-    "testing": {"core_md/m12c_res7100": [500,600]},
+    "validation": {"core_md/m12w_res7100": [500, 600]},
+    "testing": {"core_md/m12c_res7100": [500, 600]},
 }
 
 # --predict map: changes to steps 1 and 2 to predict the rotational velocity map
@@ -162,8 +161,8 @@ def main():
         network_dir=output / "NetworkWeights",
         output_dir=output / "DiagnosticOutputs",
         save_diagnostics=args.diagnostics,
-        batch_size = 32,
-        test_batch_size = None
+        batch_size=32,
+        test_batch_size=None,
     )
 
     #### Step 4: predict the test galaxy, which the network hasn't seen, and plot ####
