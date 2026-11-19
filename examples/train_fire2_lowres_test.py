@@ -49,10 +49,10 @@ HYPERPARAMS = {
     "mass_weight_power": 0.5,  # Weight each value's loss by mass to this power; 0 is unweighted
     "learning_rate": 1e-4,
     "weight_decay": 1e-3,
-    "ema_decay": 0.99,  # Evaluate and save the raw weights, not an exponential moving average of them
-    "max_grad_norm": 1,  # No gradient clipping
+    "ema_decay": 0.99,  # Exponential moving average (EMA) of the weights for evaluation; 0 is no EMA
+    "max_grad_norm": 1,  # gradient clipping
     "epochs": 30,
-    "predict_every": 5,  # Score the training and validation predictions every epoch
+    "predict_every": 5,  # Score the training and validation predictions every N epochs
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
 }
 
@@ -94,7 +94,7 @@ MAP_DATASETS = {"radial_bins": 0}  # predict a map
 
 
 class Cubes:
-    """The test datacubes, each read from its file only when indexed, so they needn't all be in memory."""
+    """Test datacubes, each read only when indexed to limit memory usage."""
 
     def __init__(self, paths):
         self.paths = paths

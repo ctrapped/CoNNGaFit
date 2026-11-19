@@ -432,8 +432,7 @@ def plot_history(output, result, validation_names, loss_label, accuracy_toleranc
 
 
 def save_test_summary(figure_file, images, names, curves, sigmas, result, target):
-    """Save a one-page summary of a network's radial curves over a large testing set to figure_file: the
-    counterpart of examples/demo_plots.save_demo_figure for hundreds to thousands of images, called the same way.
+    """Save a one-page summary of a network's radial curves over a large testing set to figure_file.
 
       Row 1: the median-error image's input column density; every image's residual against radius (median, 16-84%
              and 2.5-97.5% bands); predicted against true for every ring of every image (2-d histogram, 1:1 line).
