@@ -359,12 +359,38 @@ def save_correlation_plots(saved, targets, output_base, epoch):
         make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
 
 
+def set_history_limits(ax, *histories, n_iqr=3, pad=0.05):
+    """Set ax's y scale and limits for per-epoch histories: a log axis unless some value isn't positive (the Gaussian
+    NLL can be negative), limited to the typical values, so a large first epoch or a spike doesn't flatten the rest
+    of the curve. Values more than n_iqr interquartile ranges beyond the quartiles (on the log axis, in log10) are left
+    off the axis and counted in a note. NaNs (unscored epochs) are ignored."""
+    values = np.concatenate([np.asarray(h, dtype=float).ravel() for h in histories])
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return
+    log = bool(np.all(values > 0))
+    ax.set_yscale("log" if log else "linear")
+    scaled = np.log10(values) if log else values
+    q25, q75 = np.percentile(scaled, [25, 75])
+    spread = q75 - q25
+    if spread == 0:  # Constant values: nothing to clip
+        spread = max(abs(q75), 1.0) if not log else 1.0
+    low = max(scaled.min(), q25 - n_iqr * spread)
+    high = min(scaled.max(), q75 + n_iqr * spread)
+    margin = pad * max(high - low, 1e-12)
+    low, high = low - margin, high + margin
+    ax.set_ylim(10**low if log else low, 10**high if log else high)
+    n_off = int(np.sum((scaled < low) | (scaled > high)))
+    if n_off:
+        ax.text(0.98, 0.97, f"{n_off} value{'s' if n_off > 1 else ''} off axis", transform=ax.transAxes,
+                ha="right", va="top", fontsize=8, color="0.4")  # fmt: skip
+
+
 def plot_loss(losses, title, ylabel, output):
-    """Plot a loss curve per epoch, on a log axis unless some value isn't positive (the Gaussian NLL can be negative)."""
-    plt.figure()
-    plt.plot(np.arange(1, len(losses) + 1), losses)
-    if np.all(losses > 0):
-        plt.yscale("log")
+    """Plot a loss curve per epoch (see set_history_limits for its axis)."""
+    fig, ax = plt.subplots()
+    ax.plot(np.arange(1, len(losses) + 1), losses)
+    set_history_limits(ax, losses)
     plt.title(title)
     plt.xlabel("Epoch")
     plt.ylabel(ylabel)
@@ -507,8 +533,8 @@ def save_test_summary(figure_file, images, names, curves, sigmas, result, target
         ax_check.set(xlabel="(predicted − true) / predicted 1σ", ylabel="Density", title="Uncertainty check")
         ax_check.legend(fontsize=8, loc="upper right")
 
-    # Training histories; the MSE of the mean is NaN on epochs whose predictions weren't scored. Log axes unless a
-    # value isn't positive (the Gaussian NLL can be negative)
+    # Training histories; the MSE of the mean is NaN on epochs whose predictions weren't scored. Axes limited to the
+    # typical values (see set_history_limits)
     for ax, training, validation, title in (
         (ax_mse, result.training_mses, result.validation_mses, "MSE of the mean (scaled labels)"),
         (ax_loss, result.training_losses, result.validation_losses, "Loss (training objective)"),
@@ -517,9 +543,9 @@ def save_test_summary(figure_file, images, names, curves, sigmas, result, target
         evaluated = np.isfinite(training) & np.isfinite(validation)
         ax.plot(epochs[evaluated], training[evaluated], label="Training")
         ax.plot(epochs[evaluated], validation[evaluated], label="Validation")
-        positive = np.all(training[evaluated] > 0) and np.all(validation[evaluated] > 0)
-        ax.set(xlabel="Epoch", ylabel=title, title=title, yscale="log" if positive else "linear")
-        ax.legend(fontsize=8)
+        set_history_limits(ax, training[evaluated], validation[evaluated])
+        ax.set(xlabel="Epoch", ylabel=title, title=title)
+        ax.legend(fontsize=8, loc="upper left")
 
     # Examples by RMS error, best to worst; a set with fewer than 6 images shows each once
     examples = []
@@ -621,9 +647,11 @@ def save_test_map_summary(
         if int(order[rank]) not in [i for i, _ in examples]:
             examples.append((int(order[rank]), label))
 
-    fig = plt.figure(figsize=(26, 19), layout="constrained")
-    top, bottom = fig.subfigures(2, 1, height_ratios=[1, 3.2])
+    fig = plt.figure(figsize=(26, 21), layout="constrained")
+    top, bottom = fig.subfigures(2, 1, height_ratios=[1.45, 3.2])
     ax_scatter, ax_check, ax_errors = top.subplots(1, 3)
+    for ax in (ax_scatter, ax_check, ax_errors):
+        ax.set_box_aspect(1)  # Square panels
     example_axes = bottom.subplots(3, 6, squeeze=False)
 
     # Predicted against true, every detected pixel; log axes for LOG_MAP_TARGETS
@@ -635,6 +663,7 @@ def save_test_map_summary(
     fig.colorbar(hexbins, ax=ax_scatter, label="Pixels")
     limits = [min(true_values.min(), predicted_values.min()), max(true_values.max(), predicted_values.max())]
     ax_scatter.plot(limits, limits, "k--", lw=1, label="1:1")
+    ax_scatter.set(xlim=limits, ylim=limits)  # The same range on both axes, so the 1:1 line is the diagonal
     ax_scatter.set(
         xlabel=f"True {param_label} {unit_label}",
         ylabel=f"Predicted {param_label} {unit_label}",
@@ -751,7 +780,7 @@ def save_test_map_summary(
         for ax in axes:
             ax.set_axis_off()
 
-    fig.suptitle(f"{param_label} maps on the testing set")
+    top.suptitle(f"{param_label} maps on the testing set", fontsize="x-large")
     fig.savefig(figure_file, dpi=90)
     plt.close(fig)
     return errors
