@@ -21,6 +21,10 @@ All notable changes to this project are documented here. The format follows
   drawn from their joint posterior. Labels are `(n_targets, nY, nX)` maps or `(n_targets, n_bins)` radial curves,
   each target is scaled separately
   (`label_stats` is `(2, n_targets)`), and the checkpoint records the targets in order.
+- Parallel data loading: `train(num_workers=...)` / `train_model_unet.py --num-workers` read and transform
+  samples in worker processes while the GPU trains, into pinned memory copied without blocking. Defaults to up to
+  8 of the job's CPUs on a GPU, 0 (the main process) on a CPU. Any number of workers trains the same network,
+  which matches `num_workers=0` in the first epoch and differs slightly after (see the test).
 - `use_model.predict(..., return_samples=True)` yields the DDPM's joint posterior samples in physical units.
 - pytest suite for the network modules: shared blocks, both regression networks
   (fc and conv heads), and the DDPM denoiser and diffusion process.

@@ -289,9 +289,9 @@ def train_loop(
     epoch_grad_norm, n_clipped = 0.0, 0  # Total gradient norm before clipping, and how many batches were clipped
 
     for batch, (x, y, w, idx) in enumerate(dataloader):
-        x = x.to(device)
-        y = y.to(device)
-        w = w.to(device)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+        w = w.to(device, non_blocking=True)
 
         loss = compute_loss(model, x.float(), y.float(), w.float())
         epoch_loss += loss.item()
@@ -349,9 +349,9 @@ def evaluate(
 
     with torch.no_grad():
         for batch, (x, y, w, idx) in enumerate(dataloader):
-            x = x.to(device)
-            y = y.to(device)
-            w = w.to(device)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            w = w.to(device, non_blocking=True)
 
             t, noise = fixed_draws[batch] if fixed_draws is not None else (None, None)
             loss = compute_loss(model, x.float(), y.float(), w.float(), t=t, noise=noise)
@@ -395,6 +395,11 @@ def training_statistics(dataset):
     return training_mean, training_stdv, labels
 
 
+def scale_label(label, label_offset, label_scale):
+    """Apply label normalization."""
+    return (label - label_offset) / label_scale
+
+
 def calc_label_scaling(labels, label_scaling, targets):
     """Each target's label offset and scale, from every training label. Labels are scaled to
     (label - label_offset) / label_scale for training and predictions. labels are scaled back to physical units
@@ -430,13 +435,27 @@ def calc_label_scaling(labels, label_scaling, targets):
     return label_offset.reshape(per_target), label_scale.reshape(per_target), accuracy_tolerance.reshape(per_target)
 
 
-def make_dataloaders(training_data, validation_data, test_data, batch_size=None, test_batch_size=None):
+def default_num_workers():
+    """Default number of workers for data loading. Gives up to 8 of the CPUs, leaving one for the main process.
+    Set to 0 when training on a CPU."""
+    if not torch.cuda.is_available():
+        return 0
+    try:
+        n_cpus = len(os.sched_getaffinity(0))  # The CPUs allocated to this process (Linux)
+    except AttributeError:  # macOS and Windows
+        n_cpus = os.cpu_count() or 1
+    return max(0, min(8, n_cpus - 1))
+
+
+def make_dataloaders(training_data, validation_data, test_data, batch_size=None, test_batch_size=None, num_workers=0):
     """DataLoaders for the training, validation and test sets. The training set is reshuffled every epoch.
 
     batch_size: training batch size. Default: about a tenth of the training set, at least 2 (BatchNorm needs more
         than 1 sample per batch while training); 0 trains on the whole set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set, at least 1
         (evaluation uses BatchNorm's stored statistics, so 1 is safe); with batch_size 0, the whole validation set.
+    num_workers: worker processes that read and transform samples in parallel, preparing the next batches while the
+        GPU trains on the current one. 0 loads each batch in the main process.
     """
     if batch_size is None:
         batch_size = max(2, len(training_data) // 10)
@@ -444,10 +463,19 @@ def make_dataloaders(training_data, validation_data, test_data, batch_size=None,
         batch_size, test_batch_size = len(training_data), len(validation_data)
     elif test_batch_size is None:
         test_batch_size = max(1, len(validation_data) // 10)
-    training_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
-    validation_loader = DataLoader(validation_data, batch_size=test_batch_size)
-    test_loader = DataLoader(test_data, batch_size=test_batch_size)
-    logger.info("Data loaded: %d training batches of up to %d samples per epoch", len(training_loader), batch_size)
+    loader_settings = dict(num_workers=num_workers, pin_memory=torch.cuda.is_available())
+    if num_workers > 0:
+        # Keep the workers (and the dataset caches they fill) alive between epochs, and have each prepare 2 batches ahead
+        loader_settings.update(persistent_workers=True, prefetch_factor=2)
+    training_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True, **loader_settings)
+    validation_loader = DataLoader(validation_data, batch_size=test_batch_size, **loader_settings)
+    test_loader = DataLoader(test_data, batch_size=test_batch_size, **loader_settings)
+    logger.info(
+        "Data loaded: %d training batches of up to %d samples per epoch, %d loading workers",
+        len(training_loader),
+        batch_size,
+        num_workers,
+    )
     return training_loader, validation_loader, test_loader
 
 
@@ -518,6 +546,7 @@ def train(
     save_diagnostics=True,
     batch_size=None,
     test_batch_size=None,
+    num_workers=None,
 ):
     """Train the network hyperparams["network"] on datasets, and return a TrainingResult.
 
@@ -532,6 +561,8 @@ def train(
     batch_size: training batch size. Default: about a tenth of the training set (at least 2); 0 trains on the whole
         set as one batch.
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
+    num_workers: data loading worker processes. 0 loads every batch in the main process.
+        Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)
@@ -591,9 +622,7 @@ def train(
     training_mean, training_stdv, labels = training_statistics(training_data)
     label_offset, label_scale, accuracy_tolerance = calc_label_scaling(labels, label_scaling, targets)
 
-    def scale_labels(label):
-        """Apply label normalization"""
-        return (label - label_offset) / label_scale
+    scale_labels = partial(scale_label, label_offset=label_offset, label_scale=label_scale)
 
     def to_physical(a):
         """
@@ -611,8 +640,10 @@ def train(
     test_data = CoNNGaFitImageDataset(
         testing_sources, targets, transform=image_transform, target_transform=scale_labels, **dataset_settings
     )
+    if num_workers is None:
+        num_workers = default_num_workers()
     train_dataloader, validation_dataloader, test_dataloader = make_dataloaders(
-        training_data, validation_data, test_data, batch_size, test_batch_size
+        training_data, validation_data, test_data, batch_size, test_batch_size, num_workers
     )
 
     # The network

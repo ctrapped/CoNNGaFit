@@ -9,6 +9,9 @@ import h5py
 import scipy.stats as stats
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Patch
+
+from conngafit.datasets import MOMENTUM_TARGETS, TARGET_SETTINGS, ring_index, ring_radii
 
 
 def make_comp_image(
@@ -356,12 +359,38 @@ def save_correlation_plots(saved, targets, output_base, epoch):
         make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
 
 
+def set_history_limits(ax, *histories, n_iqr=3, pad=0.05):
+    """Set ax's y scale and limits for per-epoch histories: a log axis unless some value isn't positive (the Gaussian
+    NLL can be negative), limited to the typical values, so a large first epoch or a spike doesn't flatten the rest
+    of the curve. Values more than n_iqr interquartile ranges beyond the quartiles (on the log axis, in log10) are left
+    off the axis and counted in a note. NaNs (unscored epochs) are ignored."""
+    values = np.concatenate([np.asarray(h, dtype=float).ravel() for h in histories])
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return
+    log = bool(np.all(values > 0))
+    ax.set_yscale("log" if log else "linear")
+    scaled = np.log10(values) if log else values
+    q25, q75 = np.percentile(scaled, [25, 75])
+    spread = q75 - q25
+    if spread == 0:  # Constant values: nothing to clip
+        spread = max(abs(q75), 1.0) if not log else 1.0
+    low = max(scaled.min(), q25 - n_iqr * spread)
+    high = min(scaled.max(), q75 + n_iqr * spread)
+    margin = pad * max(high - low, 1e-12)
+    low, high = low - margin, high + margin
+    ax.set_ylim(10**low if log else low, 10**high if log else high)
+    n_off = int(np.sum((scaled < low) | (scaled > high)))
+    if n_off:
+        ax.text(0.98, 0.97, f"{n_off} value{'s' if n_off > 1 else ''} off axis", transform=ax.transAxes,
+                ha="right", va="top", fontsize=8, color="0.4")  # fmt: skip
+
+
 def plot_loss(losses, title, ylabel, output):
-    """Plot a loss curve per epoch, on a log axis unless some value isn't positive (the Gaussian NLL can be negative)."""
-    plt.figure()
-    plt.plot(np.arange(1, len(losses) + 1), losses)
-    if np.all(losses > 0):
-        plt.yscale("log")
+    """Plot a loss curve per epoch (see set_history_limits for its axis)."""
+    fig, ax = plt.subplots()
+    ax.plot(np.arange(1, len(losses) + 1), losses)
+    set_history_limits(ax, losses)
     plt.title(title)
     plt.xlabel("Epoch")
     plt.ylabel(ylabel)
@@ -400,3 +429,357 @@ def plot_history(output, result, validation_names, loss_label, accuracy_toleranc
     plt.ylim([0, 101])
     plt.savefig(output + "_ValidationAccuracyPerSnapshot.png")
     plt.close()
+
+
+def save_test_summary(figure_file, images, names, curves, sigmas, result, target):
+    """Save a one-page summary of a network's radial curves over a large testing set to figure_file.
+
+      Row 1: the median-error image's input column density; every image's residual against radius (median, 16-84%
+             and 2.5-97.5% bands); predicted against true for every ring of every image (2-d histogram, 1:1 line).
+      Row 2: a histogram of (predicted - true) / predicted 1-sigma against N(0, 1); the MSE and loss histories.
+      Row 3: the images at the 0th, 25th, 50th, 75th, 90th and 100th percentile of RMS error, each with its true and
+             predicted curve.
+
+    images: as examples/demo_utils.load_images returns, one entry per test image; only "cubes" (of the median-error
+        image), "fovs_kpc" and "true_curves" are used.
+    names: a label for each image, for the example titles (e.g. its filename).
+    curves, sigmas: (n_images, n_rings) predicted curves of target and their 1-sigma; sigmas may be None.
+    result: the TrainingResult train() returned.
+    target: the target the curves are of, e.g. "rotational_velocity".
+    Returns each image's RMS error, in target's units.
+    """
+    true_curves = images["true_curves"]
+    residuals = curves - true_curves
+    errors = np.sqrt(np.mean(np.square(residuals), axis=1))  # Each image's RMS error
+    param_label, unit_label, _ = TARGET_SETTINGS[target]
+    radii = np.array([ring_radii(fov, curves.shape[1]) for fov in images["fovs_kpc"]])
+    order = np.argsort(errors)
+
+    def at_percentile(percentile):
+        """The image whose RMS error is at percentile (nearest rank)."""
+        return int(order[round(percentile / 100 * (len(errors) - 1))])
+
+    fig = plt.figure(figsize=(16, 14), layout="constrained")
+    top, bottom = fig.subfigures(2, 1, height_ratios=[2, 0.85])
+    (ax_input, ax_residual, ax_scatter), (ax_check, ax_mse, ax_loss) = top.subplots(2, 3)
+    example_axes = bottom.subplots(1, 6, sharey=True)
+
+    # Input column density of the median-error image (the cube in cm^-2 per channel, summed), on a log scale spanning
+    # its 1st to 99.9th percentiles
+    median = at_percentile(50)
+    column_density = images["cubes"][median].sum(axis=2)
+    half_width = images["fovs_kpc"][median] / 2
+    low, high = np.percentile(column_density[column_density > 0], [1, 99.9])
+    im = ax_input.imshow(
+        np.clip(column_density, low, None),
+        origin="lower",
+        extent=[-half_width, half_width, -half_width, half_width],
+        cmap="inferno",
+        norm=LogNorm(low, high),
+    )
+    fig.colorbar(im, ax=ax_input, label="HI column density [cm$^{-2}$]")
+    ax_input.set(xlabel="x [kpc]", ylabel="y [kpc]", title=f"Input, median-error image\n{names[median]}")
+
+    # Residual bands. Ring k is at the same radius in every image only if they share a field of view; otherwise rings
+    # are compared at the same fraction of each image's half-width
+    if np.allclose(radii, radii[0]):
+        x, xlabel = radii[0], "Radius [kpc]"
+    else:
+        x, xlabel = (np.arange(curves.shape[1]) + 0.5) / curves.shape[1], "Radius / image half-width"
+    low2, low1, mid, high1, high2 = np.nanpercentile(residuals, [2.5, 16, 50, 84, 97.5], axis=0)
+    ax_residual.fill_between(x, low2, high2, color="C0", alpha=0.15, lw=0, label="2.5–97.5%")
+    ax_residual.fill_between(x, low1, high1, color="C0", alpha=0.35, lw=0, label="16–84%")
+    ax_residual.plot(x, mid, color="C0", marker="o", ms=3, label="Median")
+    ax_residual.axhline(0, color="k", lw=1.5)
+    ax_residual.set(xlabel=xlabel, ylabel=f"Predicted − true {unit_label}", title=f"Residuals ({len(curves)} images)")
+    ax_residual.legend(fontsize=8)
+
+    # Predicted against true, on log axes when every value is positive and they span more than 3 orders of magnitude
+    values = np.concatenate([true_curves.ravel(), curves.ravel()])
+    scale = "log" if np.all(values > 0) and values.max() / values.min() > 1e3 else "linear"
+    hexbins = ax_scatter.hexbin(
+        true_curves.ravel(), curves.ravel(), gridsize=40, bins="log", mincnt=1, xscale=scale, yscale=scale
+    )
+    fig.colorbar(hexbins, ax=ax_scatter, label="Rings")
+    ax_scatter.plot([values.min(), values.max()], [values.min(), values.max()], "k--", lw=1, label="1:1")
+    ax_scatter.set(
+        xlabel=f"True {param_label} {unit_label}",
+        ylabel=f"Predicted {param_label} {unit_label}",
+        title="Predicted against true, every ring",
+    )
+    ax_scatter.legend(fontsize=8, loc="upper left")
+
+    # Uncertainty check: residual / sigma should follow N(0, 1). Rings with sigma = 0 (no mass) are left out, and
+    # values beyond ±5 are counted in the end bins
+    if sigmas is None:
+        ax_check.hist(residuals.ravel(), bins=50)
+        ax_check.set(xlabel=f"Predicted − true {unit_label}", ylabel="Rings", title="Residuals (no predicted 1σ)")
+    else:
+        has_sigma = sigmas > 0
+        z = residuals[has_sigma] / sigmas[has_sigma]
+        ax_check.hist(np.clip(z, -5, 5), bins=np.linspace(-5, 5, 51), density=True, alpha=0.7)
+        grid = np.linspace(-5, 5, 200)
+        ax_check.plot(grid, stats.norm.pdf(grid), "k", lw=1.5, label="N(0, 1)")
+        within1, within3 = np.mean(np.abs(z) < 1), np.mean(np.abs(z) < 3)
+        ax_check.text(
+            0.03,
+            0.97,
+            f"within 1σ: {within1:.0%} (expect 68%)\nwithin 3σ: {within3:.0%} (expect 99.7%)",
+            transform=ax_check.transAxes,
+            va="top",
+            fontsize=8,
+        )
+        ax_check.set(xlabel="(predicted − true) / predicted 1σ", ylabel="Density", title="Uncertainty check")
+        ax_check.legend(fontsize=8, loc="upper right")
+
+    # Training histories; the MSE of the mean is NaN on epochs whose predictions weren't scored. Axes limited to the
+    # typical values (see set_history_limits)
+    for ax, training, validation, title in (
+        (ax_mse, result.training_mses, result.validation_mses, "MSE of the mean (scaled labels)"),
+        (ax_loss, result.training_losses, result.validation_losses, "Loss (training objective)"),
+    ):
+        epochs = np.arange(1, len(training) + 1)
+        evaluated = np.isfinite(training) & np.isfinite(validation)
+        ax.plot(epochs[evaluated], training[evaluated], label="Training")
+        ax.plot(epochs[evaluated], validation[evaluated], label="Validation")
+        set_history_limits(ax, training[evaluated], validation[evaluated])
+        ax.set(xlabel="Epoch", ylabel=title, title=title)
+        ax.legend(fontsize=8, loc="upper left")
+
+    # Examples by RMS error, best to worst; a set with fewer than 6 images shows each once
+    examples = []
+    for percentile, label in zip(
+        (0, 25, 50, 75, 90, 100), ("Best", "25th pct.", "Median", "75th pct.", "90th pct.", "Worst")
+    ):
+        i = at_percentile(percentile)
+        if i not in [j for j, _ in examples]:
+            examples.append((i, label))
+    for ax, (i, label) in zip(example_axes, examples):
+        ax.plot(radii[i], true_curves[i], "k", lw=2, label="True")
+        ax.plot(radii[i], curves[i], "--", color="C1", marker="o", ms=3, label="Predicted")
+        if sigmas is not None:
+            ax.fill_between(radii[i], curves[i] - sigmas[i], curves[i] + sigmas[i], color="C1", alpha=0.25, lw=0)
+        ax.set_title(f"{label}: RMS {errors[i]:.3g}\n{names[i]}", fontsize=9)
+        ax.set_xlabel("Radius [kpc]")
+    for ax in example_axes[len(examples) :]:
+        ax.set_axis_off()
+    example_axes[0].set_ylabel(f"{param_label} {unit_label}")
+    handles = example_axes[0].get_legend_handles_labels()[0]
+    if sigmas is not None:
+        handles.append(Patch(color="C1", alpha=0.25, lw=0, label="Predicted ±1σ"))
+    example_axes[0].legend(handles=handles, fontsize=8)
+
+    fig.suptitle(f"{param_label} on the testing set")
+    fig.savefig(figure_file, dpi=110)
+    plt.close(fig)
+    return errors
+
+
+# Map targets whose errors are measured in dex, log10(predicted / true), as they span orders of magnitude; pixels where
+# either map isn't positive (e.g. counter-rotating gas) are left out of those errors. Other targets can be negative,
+# so their errors are predicted - true
+LOG_MAP_TARGETS = {"mass", "rotational_momentum"}
+
+
+def _ring_curve(ring, n_rings, target, values, mass, sigma=None):
+    """A map of target binned into n_rings rings (ring: each pixel's ring, see datasets.ring_index), as
+    datasets.radial_profile bins annotations: masses and momenta summed, velocities mass-weighted by mass. With sigma,
+    a per-pixel 1-sigma map, also the curve's 1-sigma, assuming independent pixel errors (otherwise None)."""
+    inside = ring < n_rings  # Pixels in the corners, beyond the image edge, are left out
+
+    def ring_sum(a):
+        return np.bincount(ring[inside], weights=a[inside], minlength=n_rings)
+
+    if target == "mass" or target in MOMENTUM_TARGETS:
+        return ring_sum(values), None if sigma is None else np.sqrt(ring_sum(np.square(sigma)))
+    ring_mass = ring_sum(mass)
+
+    def per_mass(a):
+        return np.divide(a, ring_mass, out=np.zeros(n_rings), where=ring_mass > 0)
+
+    curve = per_mass(ring_sum(mass * values))
+    return curve, None if sigma is None else per_mass(np.sqrt(ring_sum(np.square(mass * sigma))))
+
+
+def save_test_map_summary(
+    figure_file, images, names, true_maps, maps, map_sigmas, target, true_mass, detected, n_rings=10
+):
+    """Save a one-page summary of a network's maps of target over a large testing set to figure_file: the map
+    counterpart of save_test_summary.
+
+      Row 1: predicted against true for every detected pixel (2-d histogram, 1:1 line); a histogram of
+             (predicted - true) / predicted 1-sigma against N(0, 1); each image's RMS error, marking the examples.
+      Rows 2-4: the best, median and worst images by RMS error, each as its input column density, true and predicted
+             maps, their error, the prediction's signal-to-noise, and the radial curves binned from both maps.
+
+    Only detected pixels count in the statistics and are shown on the map panels. Errors are in dex for
+    LOG_MAP_TARGETS, otherwise predicted - true in target's units.
+
+    images: as examples/demo_utils.load_images returns; "fovs_kpc" is used, and "cubes" only for the three example
+        images, so it can be any sequence that loads a cube when indexed instead of every cube in memory.
+    names: a label for each image, for the example rows.
+    true_maps, maps, map_sigmas: (n_images, nY, nX) true and predicted maps of target and the predicted 1-sigma;
+        map_sigmas may be None.
+    true_mass: (n_images, nY, nX) true mass maps, to weight the velocity curves as the true curves are weighted.
+    detected: (n_images, nY, nX) True where a pixel is detected, e.g. cube.sum(axis=2) > a cutoff in cm^-2 chosen
+        for each image's noise.
+    n_rings: rings in each radial curve.
+    Returns each image's RMS error over its detected pixels.
+    """
+    param_label, unit_label, _ = TARGET_SETTINGS[target]
+    log_target = target in LOG_MAP_TARGETS
+    if log_target:
+        valid = detected & (true_maps > 0) & (maps > 0)
+        errors_map = np.log10(np.where(valid, maps, 1) / np.where(valid, true_maps, 1))
+        error_label = "log$_{10}$(predicted / true) [dex]"
+    else:
+        valid = detected
+        errors_map = maps - true_maps
+        error_label = f"Predicted − true {unit_label}"
+    n_valid = valid.sum(axis=(1, 2))
+    squared = np.where(valid, np.square(errors_map), 0).sum(axis=(1, 2))
+    errors = np.sqrt(np.divide(squared, n_valid, out=np.full(len(maps), np.nan), where=n_valid > 0))
+    order = np.argsort(errors)  # NaN (no detected pixels) sorts last
+    n_ranked = int(np.isfinite(errors).sum())
+    examples = []
+    for rank, label in ((0, "Best"), ((n_ranked - 1) // 2, "Median"), (n_ranked - 1, "Worst")):
+        if int(order[rank]) not in [i for i, _ in examples]:
+            examples.append((int(order[rank]), label))
+
+    fig = plt.figure(figsize=(26, 21), layout="constrained")
+    top, bottom = fig.subfigures(2, 1, height_ratios=[1.45, 3.2])
+    ax_scatter, ax_check, ax_errors = top.subplots(1, 3)
+    for ax in (ax_scatter, ax_check, ax_errors):
+        ax.set_box_aspect(1)  # Square panels
+    example_axes = bottom.subplots(3, 6, squeeze=False)
+
+    # Predicted against true, every detected pixel; log axes for LOG_MAP_TARGETS
+    scale = "log" if log_target else "linear"
+    true_values, predicted_values = true_maps[valid], maps[valid]
+    hexbins = ax_scatter.hexbin(
+        true_values, predicted_values, gridsize=60, bins="log", mincnt=1, xscale=scale, yscale=scale
+    )
+    fig.colorbar(hexbins, ax=ax_scatter, label="Pixels")
+    limits = [min(true_values.min(), predicted_values.min()), max(true_values.max(), predicted_values.max())]
+    ax_scatter.plot(limits, limits, "k--", lw=1, label="1:1")
+    ax_scatter.set(xlim=limits, ylim=limits)  # The same range on both axes, so the 1:1 line is the diagonal
+    ax_scatter.set(
+        xlabel=f"True {param_label} {unit_label}",
+        ylabel=f"Predicted {param_label} {unit_label}",
+        title=f"Predicted against true, {valid.sum():,} detected pixels",
+    )
+    ax_scatter.legend(fontsize=8, loc="upper left")
+
+    # Uncertainty check: (predicted - true) / sigma, in target's units, should follow N(0, 1); values beyond ±5 are
+    # counted in the end bins
+    if map_sigmas is None:
+        ax_check.hist(errors_map[valid], bins=50)
+        ax_check.set(xlabel=error_label, ylabel="Pixels", title="Errors (no predicted 1σ)")
+    else:
+        has_sigma = detected & (map_sigmas > 0)
+        z = (maps - true_maps)[has_sigma] / map_sigmas[has_sigma]
+        ax_check.hist(np.clip(z, -5, 5), bins=np.linspace(-5, 5, 51), density=True, alpha=0.7)
+        grid = np.linspace(-5, 5, 200)
+        ax_check.plot(grid, stats.norm.pdf(grid), "k", lw=1.5, label="N(0, 1)")
+        within1, within3 = np.mean(np.abs(z) < 1), np.mean(np.abs(z) < 3)
+        ax_check.text(
+            0.03,
+            0.97,
+            f"within 1σ: {within1:.0%} (expect 68%)\nwithin 3σ: {within3:.0%} (expect 99.7%)",
+            transform=ax_check.transAxes,
+            va="top",
+            fontsize=9,
+        )
+        ax_check.set(xlabel="(predicted − true) / predicted 1σ", ylabel="Density", title="Uncertainty check")
+        ax_check.legend(fontsize=8, loc="upper right")
+
+    # Each image's RMS error, with the examples marked
+    rms_label = "RMS error [dex]" if log_target else f"RMS error {unit_label}"
+    ax_errors.hist(errors[np.isfinite(errors)], bins=30)
+    for (i, label), color in zip(examples, ("C2", "C1", "C3")):
+        ax_errors.axvline(errors[i], color=color, lw=2, label=f"{label}: {errors[i]:.3g}")
+    ax_errors.set(xlabel=rms_label, ylabel="Images", title=f"Per-image error ({n_ranked} images)")
+    ax_errors.legend(fontsize=8)
+
+    # Example rows. Each map column shares one color scale over the examples' detected pixels, so the rows compare
+    picked = [i for i, _ in examples]
+    cubes = {i: np.asarray(images["cubes"][i]) for i in picked}
+    column_densities = {i: cubes[i].sum(axis=2) for i in picked}
+    all_density = np.concatenate([column_densities[i][column_densities[i] > 0] for i in picked])
+    density_norm = LogNorm(*np.percentile(all_density, [1, 99.9]))
+    example_true = np.concatenate([true_maps[i][valid[i]] for i in picked])
+    example_predicted = np.concatenate([maps[i][valid[i]] for i in picked])
+    value_low, value_high = np.percentile(np.concatenate([example_true, example_predicted]), [1, 99])
+    value_style = {"norm": LogNorm(value_low, value_high)} if log_target else {"vmin": value_low, "vmax": value_high}
+    error_limit = np.percentile(np.abs(np.concatenate([errors_map[i][valid[i]] for i in picked])), 99)
+    if map_sigmas is not None:
+        snr = maps / np.where(map_sigmas > 0, map_sigmas, np.nan)
+        snr_low, snr_high = np.nanpercentile(np.concatenate([snr[i][valid[i]] for i in picked]), [1, 99])
+
+    for row, (axes, (i, label)) in enumerate(zip(example_axes, examples)):
+        half_width = images["fovs_kpc"][i] / 2
+        extent = [-half_width, half_width, -half_width, half_width]
+        hidden = ~valid[i]
+        panels = [
+            (column_densities[i], "Input: HI column density [cm$^{-2}$]", {"norm": density_norm, "cmap": "inferno"}),
+            (
+                np.ma.masked_where(hidden, true_maps[i]),
+                f"True {param_label} {unit_label}",
+                {**value_style, "cmap": "magma"},
+            ),
+            (
+                np.ma.masked_where(hidden, maps[i]),
+                f"Predicted {param_label} {unit_label}",
+                {**value_style, "cmap": "magma"},
+            ),
+            (
+                np.ma.masked_where(hidden, errors_map[i]),
+                error_label,
+                {"vmin": -error_limit, "vmax": error_limit, "cmap": "RdBu_r"},
+            ),
+        ]
+        if map_sigmas is not None:
+            panels.append(
+                (
+                    np.ma.masked_where(hidden, snr[i]),
+                    "Predicted / 1σ",
+                    {"vmin": snr_low, "vmax": snr_high, "cmap": "viridis"},
+                )
+            )
+        for ax, (image, colorbar_label, style) in zip(axes, panels):
+            if colorbar_label.startswith("Input"):
+                image = np.clip(image, density_norm.vmin, None)
+            im = ax.imshow(image, origin="lower", extent=extent, **style)
+            if row == 0:  # One color bar per column, as its header
+                fig.colorbar(im, ax=ax, location="top", shrink=0.9, label=colorbar_label)
+            ax.set_xlabel("x [kpc]")
+        if map_sigmas is None:
+            axes[4].set_axis_off()
+        axes[0].set_ylabel(f"{label}: RMS {errors[i]:.3g}\n{names[i]}\ny [kpc]")
+
+        # Radial curves binned from the true and predicted maps over every pixel, as the training curves are
+        ring = ring_index(true_maps[i].shape, images["fovs_kpc"][i], n_rings)
+        radii = ring_radii(images["fovs_kpc"][i], n_rings)
+        true_curve, _ = _ring_curve(ring, n_rings, target, true_maps[i], true_mass[i])
+        sigma_map = None if map_sigmas is None else map_sigmas[i]
+        curve, curve_sigma = _ring_curve(ring, n_rings, target, maps[i], true_mass[i], sigma_map)
+        ax_curve = axes[5]
+        ax_curve.plot(radii, true_curve, "k", lw=2, label="True")
+        ax_curve.plot(radii, curve, "--", color="C1", marker="o", ms=3, label="Predicted")
+        if curve_sigma is not None:
+            ax_curve.fill_between(radii, curve - curve_sigma, curve + curve_sigma, color="C1", alpha=0.25, lw=0)
+        ax_curve.set(xlabel="Radius [kpc]", ylabel=f"{param_label} {unit_label}")
+        if row == 0:
+            handles = ax_curve.get_legend_handles_labels()[0]
+            if curve_sigma is not None:
+                handles.append(Patch(color="C1", alpha=0.25, lw=0, label="Predicted ±1σ"))
+            ax_curve.legend(handles=handles, fontsize=8)
+            ax_curve.set_title("Radial curve")
+    for axes in example_axes[len(examples) :]:  # Fewer than 3 images
+        for ax in axes:
+            ax.set_axis_off()
+
+    top.suptitle(f"{param_label} maps on the testing set", fontsize="x-large")
+    fig.savefig(figure_file, dpi=90)
+    plt.close(fig)
+    return errors

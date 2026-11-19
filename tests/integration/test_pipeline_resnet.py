@@ -174,3 +174,44 @@ def test_train_from_python(tmp_path):
     assert sorted(p.name for p in (tmp_path / "diag").rglob("*") if p.is_file()) == ["python_LossesAndAccuracies.hdf5"]
     _, metadata = load_model(result.model_path)  # the checkpoint's generated parameter text loads back
     assert tomllib.loads(metadata["hyperparams_text"]) == hyperparams
+
+
+def test_loading_workers_match_main_process(tmp_path):
+    """Loading the data in worker processes only reads and transforms samples, in the order the main process shuffles
+    them: the first epoch matches loading in the main process exactly, and any number of workers trains the same
+    network. (Later epochs differ slightly from num_workers=0, which starts a new DataLoader iterator, drawing a seed
+    from the global RNG, every epoch; persistent workers draw it once, so the shuffles and dropout that follow differ.)"""
+    with open(CONFIG_DIR / "hyperparams_resblock.toml", "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": "fc"}
+    galaxy = {GALAXY: SNAPSHOT}
+    datasets = {
+        "target": TARGET,
+        "augment": "major_axis",  # 4 samples, so the training set is shuffled across 2 batches
+        "inclinations": [INCLINATION],
+        "radial_bins": 0,
+        "radial_projection": "sky",
+        "data_dir": IMAGE.parents[2],
+        "training": galaxy,
+        "validation": galaxy,
+        "testing": galaxy,
+    }
+    losses = {}
+    for num_workers in (0, 1, 3):
+        result = train(
+            hyperparams,
+            datasets,
+            run_name=f"workers{num_workers}",
+            network_dir=tmp_path / "nets",
+            output_dir=tmp_path / "diag",
+            save_diagnostics=False,
+            batch_size=2,
+            num_workers=num_workers,
+        )
+        losses[num_workers] = np.concatenate(
+            [result.training_losses, result.validation_losses, [result.final_test_loss]]
+        )
+    np.testing.assert_array_equal(losses[3], losses[1])
+    # The first epoch's training and validation losses
+    n_epochs = SMALL_HYPERPARAMS["epochs"]
+    np.testing.assert_array_equal(losses[1][[0, n_epochs]], losses[0][[0, n_epochs]])
+    np.testing.assert_allclose(losses[1], losses[0], rtol=1e-3)

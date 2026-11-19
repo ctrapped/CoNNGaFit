@@ -81,6 +81,13 @@ def parse_args():
         help="Mini-batch size for validation/testing. Default: a reasonable division of the "
         "validation set into ~10 batches (floored at 1).",
     )
+    training.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Worker processes that load and transform data in parallel with training. Default: up to 8 of the "
+        "CPUs allocated to the job when training on a GPU, 0 on the CPU. Pass 0 to load in the main process.",
+    )
     add_logging_arguments(parser)
     return parser.parse_args()
 
@@ -97,6 +104,7 @@ def main():
         save_diagnostics=args.save_diagnostics,
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size,
+        num_workers=args.num_workers,
     )
 
 

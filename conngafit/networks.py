@@ -86,10 +86,11 @@ def model_summary(model, input_shape, depth=3):
     """A table of a network's layers with each one's output shape and parameter count (torchinfo.summary), from one
     forward pass on a blank cube of input_shape (nSpec, nY, nX). For the DDPM, the table is of its denoiser.
     depth sets how many levels of nested layers are listed."""
-    cube = torch.zeros(1, *input_shape)
+    device = next(model.parameters()).device
+    cube = torch.zeros(1, *input_shape, device=device)
     if isinstance(model, GaussianDiffusion):
-        noisy_maps = torch.zeros(1, model.n_maps, *model.output_shape)
-        timestep = torch.zeros(1, dtype=torch.long)
+        noisy_maps = torch.zeros(1, model.n_maps, *model.output_shape, device=device)
+        timestep = torch.zeros(1, dtype=torch.long, device=device)
         return torchinfo.summary(
             model.denoiser, input_data=[cube, noisy_maps, timestep], depth=depth, mode="eval", verbose=0
         )
