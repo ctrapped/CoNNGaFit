@@ -6,6 +6,7 @@
    ResBlock2d                                 - ConvMapHead and unet3d_ddpm's MapHead
    ConvMapHead                                - head='conv' option of both regression networks
    HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
+   SpectralEncoder                            - datacube -> per-pixel features for spectral_unet2d.py
 Plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
 """
 
@@ -743,3 +744,43 @@ class HalfResConvHead(nn.Module):
         if self.out_logvar is not None:
             outputs.append(self.out_logvar(x))
         return [F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False) for o in outputs]
+
+
+#### Spectral encoder: datacube -> per-pixel features ####
+class SpectralEncoder(nn.Module):
+    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> GroupNorm ->
+    activation, each halving the spectral axis (to ceil(S/2)) and keeping X and Y, then a SpectralAttentionPool that
+    collapses what is left of the spectral axis. Each layer doubles the channels.
+
+    Parameters:
+        channels: channels of the first layer.
+        n_layers: number of conv layers.
+        kernel_size: 3-tuple (spectral, x, y) kernel of every conv.
+        activation: zero-arg callable returning an nn.Module.
+        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+    """
+
+    def __init__(self, channels, n_layers, kernel_size, activation=nn.SiLU, max_groups=8):
+        super().__init__()
+        stride = (2, 1, 1)
+        self.pad = _ceil_conv_pad(kernel_size, stride)  # ceil(S/2) along the spectrum, X and Y unchanged
+        self.layers = nn.ModuleList()
+        layer_in = 1  # One intensity per voxel
+        for i in range(n_layers):
+            layer_out = channels * 2**i
+            self.layers.append(
+                nn.Sequential(
+                    nn.Conv3d(layer_in, layer_out, kernel_size=kernel_size, stride=stride),
+                    nn.GroupNorm(math.gcd(layer_out, max_groups), layer_out),
+                    activation(),
+                )
+            )
+            layer_in = layer_out
+        self.out_channels = layer_in
+        self.pool = SpectralAttentionPool(self.out_channels)
+
+    def forward(self, x):
+        """x: (nBatch, 1, S, X, Y) -> (nBatch, out_channels, X, Y)."""
+        for layer in self.layers:
+            x = layer(F.pad(x, self.pad))
+        return self.pool(x)
