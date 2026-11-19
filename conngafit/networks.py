@@ -29,7 +29,15 @@ HYPERPARAM_KEYS = {
     "resblock": SHARED_KEYS | {"dropout_rate", "output_head", "predict_variance"},
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
-OPTIONAL_HYPERPARAM_KEYS = {"resblock": {"n_fc", "mass_weight_power", "optimizer"}, "ddpm": {"optimizer"}}
+OPTIONAL_HYPERPARAM_KEYS = {
+    "resblock": {"n_fc", "mass_weight_power", "optimizer", "block_architecture", "attention_stages"},
+    "ddpm": {"optimizer", "time_encoding_dim", "block_architecture", "attention_stages"},
+}
+# Optional keys passed straight to each network's constructor; any left out take its defaults
+NETWORK_KEYS = {
+    "resblock": ("n_fc", "block_architecture", "attention_stages"),
+    "ddpm": ("time_encoding_dim", "block_architecture", "attention_stages"),
+}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
@@ -37,8 +45,8 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
     or a radial curve of output_shape (n_bins,) (resblock only), for each of n_maps targets."""
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
+    network_kwargs = {key: hyperparams[key] for key in NETWORK_KEYS[network] if key in hyperparams}
     if network == "resblock":
-        fc_width = {"n_fc": hyperparams["n_fc"]} if "n_fc" in hyperparams else {}  # Otherwise the network's default
         return NeuralNetwork(
             input_shape,
             hyperparams["n_filt0"],
@@ -50,7 +58,7 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
             output_shape=output_shape,
             predict_variance=hyperparams["predict_variance"],
             n_maps=n_maps,
-            **fc_width,
+            **network_kwargs,
         )
 
     if output_shape is not None:
@@ -64,6 +72,7 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
         kernel_coder,
         block_dropout_rate=hyperparams["block_dropout_rate"],
         n_maps=n_maps,
+        **network_kwargs,
     )
     return GaussianDiffusion(
         denoiser,
