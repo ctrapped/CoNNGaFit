@@ -170,19 +170,14 @@ class Stem(nn.Module):
 
 
 #### Input-shape checks ####
-def stem_out_shape(input_shape):
-    """(nSpec, nX, nY) shape after the Stem: a stride-2 conv then a stride-2 maxpool, each
-    exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4)."""
-    return tuple(math.ceil(n / 4) for n in input_shape)
-
-
-def check_stage_compatibility(input_shape, n_stages):
+def check_stage_compatibility(input_shape, n_stages, stem_reduction=4):
     """The encoder has n_stages stages: the first keeps its shape, each later one downsamples every axis to
-    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem. If not, raise a ValueError
-    naming the smallest axis and the largest n_stages it allows."""
-    stem_shape = stem_out_shape(input_shape)
+    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem, which divides every axis by
+    stem_reduction (4 for the Stem, 1 for a 2-d map with no stem). input_shape is (nSpec, nX, nY), or (nX, nY) for
+    a map. If not, raise a ValueError naming the smallest axis and the largest n_stages it allows."""
+    stem_shape = tuple(math.ceil(n / stem_reduction) for n in input_shape)
     n_halvings = n_stages - 1  # Encoder stage 0 keeps its input shape; each later stage halves every axis
-    names = ("spectral", "x", "y")
+    names = ("spectral", "x", "y")[-len(input_shape) :]
     max_halvings = []
     for n in stem_shape:
         count = 0  # ceil-halvings this axis can take before reaching 1
