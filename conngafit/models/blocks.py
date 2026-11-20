@@ -6,6 +6,7 @@
    ResBlock2d                                 - ConvMapHead and unet3d_ddpm's MapHead
    ConvMapHead                                - head='conv' option of both regression networks
    HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
+   SpectralEncoder                            - datacube -> per-pixel features for spectral_unet2d.py
 Plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
 """
 
@@ -170,19 +171,14 @@ class Stem(nn.Module):
 
 
 #### Input-shape checks ####
-def stem_out_shape(input_shape):
-    """(nSpec, nX, nY) shape after the Stem: a stride-2 conv then a stride-2 maxpool, each
-    exactly halving (ceil(N/2)) via _ceil_conv_pad, so every axis ends at exactly ceil(N/4)."""
-    return tuple(math.ceil(n / 4) for n in input_shape)
-
-
-def check_stage_compatibility(input_shape, n_stages):
+def check_stage_compatibility(input_shape, n_stages, stem_reduction=4):
     """The encoder has n_stages stages: the first keeps its shape, each later one downsamples every axis to
-    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem. If not, raise a ValueError
-    naming the smallest axis and the largest n_stages it allows."""
-    stem_shape = stem_out_shape(input_shape)
+    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem, which divides every axis by
+    stem_reduction (4 for the Stem, 1 for a 2-d map with no stem). input_shape is (nSpec, nX, nY), or (nX, nY) for
+    a map. If not, raise a ValueError naming the smallest axis and the largest n_stages it allows."""
+    stem_shape = tuple(math.ceil(n / stem_reduction) for n in input_shape)
     n_halvings = n_stages - 1  # Encoder stage 0 keeps its input shape; each later stage halves every axis
-    names = ("spectral", "x", "y")
+    names = ("spectral", "x", "y")[-len(input_shape) :]
     max_halvings = []
     for n in stem_shape:
         count = 0  # ceil-halvings this axis can take before reaching 1
@@ -224,8 +220,8 @@ class ResidualBlock(nn.Module):
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after the first norm. None disables time conditioning.
-        max_groups: Used with GroupNorm for FiLM blocks. Sets the maximum number of groups for the GroupNorm3D
-            layers.
+        max_groups: upper bound on GroupNorm groups, used only with time_embed_dim; without time conditioning
+            the block uses BatchNorm.
         architecture: 'post_activation' or 'identity_skip', as described above.
     """
 
@@ -392,12 +388,14 @@ class DeconvBlock(nn.Module):
         kernel1,
         dropout_rate=0.0,
         activation=nn.ReLU,
-        max_groups=None,
+        max_groups=8,
         time_embed_dim=None,
         architecture="post_activation",
     ):
         super().__init__()
         # Shared by every architecture
+        if time_embed_dim is None:
+            max_groups = None
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
         self.convtran1 = nn.ConvTranspose3d(
             in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
@@ -748,3 +746,43 @@ class HalfResConvHead(nn.Module):
         if self.out_logvar is not None:
             outputs.append(self.out_logvar(x))
         return [F.interpolate(o, size=tuple(map_shape), mode="bilinear", align_corners=False) for o in outputs]
+
+
+#### Spectral encoder: datacube -> per-pixel features ####
+class SpectralEncoder(nn.Module):
+    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> GroupNorm ->
+    activation, each halving the spectral axis (to ceil(S/2)) and keeping X and Y, then a SpectralAttentionPool that
+    collapses what is left of the spectral axis. Each layer doubles the channels.
+
+    Parameters:
+        channels: channels of the first layer.
+        n_layers: number of conv layers.
+        kernel_size: 3-tuple (spectral, x, y) kernel of every conv.
+        activation: zero-arg callable returning an nn.Module.
+        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+    """
+
+    def __init__(self, channels, n_layers, kernel_size, activation=nn.SiLU, max_groups=8):
+        super().__init__()
+        stride = (2, 1, 1)
+        self.pad = _ceil_conv_pad(kernel_size, stride)  # ceil(S/2) along the spectrum, X and Y unchanged
+        self.layers = nn.ModuleList()
+        layer_in = 1  # One intensity per voxel
+        for i in range(n_layers):
+            layer_out = channels * 2**i
+            self.layers.append(
+                nn.Sequential(
+                    nn.Conv3d(layer_in, layer_out, kernel_size=kernel_size, stride=stride),
+                    nn.GroupNorm(math.gcd(layer_out, max_groups), layer_out),
+                    activation(),
+                )
+            )
+            layer_in = layer_out
+        self.out_channels = layer_in
+        self.pool = SpectralAttentionPool(self.out_channels)
+
+    def forward(self, x):
+        """x: (nBatch, 1, S, X, Y) -> (nBatch, out_channels, X, Y)."""
+        for layer in self.layers:
+            x = layer(F.pad(x, self.pad))
+        return self.pool(x)
