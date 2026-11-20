@@ -342,11 +342,9 @@ def train_loop(
 def evaluate(
     model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None, fixed_draws=None
 ):
-    """Evaluate the model on the validation or test set (no gradient updates) and compute an "accuracy": the
-    percentage of values (pixels or rings) whose predicted 1-sigma interval includes their label, if the model gives
-    an uncertainty (predict_variance, or the ddpm's posterior spread), otherwise the percentage within
-    accuracy_tolerance of their label. With an uncertainty, the log line also gives the percentage within 3-sigma.
-    name ("Validation" or "Test") labels the log line.
+    """Evaluate the model on the validation or test set (no gradient updates). Accuracy is computed as the percentage
+    of values (pixels or rings) whose predicted 1-sigma interval includes their label, or the percentage
+    within accuracy_tolerance of their label if no variance predicted.
 
     predict: also predict each batch, to score the MSE of the predicted mean and the accuracy (made every
         predict_every epochs and on the final epoch).
