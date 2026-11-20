@@ -200,11 +200,11 @@ def test_snapshots_during_training(tmp_path):
         network_dir=tmp_path / "nets",
         output_dir=tmp_path / "diag",
         save_diagnostics=False,
-        snapshot_every=2,
-        snapshot_examples=2,
+        compare_every=2,
+        compare_examples=2,
     )
     saved = sorted(p.name for p in (tmp_path / "diag" / "images").iterdir())
-    # Only epoch 2 (index 1) of 3 is a snapshot epoch: an hdf5 and a png of each of the 2 examples of each set
+    # Only epoch 2 (index 1) of 3 is a compare epoch: an hdf5 and a png of each of the 2 examples of each set
     assert all(name.endswith(("_Epoch1.hdf5", "_Epoch1.png")) for name in saved)
     for split in ("training", "validation"):
         assert len([name for name in saved if name.startswith(f"snap_{split}_")]) == 4, split
