@@ -273,7 +273,7 @@ def save_batch_outputs(
         saved.append((np_pred, np_y))
 
 
-def snapshot_samples(dataset, n_examples):
+def comparison_samples(dataset, n_examples):
     """The dataset indices of n_examples images spread evenly through dataset, each unaugmented (a file's first
     sample is its unrotated, unflipped copy), for the snapshots made every snapshot_every epochs."""
     n_files, n_augmentations = len(dataset.img_paths), len(dataset.augmentations)
@@ -581,8 +581,8 @@ def train(
     batch_size=None,
     test_batch_size=None,
     num_workers=None,
-    snapshot_every=0,
-    snapshot_examples=4,
+    compare_every=0,
+    compare_examples=4,
 ):
     """Train the network hyperparams["network"] on datasets, and return a TrainingResult.
 
@@ -599,11 +599,8 @@ def train(
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     num_workers: data loading worker processes. 0 loads every batch in the main process.
         Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
-    snapshot_every: every this many epochs, save an hdf5 snapshot and a comparison image of snapshot_examples
-        training images and snapshot_examples validation images (the same ones every time, spread evenly through each
-        set and unaugmented), to watch them improve over training. The training snapshots are predicted by the EMA
-        weights right after their batch's step, as the training MSE is. Saved in <output_dir>/images whether or not
-        save_diagnostics is set. 0 saves none.
+    snapshot_every: every this many epochs, save a comparison image (+ .hdf5) of compare_examples
+        training images and validation images. Saved in <output_dir>/images. 0 saves none.
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)
@@ -640,7 +637,7 @@ def train(
 
     # Output directories
     os.makedirs(network_dir, exist_ok=True)
-    if save_diagnostics or snapshot_every > 0:
+    if save_diagnostics or compare_every > 0:
         os.makedirs(os.path.join(output_dir, "images"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "diagnostics"), exist_ok=True)
 
@@ -752,8 +749,8 @@ def train(
             start += n
 
     # The training and validation images snapshotted every snapshot_every epochs
-    training_snapshots = snapshot_samples(training_data, snapshot_examples)
-    validation_snapshots = snapshot_samples(validation_data, snapshot_examples)
+    training_running_comparisons = comparison_samples(training_data, compare_examples)
+    validation_running_comparisons = comparison_samples(validation_data, compare_examples)
 
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
@@ -767,9 +764,9 @@ def train(
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
         final = t == epochs - 1
-        snapshot = snapshot_every > 0 and (t + 1) % snapshot_every == 0
+        make_comp_plot = compare_every > 0 and (t + 1) % compare_every == 0
         # The ddpm doesn't predict every epoch: sampling is slow. Snapshots need the epoch's predictions
-        predict = final or snapshot or (t + 1) % predict_every == 0
+        predict = final or make_comp_plot or (t + 1) % predict_every == 0
         save_training = save_validation = None
         validation_outputs = []  # The final epoch's validation predictions and labels, for the correlation plots
         if final and save_diagnostics:  # Save every sample's prediction/label snapshot of the final epoch
@@ -789,13 +786,13 @@ def train(
                 saved=validation_outputs,
                 **output_settings,
             )
-        elif snapshot:  # Save only the snapshot images (the final epoch's full save above already includes them)
+        elif make_comp_plot:  # Save only the snapshot images (the final epoch's full save above already includes them)
             save_training = partial(
                 save_batch_outputs,
                 dataset=training_data,
                 image_output=image_output_training,
                 epoch=t,
-                dataset_indices=training_snapshots,
+                dataset_indices=training_running_comparisons,
                 **output_settings,
             )
             save_validation = partial(
@@ -803,7 +800,7 @@ def train(
                 dataset=validation_data,
                 image_output=image_output_validation,
                 epoch=t,
-                dataset_indices=validation_snapshots,
+                dataset_indices=validation_running_comparisons,
                 **output_settings,
             )
         training_losses[t], training_mses[t] = train_loop(
