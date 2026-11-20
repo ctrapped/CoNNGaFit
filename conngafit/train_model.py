@@ -274,8 +274,7 @@ def save_batch_outputs(
 
 
 def comparison_samples(dataset, n_examples):
-    """The dataset indices of n_examples images spread evenly through dataset, each unaugmented (a file's first
-    sample is its unrotated, unflipped copy), for the snapshots made every snapshot_every epochs."""
+    """The dataset indices of n_examples images spread evenly through dataset, each unaugmented (such as no copies with rotations and flips), for the snapshots made every snapshot_every epochs."""
     n_files, n_augmentations = len(dataset.img_paths), len(dataset.augmentations)
     files = np.linspace(0, n_files - 1, min(n_examples, n_files)).astype(int)
     return set((files * n_augmentations).tolist())
@@ -595,8 +594,9 @@ def train(
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     num_workers: data loading worker processes. 0 loads every batch in the main process.
         Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
-    snapshot_every: every this many epochs, save a comparison image (+ .hdf5) of compare_examples
-        training images and validation images. Saved in <output_dir>/images. 0 saves none.
+    compare_every: every this many epochs, save X training and validation comparison
+    images (+ .hdf5) where X is compare_examples. Saved in <output_dir>/images. 0 saves none.
+    compare_examples: how many training and validation comparison images to save every compare_every epochs. 0 saves none.
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)

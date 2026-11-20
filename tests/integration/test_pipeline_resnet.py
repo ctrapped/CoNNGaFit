@@ -177,8 +177,8 @@ def test_train_from_python(tmp_path):
 
 
 def test_snapshots_during_training(tmp_path):
-    """snapshot_every saves a comparison image and hdf5 of a few training and validation images every snapshot_every epochs, even
-    with save_diagnostics=False, for radial curves as for maps."""
+    """snapshot_every saves a comparison image and hdf5 of a few training and validation images every snapshot_every epochs
+    for radial curves as for maps."""
     with open(CONFIG_DIR / "hyperparams_resblock_rc.toml", "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": "fc", "epochs": 3, "predict_every": 3}
     galaxy = {GALAXY: SNAPSHOT}
