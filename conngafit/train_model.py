@@ -226,7 +226,7 @@ def save_batch_outputs(
     radial_bins,
     comp_images=True,
     saved=None,
-    only=None,
+    dataset_indices=None,
 ):
     """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and, with comp_images, a
     comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
@@ -236,7 +236,7 @@ def save_batch_outputs(
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
         plotting.save_correlation_plots.
-    only: if given, save only the samples with these dataset indices.
+    dataset_indices: if given, save only the samples with these dataset indices.
     """
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
@@ -249,7 +249,7 @@ def save_batch_outputs(
         param_label, unit_label, bin_op = TARGET_SETTINGS[target]
         target_sigma = None if np_sigma is None else np_sigma[:, m]
         for tt in range(len(idx)):
-            if only is not None and int(idx[tt]) not in only:
+            if dataset_indices is not None and int(idx[tt]) not in dataset_indices:
                 continue
             output_name = f"{image_output}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
             if comp_images:
@@ -795,7 +795,7 @@ def train(
                 dataset=training_data,
                 image_output=image_output_training,
                 epoch=t,
-                only=training_snapshots,
+                dataset_indices=training_snapshots,
                 **output_settings,
             )
             save_validation = partial(
@@ -803,7 +803,7 @@ def train(
                 dataset=validation_data,
                 image_output=image_output_validation,
                 epoch=t,
-                only=validation_snapshots,
+                dataset_indices=validation_snapshots,
                 **output_settings,
             )
         training_losses[t], training_mses[t] = train_loop(
