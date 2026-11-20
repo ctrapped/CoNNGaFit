@@ -55,9 +55,9 @@ HYPERPARAMS = {
     "mass_weight_power": 0,  # Weight each value's loss by mass to this power; 0 is unweighted
     "learning_rate": 1e-3,
     "weight_decay": 1e-3,
-    "ema_decay": 0,  # Evaluate and save the raw weights, not an exponential moving average of them
+    "ema_decay": 0.99,  # Exponential moving average (EMA) of the weights for evaluation; 0 is no EMA
     "max_grad_norm": 0,  # No gradient clipping
-    "epochs": 200,
+    "epochs": 50,
     "predict_every": 1,  # Score the training and validation predictions every epoch
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
     "block_architecture": "post_activation",  # Optional: residual block layout. "post_activation" (default) or "identity_skip". See blocks.ResidualBlock.
@@ -85,7 +85,11 @@ DATASETS = {
 }
 
 # --predict map: changes to steps 1 and 2 to predict the rotational velocity map
-MAP_HYPERPARAMS = {"output_head": "conv", "mass_weight_power": 1}  # change output head and add mass weighting
+MAP_HYPERPARAMS = {
+    "output_head": "conv",
+    "mass_weight_power": 1,
+    "epochs": 200,
+}  # change output head and add mass weighting
 MAP_DATASETS = {"radial_bins": 0}  # predict a map
 
 
@@ -97,7 +101,7 @@ def main():
         default="curve",
         help="Train on the rotation curve, or on the velocity map binned into it (map). Default: %(default)s",
     )
-    parser.add_argument("--epochs", type=int, default=HYPERPARAMS["epochs"], help="Default: %(default)s")
+    parser.add_argument("--epochs", type=int, default=None, help="Default: %(default)s")
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "examples" / "demo_output")
     parser.add_argument(
         "--diagnostics",
@@ -109,13 +113,15 @@ def main():
     output = args.output.resolve()
 
     # Steps 1 and 2, set hyperparameters and datasets to be used
-    hyperparams = {**HYPERPARAMS, "epochs": args.epochs}
+    hyperparams = {**HYPERPARAMS}
     datasets = dict(DATASETS)
     run_name = RUN_NAME
     if args.predict == "map":
         hyperparams.update(MAP_HYPERPARAMS)
         datasets.update(MAP_DATASETS)
         run_name = f"{RUN_NAME}_map"
+    if args.epochs is not None:
+        hyperparams["epochs"] = args.epochs
 
     #### Step 3: train ####
     # Saves the network to OUTPUT/NetworkWeights/<run_name>.pt and .hdf5, and its loss history to

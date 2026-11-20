@@ -9,6 +9,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
 
 from conngafit.datasets import TARGET_SETTINGS, ring_radii
+from conngafit.plotting import set_history_limits
 from demo_utils import COLUMN_DENSITY_LIMITS, DETECTION, LOS_VELOCITY_LIMITS, MAP_PANELS, SNR_LIMITS, moment_maps
 
 # The training objective's title, axis label and scale, for networks trained with predict_variance: the Gaussian NLL
@@ -102,6 +103,9 @@ def plot_inputs(axes, column_density, velocity, extent, column_density_limits, v
     )
 
 
+ms = 3  # Maker size for the predicted points
+
+
 def plot_curves(ax_curve, ax_residual, radii, true_curves, curves, sigmas, position_angles):
     """The true and predicted rotation curves at radii (kpc) on ax_curve, and their residuals on ax_residual, each
     with its predicted ±1-sigma band; true_curves, curves and sigmas are (n_images, n_rings), for images seen at
@@ -109,11 +113,11 @@ def plot_curves(ax_curve, ax_residual, radii, true_curves, curves, sigmas, posit
     for i, position_angle in enumerate(position_angles):
         residual = curves[i] - true_curves[i]
         ax_curve.plot(radii, true_curves[i], "k", lw=2, label="True" if i == 0 else None)
-        (line,) = ax_curve.plot(radii, curves[i], "--", marker="o", ms=3, label=f"Predicted, PA {position_angle:g}°")
+        (line,) = ax_curve.plot(radii, curves[i], "--", marker="o", ms=ms, label=f"Predicted, PA {position_angle:g}°")
         color = line.get_color()
         ax_curve.fill_between(radii, curves[i] - sigmas[i], curves[i] + sigmas[i], color=color, alpha=0.15, lw=0)
         # The same bands around each residual: a ring is within its 1-sigma where its band crosses zero
-        ax_residual.plot(radii, residual, "--", marker="o", ms=3, color=color, label=f"PA {position_angle:g}°")
+        ax_residual.plot(radii, residual, "--", marker="o", ms=ms, color=color, label=f"PA {position_angle:g}°")
         ax_residual.fill_between(radii, residual - sigmas[i], residual + sigmas[i], color=color, alpha=0.15, lw=0)
     ax_curve.set(xlabel="Radius [kpc]", ylabel="Rotational velocity [km/s]", title="Test galaxy's rotation curve")
     ax_curve.set_ylim(bottom=0)
@@ -127,12 +131,14 @@ def plot_curves(ax_curve, ax_residual, radii, true_curves, curves, sigmas, posit
 
 def plot_history(ax, training, validation, title, ylabel, yscale):
     """A training and validation history, one value per epoch, on ax; epochs where it is NaN (not evaluated) are
-    skipped."""
+    skipped. The y axis is limited to the typical values, so a large first epoch or a spike doesn't flatten the curve
+    (see conngafit.plotting.set_history_limits)."""
     epochs = np.arange(1, len(training) + 1)
     evaluated = np.isfinite(training)
-    ax.plot(epochs[evaluated], training[evaluated], marker="o", label="Training")
-    ax.plot(epochs[evaluated], validation[evaluated], marker="o", label="Validation")
-    ax.set(xlabel="Epoch", ylabel=ylabel, yscale=yscale, title=title)
+    ax.plot(epochs[evaluated], training[evaluated], marker="o", ms=ms, label="Training")
+    ax.plot(epochs[evaluated], validation[evaluated], marker="o", ms=ms, label="Validation")
+    set_history_limits(ax, training[evaluated], validation[evaluated], yscale=yscale)
+    ax.set(xlabel="Epoch", ylabel=ylabel, title=title)
     ax.legend()
 
 
