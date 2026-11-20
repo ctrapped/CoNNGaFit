@@ -88,6 +88,19 @@ def parse_args():
         help="Worker processes that load and transform data in parallel with training. Default: up to 8 of the "
         "CPUs allocated to the job when training on a GPU, 0 on the CPU. Pass 0 to load in the main process.",
     )
+    training.add_argument(
+        "--compare-every",
+        type=int,
+        default=0,
+        help="Every this many epochs, save the predictions and comparison images of a few training and validation "
+        "images (the same ones every time) to OUTPUT_DIR/images. Default: 0, none.",
+    )
+    training.add_argument(
+        "--compare-examples",
+        type=int,
+        default=4,
+        help="Number of images in each --compare-every epochs, spread evenly through the image set. Default: %(default)s",
+    )
     add_logging_arguments(parser)
     return parser.parse_args()
 
@@ -105,6 +118,8 @@ def main():
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size,
         num_workers=args.num_workers,
+        compare_every=args.compare_every,
+        compare_examples=args.compare_examples,
     )
 
 

@@ -359,16 +359,17 @@ def save_correlation_plots(saved, targets, output_base, epoch):
         make_correlation_plot(all_pred[:, m], all_y[:, m], f"{output_base}_{target}_Epoch{epoch}")
 
 
-def set_history_limits(ax, *histories, n_iqr=3, pad=0.05):
-    """Set ax's y scale and limits for per-epoch histories: a log axis unless some value isn't positive (the Gaussian
-    NLL can be negative), limited to the typical values, so a large first epoch or a spike doesn't flatten the rest
-    of the curve. Values more than n_iqr interquartile ranges beyond the quartiles (on the log axis, in log10) are left
-    off the axis and counted in a note. NaNs (unscored epochs) are ignored."""
+def set_history_limits(ax, *histories, yscale=None, n_iqr=3, pad=0.05):
+    """Set ax's y scale and limits for per-epoch histories: yscale ("log" or "linear"), or by default a log axis
+    unless some value isn't positive (the Gaussian NLL can be negative; "log" also falls back to linear then),
+    limited to the typical values, so a large first epoch or a spike doesn't flatten the rest of the curve. Values
+    more than n_iqr interquartile ranges beyond the quartiles (on the log axis, in log10) are left off the axis and
+    counted in a note. NaNs (unscored epochs) are ignored."""
     values = np.concatenate([np.asarray(h, dtype=float).ravel() for h in histories])
     values = values[np.isfinite(values)]
     if values.size == 0:
         return
-    log = bool(np.all(values > 0))
+    log = bool(np.all(values > 0)) and yscale != "linear"
     ax.set_yscale("log" if log else "linear")
     scaled = np.log10(values) if log else values
     q25, q75 = np.percentile(scaled, [25, 75])
@@ -398,10 +399,10 @@ def plot_loss(losses, title, ylabel, output):
     plt.close()
 
 
-def plot_history(output, result, validation_names, loss_label, accuracy_tolerance):
+def plot_history(output, result, validation_names, loss_label, accuracy_label):
     """Plot a run's training and validation losses (loss_label names the training objective), its validation
     accuracy, and each validation sample's accuracy, to output + "_trainingLoss.png" and so on. result is
-    train_model.train's TrainingResult; accuracy_tolerance is the accuracy's tolerance, in label standard deviations."""
+    train_model.train's TrainingResult; accuracy_label says what counts as accurate (e.g. "within 0.1 label std. dev.")."""
     plot_loss(result.training_losses, "Training Loss", loss_label, output + "_trainingLoss.png")
     plot_loss(result.validation_losses, "Validation Loss", loss_label, output + "_validationLoss.png")
 
@@ -411,7 +412,7 @@ def plot_history(output, result, validation_names, loss_label, accuracy_toleranc
 
     plt.figure()
     plt.plot(epoch_numbers[predicted], result.validation_accuracies[predicted], marker="o", ms=3)
-    plt.title(f"Validation Accuracy (within {accuracy_tolerance:g} label std. dev.)")
+    plt.title(f"Validation Accuracy ({accuracy_label})")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy [%]")
     plt.ylim([0, 101])

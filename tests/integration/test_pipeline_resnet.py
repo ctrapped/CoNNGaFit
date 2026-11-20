@@ -176,6 +176,40 @@ def test_train_from_python(tmp_path):
     assert tomllib.loads(metadata["hyperparams_text"]) == hyperparams
 
 
+def test_snapshots_during_training(tmp_path):
+    """snapshot_every saves a comparison image and hdf5 of a few training and validation images every snapshot_every epochs
+    for radial curves as for maps."""
+    with open(CONFIG_DIR / "hyperparams_resblock_rc.toml", "rb") as f:
+        hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS, "output_head": "fc", "epochs": 3, "predict_every": 3}
+    galaxy = {GALAXY: SNAPSHOT}
+    datasets = {
+        "target": TARGET,
+        "augment": "none",
+        "inclinations": [INCLINATION],
+        "radial_bins": RADIAL_BINS,
+        "radial_projection": "sky",
+        "data_dir": IMAGE.parents[2],
+        "training": galaxy,
+        "validation": galaxy,
+        "testing": galaxy,
+    }
+    train(
+        hyperparams,
+        datasets,
+        run_name="snap",
+        network_dir=tmp_path / "nets",
+        output_dir=tmp_path / "diag",
+        save_diagnostics=False,
+        compare_every=2,
+        compare_examples=2,
+    )
+    saved = sorted(p.name for p in (tmp_path / "diag" / "images").iterdir())
+    # Only epoch 2 (index 1) of 3 is a compare epoch: an hdf5 and a png of each of the 2 examples of each set
+    assert all(name.endswith(("_Epoch1.hdf5", "_Epoch1.png")) for name in saved)
+    for split in ("training", "validation"):
+        assert len([name for name in saved if name.startswith(f"snap_{split}_")]) == 4, split
+
+
 def test_loading_workers_match_main_process(tmp_path):
     """Loading the data in worker processes only reads and transforms samples, in the order the main process shuffles
     them: the first epoch matches loading in the main process exactly, and any number of workers trains the same

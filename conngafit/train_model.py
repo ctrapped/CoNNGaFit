@@ -205,7 +205,8 @@ def predict_batch(model, x, n_samples=None):
 
 def count_accurate(pred, y, tolerance):
     """Return (each sample's accuracy [%], number of accurate values) for a batch of scaled predictions and labels:
-    the values within tolerance of their label."""
+    the values within tolerance of their label. tolerance is a number, or an array (such as each value's predicted
+    1-sigma) that broadcasts against pred."""
     within = np.abs(pred - y) < tolerance
     return within.mean(axis=tuple(range(1, within.ndim))) * 100, within.sum()  # Over each sample's every value
 
@@ -225,6 +226,7 @@ def save_batch_outputs(
     radial_bins,
     comp_images=True,
     saved=None,
+    dataset_indices=None,
 ):
     """Save each sample's map (or curve) of each target in a batch as an hdf5 snapshot (and, with comp_images, a
     comparison image), named after its image via its dataset index (idx), so names stay correct with shuffled
@@ -234,6 +236,7 @@ def save_batch_outputs(
         scaled label units; to_physical and label_scale (see train) convert them back to physical units.
     saved: if given, a list the batch's (predictions, labels) in physical units are appended to, for
         plotting.save_correlation_plots.
+    dataset_indices: if given, save only the samples with these dataset indices.
     """
     np_x = x.cpu().float().detach().numpy()
     np_y = to_physical(y.cpu().float().detach().numpy())
@@ -246,6 +249,8 @@ def save_batch_outputs(
         param_label, unit_label, bin_op = TARGET_SETTINGS[target]
         target_sigma = None if np_sigma is None else np_sigma[:, m]
         for tt in range(len(idx)):
+            if dataset_indices is not None and int(idx[tt]) not in dataset_indices:
+                continue
             output_name = f"{image_output}_{dataset.names[int(idx[tt])]}_{target}_Epoch{epoch}"
             if comp_images:
                 # Radial curves are plotted against the radius of each ring, from the image's field of view
@@ -266,6 +271,13 @@ def save_batch_outputs(
             plotting.save_hdf5(np_y[:, m], np_pred[:, m], output_name + ".hdf5", tt, uncertainty=target_sigma)
     if saved is not None:
         saved.append((np_pred, np_y))
+
+
+def comparison_samples(dataset, n_examples):
+    """The dataset indices of n_examples images spread evenly through dataset, each unaugmented (such as no copies with rotations and flips), for the snapshots made every snapshot_every epochs."""
+    n_files, n_augmentations = len(dataset.img_paths), len(dataset.augmentations)
+    files = np.linspace(0, n_files - 1, min(n_examples, n_files)).astype(int)
+    return set((files * n_augmentations).tolist())
 
 
 def train_loop(
@@ -329,8 +341,10 @@ def train_loop(
 def evaluate(
     model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None, fixed_draws=None
 ):
-    """Evaluate the model on the validation or test set (no gradient updates) and compute a rough "accuracy": the
-    percentage of values within accuracy_tolerance of their label. name ("Validation" or "Test") labels the log line.
+    """Evaluate the model on the validation or test set (no gradient updates). Accuracy is the percentage of values
+    (pixels or rings) within accuracy_tolerance of their label. If the model gives an uncertainty (predict_variance,
+    or the ddpm's posterior spread), the log line also gives the percentage whose predicted 1-sigma interval includes
+    their label.
 
     predict: also predict each batch, to score the MSE of the predicted mean and the accuracy (made every
         predict_every epochs and on the final epoch).
@@ -344,7 +358,9 @@ def evaluate(
     model.eval()
     num_batches = len(dataloader)
     summed_loss, summed_mse, correct = 0, 0, 0
+    correct_1sigma = 0  # Values whose predicted 1-sigma includes their label, with an uncertainty
     total = 0
+    has_sigma = False
     specific_accuracy = np.full(len(dataloader.dataset), np.nan)
 
     with torch.no_grad():
@@ -365,6 +381,9 @@ def evaluate(
             np_y = y.cpu().float().detach().numpy()
 
             specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
+            if sigma is not None:  # Also count the labels within their predicted 1-sigma
+                has_sigma = True
+                correct_1sigma += count_accurate(np_pred, np_y, sigma.cpu().float().detach().numpy())[1]
             correct += n_correct
             total += np.size(np_y)
 
@@ -374,7 +393,17 @@ def evaluate(
     accuracy = correct / total * 100 if total else np.nan
     mean_loss = summed_loss / num_batches
     mse = summed_mse / num_batches if total else np.nan
-    logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
+    if has_sigma:
+        logger.info(
+            "%s: accuracy %.1f%%, within 1-sigma %.1f%%, avg loss %8f, avg MSE %8f",
+            name,
+            accuracy,
+            correct_1sigma / total * 100,
+            mean_loss,
+            mse,
+        )
+    else:
+        logger.info("%s: accuracy %.1f%%, avg loss %8f, avg MSE %8f", name, accuracy, mean_loss, mse)
 
     return mean_loss, mse, accuracy, specific_accuracy
 
@@ -547,6 +576,8 @@ def train(
     batch_size=None,
     test_batch_size=None,
     num_workers=None,
+    compare_every=0,
+    compare_examples=4,
 ):
     """Train the network hyperparams["network"] on datasets, and return a TrainingResult.
 
@@ -563,6 +594,9 @@ def train(
     test_batch_size: validation and testing batch size. Default: about a tenth of the validation set.
     num_workers: data loading worker processes. 0 loads every batch in the main process.
         Defaults to 8 CPUs if available (leaving 1 CPU for the main process)
+    compare_every: every this many epochs, save X training and validation comparison
+    images (+ .hdf5) where X is compare_examples. Saved in <output_dir>/images. 0 saves none.
+    compare_examples: how many training and validation comparison images to save every compare_every epochs. 0 saves none.
     """
     check_hyperparams(hyperparams)
     check_datasets(datasets)
@@ -599,7 +633,7 @@ def train(
 
     # Output directories
     os.makedirs(network_dir, exist_ok=True)
-    if save_diagnostics:
+    if save_diagnostics or compare_every > 0:
         os.makedirs(os.path.join(output_dir, "images"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "diagnostics"), exist_ok=True)
 
@@ -710,6 +744,10 @@ def train(
             validation_draws.append((validation_t[start : start + n], torch.randn(y.shape, device=device)))
             start += n
 
+    # The training and validation images snapshotted every snapshot_every epochs
+    training_running_comparisons = comparison_samples(training_data, compare_examples)
+    validation_running_comparisons = comparison_samples(validation_data, compare_examples)
+
     # Each epoch's losses and accuracies
     training_losses = np.zeros((epochs))
     validation_losses = np.zeros((epochs))
@@ -722,7 +760,9 @@ def train(
     for t in range(epochs):
         logger.info("Epoch %d/%d", t + 1, epochs)
         final = t == epochs - 1
-        predict = final or (t + 1) % predict_every == 0  # The ddpm doesn't predict every epoch: sampling is slow
+        make_comp_plot = compare_every > 0 and (t + 1) % compare_every == 0
+        # The ddpm doesn't predict every epoch: sampling is slow. Snapshots need the epoch's predictions
+        predict = final or make_comp_plot or (t + 1) % predict_every == 0
         save_training = save_validation = None
         validation_outputs = []  # The final epoch's validation predictions and labels, for the correlation plots
         if final and save_diagnostics:  # Save every sample's prediction/label snapshot of the final epoch
@@ -740,6 +780,23 @@ def train(
                 image_output=image_output_validation,
                 epoch=t,
                 saved=validation_outputs,
+                **output_settings,
+            )
+        elif make_comp_plot:  # Save only the snapshot images (the final epoch's full save above already includes them)
+            save_training = partial(
+                save_batch_outputs,
+                dataset=training_data,
+                image_output=image_output_training,
+                epoch=t,
+                dataset_indices=training_running_comparisons,
+                **output_settings,
+            )
+            save_validation = partial(
+                save_batch_outputs,
+                dataset=validation_data,
+                image_output=image_output_validation,
+                epoch=t,
+                dataset_indices=validation_running_comparisons,
                 **output_settings,
             )
         training_losses[t], training_mses[t] = train_loop(
@@ -816,6 +873,7 @@ def train(
         final_test_specific_accuracy=final_test_specific_accuracy,
     )
     if save_diagnostics:
-        plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, ACCURACY_TOLERANCE)
+        accuracy_label = f"within {ACCURACY_TOLERANCE:g} label std. dev."
+        plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, accuracy_label)
     save_history(diagnostic_output, result, training_data.names, validation_data.names, testing_names)
     return result

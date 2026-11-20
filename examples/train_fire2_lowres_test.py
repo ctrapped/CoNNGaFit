@@ -50,7 +50,7 @@ HYPERPARAMS = {
     "learning_rate": 1e-4,
     "weight_decay": 1e-3,
     "ema_decay": 0.99,  # Exponential moving average (EMA) of the weights for evaluation; 0 is no EMA
-    "max_grad_norm": 1,  # gradient clipping
+    "max_grad_norm": 40,  # Clip only gradient spikes: about 2-3x the typical norm (5-20 at this learning rate)
     "epochs": 30,
     "predict_every": 5,  # Score the training and validation predictions every N epochs
     "seed": 0,  # Seeds weight initialization, dropout and batch order, so runs are repeatable
@@ -138,6 +138,13 @@ def main():
         action="store_true",
         help="Also save the training's final-epoch snapshots and diagnostic plots in OUTPUT/DiagnosticOutputs",
     )
+    parser.add_argument(
+        "--compare-every",
+        type=int,
+        default=5,
+        help="Every this many epochs, save comparison images of a few training and validation images to "
+        "OUTPUT/DiagnosticOutputs/images; 0 saves none. Default: %(default)s",
+    )
     args = parser.parse_args()
     configure_logging()  # Show the training's progress
     output = args.output.resolve()
@@ -163,6 +170,8 @@ def main():
         save_diagnostics=args.diagnostics,
         batch_size=32,
         test_batch_size=None,
+        compare_every=args.compare_every,
+        compare_examples=6,  # Training and validation images in each snapshot, the same ones every time
     )
 
     #### Step 4: predict the test galaxy, which the network hasn't seen, and plot ####

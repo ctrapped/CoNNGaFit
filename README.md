@@ -156,7 +156,9 @@ DiagnosticOutputs/
   diagnostics/        loss (the training objective) and accuracy curves, prediction/truth
                       correlation plots, and <run-name>_LossesAndAccuracies.hdf5, which also
                       holds the MSE of the predicted mean; accuracy and MSE are NaN on epochs
-                      between predict_every
+                      between predict_every. The accuracy is the % of pixels (or rings) within
+                      0.1 label standard deviations of the label; with predict_variance or the
+                      DDPM, the training log also gives the % whose predicted 1σ includes it
 ```
 
 Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun km/s).

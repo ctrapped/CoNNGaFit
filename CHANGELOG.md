@@ -25,6 +25,11 @@ All notable changes to this project are documented here. The format follows
   samples in worker processes while the GPU trains, into pinned memory copied without blocking. Defaults to up to
   8 of the job's CPUs on a GPU, 0 (the main process) on a CPU. Any number of workers trains the same network,
   which matches `num_workers=0` in the first epoch and differs slightly after (see the test).
+- With predict_variance (or the DDPM), the validation and test log lines also give the percentage of pixels or
+  rings whose predicted 1σ includes the label, alongside the accuracy (within 0.1 label standard deviations).
+- Snapshots during training: `train(every=N, compare_examples=4)` / `train_model_unet.py
+  --compare-every N` save the hdf5 prediction and comparison image (map or radial curve) of a fixed handful of
+  training and validation images every N epochs, to watch them improve. Off by default.
 - `use_model.predict(..., return_samples=True)` yields the DDPM's joint posterior samples in physical units.
 - pytest suite for the network modules: shared blocks, both regression networks
   (fc and conv heads), and the DDPM denoiser and diffusion process.
