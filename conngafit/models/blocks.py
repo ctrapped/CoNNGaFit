@@ -209,8 +209,9 @@ class ResidualBlock(nn.Module):
       - 'identity_skip': conv1 -> norm -> [FiLM(t)] -> activation -> dropout -> conv2 -> norm -> + skip.
         Initialize second norm's weight to zero (i.e. block starts at identity) for easy initial training.
 
-    When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
-    to ceil(N/2) and the skip is projected through a strided 1x1 conv + norm to match.
+    When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis to ceil(N/2). When
+    downsampling or changing the channel count, the skip is projected through a 1x1 conv + norm to match
+    (strided when downsampling); otherwise it is the identity.
 
     n_dims sets 3-d (cubes) or 2-d (maps) layers; the input then has n_dims axes after the channels.
 
@@ -220,7 +221,7 @@ class ResidualBlock(nn.Module):
 
     Parameters:
         in_channels, out_channels: channel counts of the block's input and output.
-        downsample: if True, halve every axis (ceil(N/2)) and use a projected skip.
+        downsample: if True, halve every axis (ceil(N/2)).
         kernel1: n_dims-tuple conv kernel size (used by conv1 and conv2).
         n_dims: 3 for Conv3d layers on cubes, 2 for Conv2d layers on maps.
         dropout_rate: probability for the channel-wise dropout (0.0 disables it).
@@ -264,13 +265,16 @@ class ResidualBlock(nn.Module):
             stride = (2,) * n_dims
             self.down_pad = _ceil_conv_pad(kernel1, stride)
             self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
+        else:
+            stride = 1
+            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, padding="same")
+        if downsample or in_channels != out_channels:
             # a stride-2 1x1 conv already yields ceil(N/2), so the skip needs no padding.
             self.shortcut = nn.Sequential(
                 conv(in_channels, out_channels, kernel_size=1, stride=stride),
                 _norm(out_channels, max_groups, n_dims),
             )
         else:
-            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, padding="same")
             self.shortcut = nn.Sequential()
         # conv2 keeps the shape fixed
         self.conv2 = conv(out_channels, out_channels, kernel_size=kernel1, padding="same")
