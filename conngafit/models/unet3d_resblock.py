@@ -12,14 +12,13 @@ from conngafit.models.blocks import (
     ConvMapHead,
     DeconvBlock,
     HalfResConvHead,
-    ResidualBlock,
-    SelfAttention3d,
     Stem,
     Upsample,
     _match_spatial,
     check_stage_compatibility,
 )
 from conngafit.models.diagnostics import save_summed_spectral_channels
+from conngafit.models.unet import UNet3d
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +32,14 @@ class NeuralNetwork(nn.Module):
     Architecture:
       - Stem (blocks.Stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing
         every axis to exactly ceil(N/4).
-      - Encoder: `n_stages` stages of two ResidualBlocks each. Stage 0 keeps the stem's
+      - U-Net (unet.UNet3d), with BatchNorm in every block:
+        Encoder: `n_stages` stages of two ResidualBlocks each. Stage 0 keeps the stem's
         shape and channel count; every later stage brings each axis to ceil(N/2) and
         doubles the channel count (n_filt0 * 2**i at stage i).
-      - Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
+        Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
         `upsample_mode`), realigns the result to the matching encoder skip map with _match_spatial,
         concatenates channel-wise, then a DeconvBlock pair halves the channel count.
-      - Attention: SelfAttention3d after the residual blocks of every stage in `attention_stages`, in the
+        Attention: SelfAttention3d after the residual blocks of every stage in `attention_stages`, in the
         encoder and in the decoder stage at the same resolution.
       - Head, chosen by `head`:
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
@@ -175,90 +175,19 @@ class NeuralNetwork(nn.Module):
         # Stem: stride-2 conv + stride-2 maxpool + activation, reducing every axis by exactly ceil(N/4)
         self.layer_stem = Stem(n_filt0, kernel_stem, activation=stem_activation)
 
-        # Encoder: stage 0 keeps the stem's shape/channels; each later stage -> ceil(N/2)
-        # per axis and doubles the channel count.
-        enc_channels = [n_filt0 * (2**i) for i in range(n_stages)]
         self.n_filt0 = n_filt0
         self.kernel_stem = tuple(kernel_stem)
         self.kernel_coder = tuple(kernel_coder)
-        self.encoder = nn.ModuleList()
-        prev = n_filt0
-        for i, ch in enumerate(enc_channels):
-            downsample = i > 0
-            self.encoder.append(
-                nn.Sequential(
-                    ResidualBlock(
-                        prev,
-                        ch,
-                        downsample=downsample,
-                        kernel1=kernel_coder,
-                        dropout_rate=block_dropout_rate,
-                        activation=block_activation,
-                        architecture=block_architecture,
-                    ),
-                    ResidualBlock(
-                        ch,
-                        ch,
-                        downsample=False,
-                        kernel1=kernel_coder,
-                        dropout_rate=block_dropout_rate,
-                        activation=block_activation,
-                        architecture=block_architecture,
-                    ),
-                )
-            )
-            prev = ch
-
-        # Decoder: stage j upsamples the running tensor, concatenates the skip map from
-        # encoder stage enc_idx (same channel count), then a DeconvBlock pair reduces 2C -> C.
-        self.upsamples = nn.ModuleList()
-        self.dc_layers = nn.ModuleList()
-        for j in range(n_stages - 1):
-            enc_idx = n_stages - 2 - j
-            in_ch = enc_channels[n_stages - 1 - j]
-            out_ch = enc_channels[enc_idx]
-            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=kernel_coder, mode=upsample_mode))
-            self.dc_layers.append(
-                nn.Sequential(
-                    DeconvBlock(
-                        2 * out_ch,
-                        out_ch,
-                        upsample=True,
-                        kernel1=kernel_coder,
-                        dropout_rate=block_dropout_rate,
-                        activation=block_activation,
-                        architecture=block_architecture,
-                    ),
-                    DeconvBlock(
-                        out_ch,
-                        out_ch,
-                        upsample=False,
-                        kernel1=kernel_coder,
-                        dropout_rate=block_dropout_rate,
-                        activation=block_activation,
-                        architecture=block_architecture,
-                    ),
-                )
-            )
-
-        # Self-attention after each listed stage's residual blocks, in the encoder and in the decoder stage at the
-        # same resolution (decoder stage j is at encoder stage n_stages - 2 - j); nn.Identity at every other stage
-        attention_stages = set(attention_stages)
-        if not attention_stages <= set(range(n_stages)):
-            raise ValueError(f"attention_stages {sorted(attention_stages)} must be within 0..{n_stages - 1}")
-        self.encoder_attention = nn.ModuleList()
-        for i, ch in enumerate(enc_channels):
-            if i in attention_stages:
-                self.encoder_attention.append(SelfAttention3d(ch))
-            else:
-                self.encoder_attention.append(nn.Identity())
-        self.decoder_attention = nn.ModuleList()
-        for j in range(n_stages - 1):
-            stage = n_stages - 2 - j
-            if stage in attention_stages:
-                self.decoder_attention.append(SelfAttention3d(enc_channels[stage]))
-            else:
-                self.decoder_attention.append(nn.Identity())
+        self.unet = UNet3d(
+            n_filt0,
+            n_stages,
+            kernel_coder,
+            dropout_rate=block_dropout_rate,
+            activation=block_activation,
+            architecture=block_architecture,
+            upsample_mode=upsample_mode,
+            attention_stages=attention_stages,
+        )
 
         if head == "conv_halfres":
             # One more decoder stage, up to the stem conv's half resolution, with a skip
@@ -285,10 +214,6 @@ class NeuralNetwork(nn.Module):
                 ),
             )
 
-        # Identity pass-through on the skip connections; a named module so it can later be
-        # swapped for a learned transform without touching forward().
-        self.feature_forwarding = nn.Sequential()
-
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.conv_head = ConvMapHead(
@@ -304,7 +229,7 @@ class NeuralNetwork(nn.Module):
             half_shape = tuple(math.ceil(n / 2) for n in input_shape)
             self.halfres_head = HalfResConvHead(
                 n_filt0 * half_shape[0],
-                enc_channels[-1],
+                n_filt0 * 2 ** (n_stages - 1),  # Bottleneck channels
                 head_channels,
                 dropout_rate=head_dropout_rate,
                 activation=head_activation,
@@ -371,34 +296,18 @@ class NeuralNetwork(nn.Module):
             save_summed_spectral_channels(x, step, self.save_itr)
             step += 1
 
-        # Encoder: run every stage, keep all but the last as skip connections
-        skips = []
-        for i, (stage, attention) in enumerate(zip(self.encoder, self.encoder_attention)):
-            x = stage(x)
-            x = attention(x)
-            if save_latent_images:
-                save_summed_spectral_channels(x, step, self.save_itr)
+        # U-Net: every encoder and decoder stage's output, in order
+        x, stage_outputs = self.unet(x)
+        if save_latent_images:
+            for stage_output in stage_outputs:
+                save_summed_spectral_channels(stage_output, step, self.save_itr)
                 step += 1
-            if i < len(self.encoder) - 1:
-                skips.append(self.feature_forwarding(x))
-        bottleneck = x
-
-        # Decoder: upsample, align to the matching skip map, concatenate, reduce channels
-        for up, dc, attention in zip(self.upsamples, self.dc_layers, self.decoder_attention):
-            x = up(x)
-            skip = skips.pop()
-            x = _match_spatial(x, skip)
-            x = torch.cat([x, skip], dim=1)
-            x = dc(x)
-            x = attention(x)
-            if save_latent_images:
-                save_summed_spectral_channels(x, step, self.save_itr)
-                step += 1
+        bottleneck = stage_outputs[self.n_stages - 1]
 
         if self.head_type == "conv_halfres":
             # Last decoder stage, to half resolution, then the per-pixel head
             x = self.upsample_half(x)
-            skip = self.feature_forwarding(stem_half)
+            skip = stem_half
             x = _match_spatial(x, skip)
             x = torch.cat([x, skip], dim=1)
             x = self.dc_layer_half(x)
