@@ -89,17 +89,17 @@ def parse_args():
         "CPUs allocated to the job when training on a GPU, 0 on the CPU. Pass 0 to load in the main process.",
     )
     training.add_argument(
-        "--snapshot-every",
+        "--compare-every",
         type=int,
         default=0,
         help="Every this many epochs, save the predictions and comparison images of a few training and validation "
         "images (the same ones every time) to OUTPUT_DIR/images. Default: 0, none.",
     )
     training.add_argument(
-        "--snapshot-examples",
+        "--compare-examples",
         type=int,
         default=4,
-        help="Images of each set in each --snapshot-every snapshot, spread evenly through it. Default: %(default)s",
+        help="Images of each set in each --compare-every comparison, spread evenly through it. Default: %(default)s",
     )
     add_logging_arguments(parser)
     return parser.parse_args()
@@ -118,8 +118,8 @@ def main():
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size,
         num_workers=args.num_workers,
-        snapshot_every=args.snapshot_every,
-        snapshot_examples=args.snapshot_examples,
+        compare_every=args.compare_every,
+        compare_examples=args.compare_examples,
     )
 
 

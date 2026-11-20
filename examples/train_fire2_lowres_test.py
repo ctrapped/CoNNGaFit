@@ -139,7 +139,7 @@ def main():
         help="Also save the training's final-epoch snapshots and diagnostic plots in OUTPUT/DiagnosticOutputs",
     )
     parser.add_argument(
-        "--snapshot-every",
+        "--compare-every",
         type=int,
         default=5,
         help="Every this many epochs, save comparison images of a few training and validation images to "
@@ -170,8 +170,8 @@ def main():
         save_diagnostics=args.diagnostics,
         batch_size=32,
         test_batch_size=None,
-        snapshot_every=args.snapshot_every,
-        snapshot_examples=6,  # Training and validation images in each snapshot, the same ones every time
+        compare_every=args.compare_every,
+        compare_examples=6,  # Training and validation images in each snapshot, the same ones every time
     )
 
     #### Step 4: predict the test galaxy, which the network hasn't seen, and plot ####
