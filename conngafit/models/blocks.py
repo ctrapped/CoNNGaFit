@@ -34,7 +34,7 @@ def _doubling_deconv_pads(kernel_size):
 
 
 def _near_same_deconv_pad(kernel_size):
-    """Per-axis padding (k-1)//2 for a stride-1 ConvTranspose3d."""
+    """Per-axis padding (k-1)//2 for a stride-1 transposed conv."""
     return tuple((k - 1) // 2 for k in kernel_size)
 
 
@@ -65,11 +65,16 @@ def _film(h, scale_shift):
     return h * (1 + scale.view(view)) + shift.view(view)
 
 
-def _norm3d(channels, max_groups):
-    """BatchNorm3d if max_groups is None, otherwise GroupNorm with gcd(channels, max_groups) groups
+def _norm(channels, max_groups, n_dims=3):
+    """BatchNorm{n_dims}d if max_groups is None, otherwise GroupNorm with gcd(channels, max_groups) groups
     (the largest group count <= max_groups that divides the channels)."""
     if max_groups is None:
-        return nn.BatchNorm3d(channels)
+        if n_dims == 3:
+            return nn.BatchNorm3d(channels)
+        elif n_dims == 2:
+            return nn.BatchNorm2d(channels)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
     return nn.GroupNorm(math.gcd(channels, max_groups), channels)
 
 
@@ -205,7 +210,9 @@ class ResidualBlock(nn.Module):
         Initialize second norm's weight to zero (i.e. block starts at identity) for easy initial training.
 
     When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
-    to ceil(N/2) and the skip is projected through a strided 1x1x1 conv + norm to match.
+    to ceil(N/2) and the skip is projected through a strided 1x1 conv + norm to match.
+
+    n_dims sets 3-d (cubes) or 2-d (maps) layers; the input then has n_dims axes after the channels.
 
     FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb (as in the DDPM denoiser). With time_embed_dim=None (the default, used by the regression
@@ -214,8 +221,9 @@ class ResidualBlock(nn.Module):
     Parameters:
         in_channels, out_channels: channel counts of the block's input and output.
         downsample: if True, halve every axis (ceil(N/2)) and use a projected skip.
-        kernel1: 3-tuple conv kernel size (used by conv1 and conv2).
-        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables it).
+        kernel1: n_dims-tuple conv kernel size (used by conv1 and conv2).
+        n_dims: 3 for Conv3d layers on cubes, 2 for Conv2d layers on maps.
+        dropout_rate: probability for the channel-wise dropout (0.0 disables it).
         activation: zero-arg callable returning an nn.Module, e.g. nn.ReLU or lambda: nn.LeakyReLU(0.2).
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
@@ -231,6 +239,7 @@ class ResidualBlock(nn.Module):
         out_channels,
         downsample,
         kernel1,
+        n_dims=3,
         dropout_rate=0.0,
         activation=nn.ReLU,
         time_embed_dim=None,
@@ -239,27 +248,34 @@ class ResidualBlock(nn.Module):
     ):
         super().__init__()
         # Shared by every architecture
+        if n_dims == 3:
+            conv = nn.Conv3d
+            self.dropout = nn.Dropout3d(p=dropout_rate)
+        elif n_dims == 2:
+            conv = nn.Conv2d
+            self.dropout = nn.Dropout2d(p=dropout_rate)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.downsample = downsample
         if time_embed_dim is None:
             max_groups = None
         if downsample:
             # conv1 pads 0; forward() applies F.pad first so any kernel lands on ceil(N/2).
-            stride = (2, 2, 2)
+            stride = (2,) * n_dims
             self.down_pad = _ceil_conv_pad(kernel1, stride)
-            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
-            # a stride-2 1x1x1 conv already yields ceil(N/2), so the skip needs no padding.
+            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
+            # a stride-2 1x1 conv already yields ceil(N/2), so the skip needs no padding.
             self.shortcut = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(2, 2, 2)),
-                _norm3d(out_channels, max_groups),
+                conv(in_channels, out_channels, kernel_size=1, stride=stride),
+                _norm(out_channels, max_groups, n_dims),
             )
         else:
-            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
+            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, padding="same")
             self.shortcut = nn.Sequential()
         # conv2 keeps the shape fixed
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
-        self.bn1 = _norm3d(out_channels, max_groups)
-        self.bn2 = _norm3d(out_channels, max_groups)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
+        self.conv2 = conv(out_channels, out_channels, kernel_size=kernel1, padding="same")
+        self.bn1 = _norm(out_channels, max_groups, n_dims)
+        self.bn2 = _norm(out_channels, max_groups, n_dims)
         self.act1 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
@@ -374,8 +390,9 @@ class DeconvBlock(nn.Module):
     Parameters:
         in_channels, out_channels: channel counts of the block's input and output.
         upsample: if True, project the skip to out_channels; if False, use an identity skip.
-        kernel1: 3-tuple conv kernel size.
-        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables).
+        kernel1: n_dims-tuple conv kernel size.
+        n_dims: 3 for Conv3d layers on cubes, 2 for Conv2d layers on maps.
+        dropout_rate: probability for the channel-wise dropout (0.0 disables).
         activation: zero-arg callable returning an nn.Module.
         max_groups, time_embed_dim, architecture: as in ResidualBlock.
     """
@@ -386,6 +403,7 @@ class DeconvBlock(nn.Module):
         out_channels,
         upsample,
         kernel1,
+        n_dims=3,
         dropout_rate=0.0,
         activation=nn.ReLU,
         max_groups=8,
@@ -394,25 +412,28 @@ class DeconvBlock(nn.Module):
     ):
         super().__init__()
         # Shared by every architecture
+        if n_dims == 3:
+            conv_transpose = nn.ConvTranspose3d
+            self.dropout = nn.Dropout3d(p=dropout_rate)
+        elif n_dims == 2:
+            conv_transpose = nn.ConvTranspose2d
+            self.dropout = nn.Dropout2d(p=dropout_rate)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         if time_embed_dim is None:
             max_groups = None
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
-        self.convtran1 = nn.ConvTranspose3d(
-            in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
-        )
+        self.convtran1 = conv_transpose(in_channels, out_channels, kernel_size=kernel1, padding=pad)
         if upsample:
             self.shortcut = nn.Sequential(
-                nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(1, 1, 1)),
-                _norm3d(out_channels, max_groups),
+                conv_transpose(in_channels, out_channels, kernel_size=1),
+                _norm(out_channels, max_groups, n_dims),
             )
         else:
             self.shortcut = nn.Sequential()
-        self.convtran2 = nn.ConvTranspose3d(
-            out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
-        )
-        self.bn1 = _norm3d(out_channels, max_groups)
-        self.bn2 = _norm3d(out_channels, max_groups)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
+        self.convtran2 = conv_transpose(out_channels, out_channels, kernel_size=kernel1, padding=pad)
+        self.bn1 = _norm(out_channels, max_groups, n_dims)
+        self.bn2 = _norm(out_channels, max_groups, n_dims)
         self.act1 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
