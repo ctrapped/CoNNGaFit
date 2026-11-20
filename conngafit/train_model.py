@@ -342,9 +342,10 @@ def train_loop(
 def evaluate(
     model, dataloader, device, predict, accuracy_tolerance, name, n_samples=None, save_batch=None, fixed_draws=None
 ):
-    """Evaluate the model on the validation or test set (no gradient updates). Accuracy is computed as the percentage
-    of values (pixels or rings) whose predicted 1-sigma interval includes their label, or the percentage
-    within accuracy_tolerance of their label if no variance predicted.
+    """Evaluate the model on the validation or test set (no gradient updates). Accuracy is the percentage of values
+    (pixels or rings) within accuracy_tolerance of their label. If the model gives an uncertainty (predict_variance,
+    or the ddpm's posterior spread), the log line also gives the percentage whose predicted 1-sigma interval includes
+    their label.
 
     predict: also predict each batch, to score the MSE of the predicted mean and the accuracy (made every
         predict_every epochs and on the final epoch).
@@ -358,7 +359,7 @@ def evaluate(
     model.eval()
     num_batches = len(dataloader)
     summed_loss, summed_mse, correct = 0, 0, 0
-    correct_3sigma = 0  # Values within 3-sigma of their label, with an uncertainty
+    correct_1sigma = 0  # Values whose predicted 1-sigma includes their label, with an uncertainty
     total = 0
     has_sigma = False
     specific_accuracy = np.full(len(dataloader.dataset), np.nan)
@@ -380,13 +381,10 @@ def evaluate(
             np_pred = pred.cpu().float().detach().numpy()
             np_y = y.cpu().float().detach().numpy()
 
-            if sigma is not None:  # Accurate if the label is within the predicted 1-sigma
+            specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
+            if sigma is not None:  # Also count the labels within their predicted 1-sigma
                 has_sigma = True
-                np_sigma = sigma.cpu().float().detach().numpy()
-                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, np_sigma)
-                correct_3sigma += count_accurate(np_pred, np_y, 3 * np_sigma)[1]
-            else:
-                specific_accuracy[idx.numpy()], n_correct = count_accurate(np_pred, np_y, accuracy_tolerance)
+                correct_1sigma += count_accurate(np_pred, np_y, sigma.cpu().float().detach().numpy())[1]
             correct += n_correct
             total += np.size(np_y)
 
@@ -398,10 +396,10 @@ def evaluate(
     mse = summed_mse / num_batches if total else np.nan
     if has_sigma:
         logger.info(
-            "%s: accuracy (within 1-sigma) %.1f%%, within 3-sigma %.1f%%, avg loss %8f, avg MSE %8f",
+            "%s: accuracy %.1f%%, within 1-sigma %.1f%%, avg loss %8f, avg MSE %8f",
             name,
             accuracy,
-            correct_3sigma / total * 100,
+            correct_1sigma / total * 100,
             mean_loss,
             mse,
         )
@@ -875,9 +873,7 @@ def train(
         final_test_specific_accuracy=final_test_specific_accuracy,
     )
     if save_diagnostics:
-        # The accuracy counts values within their predicted 1-sigma if the network gives one
-        has_sigma = predict_variance or network == "ddpm"
-        accuracy_label = "within predicted 1-sigma" if has_sigma else f"within {ACCURACY_TOLERANCE:g} label std. dev."
+        accuracy_label = f"within {ACCURACY_TOLERANCE:g} label std. dev."
         plotting.plot_history(diagnostic_output, result, validation_data.names, loss_label, accuracy_label)
     save_history(diagnostic_output, result, training_data.names, validation_data.names, testing_names)
     return result
