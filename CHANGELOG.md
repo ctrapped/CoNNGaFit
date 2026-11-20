@@ -28,8 +28,8 @@ All notable changes to this project are documented here. The format follows
 - With predict_variance (or the DDPM), the validation and test accuracy counts a pixel or ring as accurate if
   its predicted 1σ includes the label, instead of being within 0.1 label standard deviations, and the log line
   also gives the percentage within 3σ.
-- Snapshots during training: `train(snapshot_every=N, snapshot_examples=4)` / `train_model_unet.py
-  --snapshot-every N` save the hdf5 prediction and comparison image (map or radial curve) of a fixed handful of
+- Snapshots during training: `train(every=N, compare_examples=4)` / `train_model_unet.py
+  --compare-every N` save the hdf5 prediction and comparison image (map or radial curve) of a fixed handful of
   training and validation images every N epochs, to watch them improve. Off by default.
 - `use_model.predict(..., return_samples=True)` yields the DDPM's joint posterior samples in physical units.
 - pytest suite for the network modules: shared blocks, both regression networks

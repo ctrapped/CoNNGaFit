@@ -157,8 +157,8 @@ DiagnosticOutputs/
                       correlation plots, and <run-name>_LossesAndAccuracies.hdf5, which also
                       holds the MSE of the predicted mean; accuracy and MSE are NaN on epochs
                       between predict_every. The accuracy is the % of pixels (or rings) whose
-                      predicted 1σ includes the label, with predict_variance or the DDPM, and
-                      otherwise the % within 0.1 label standard deviations
+                      predicted 1σ includes the label. If no variance  iscalculated, accuracy is
+                      the % within 0.1 label standard deviations
 ```
 
 Predictions, labels and uncertainties in every saved output are in physical units (Msun, km/s or Msun km/s).
