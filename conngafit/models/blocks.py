@@ -220,8 +220,8 @@ class ResidualBlock(nn.Module):
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
             applied after the first norm. None disables time conditioning.
-        max_groups: Used with GroupNorm for FiLM blocks. Sets the maximum number of groups for the GroupNorm3D
-            layers.
+        max_groups: upper bound on GroupNorm groups, used only with time_embed_dim; without time conditioning
+            the block uses BatchNorm.
         architecture: 'post_activation' or 'identity_skip', as described above.
     """
 
@@ -388,12 +388,14 @@ class DeconvBlock(nn.Module):
         kernel1,
         dropout_rate=0.0,
         activation=nn.ReLU,
-        max_groups=None,
+        max_groups=8,
         time_embed_dim=None,
         architecture="post_activation",
     ):
         super().__init__()
         # Shared by every architecture
+        if time_embed_dim is None:
+            max_groups = None
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
         self.convtran1 = nn.ConvTranspose3d(
             in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
