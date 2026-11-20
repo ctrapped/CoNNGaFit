@@ -4,22 +4,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from conngafit.models.blocks import (
-    DeconvBlock,
-    ResBlock2d,
-    ResidualBlock,
-    SelfAttention3d,
-    SpectralAttentionPool,
-    Stem,
-    Upsample,
-    _match_spatial,
-    check_stage_compatibility,
-)
+from conngafit.models.blocks import ResBlock2d, SpectralAttentionPool, Stem, check_stage_compatibility
+from conngafit.models.unet import UNet3d
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
 # Learns p(maps | cube): one or more 2-d target maps (e.g. mass and rotational momentum) are diffused with
-# Gaussian noise and a 3-d residual U-Net, built from the shared blocks in blocks.py, learns to remove it
+# Gaussian noise and a 3-d residual U-Net, the shared UNet3d of unet.py, learns to remove it
 # while looking at the datacube. Sampling many maps per cube gives their joint posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
@@ -130,10 +121,9 @@ class DenoisingUNet3d(nn.Module):
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
       stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
-      encoder- n_stages stages of 2 ResidualBlocks; channels n_filt0 * 2**i, axes halve after stage 0
-      decoder- n_stages-1 stages: Upsample -> _match_spatial -> concat skip -> 2 DeconvBlocks
-      attention- SelfAttention3d after the residual blocks of every stage in attention_stages, in the encoder
-               and in the decoder stage at the same resolution
+      unet   - UNet3d: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
+               stage 0), n_stages-1 decoder stages of Upsample -> concat skip -> 2 DeconvBlocks, and
+               SelfAttention3d after every stage in attention_stages
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
     Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
     FiLM-conditioned on the timestep embedding, which is as wide as the widest encoder stage
@@ -197,70 +187,25 @@ class DenoisingUNet3d(nn.Module):
         self.n_maps = n_maps
         check_stage_compatibility(input_shape, n_stages)  # Raises if the cube is too small
         self.n_stages = n_stages
-        # Encoder channels: stage 0 keeps n_filt0, later stages double it.
-        enc_ch = [n_filt0 * 2**i for i in range(n_stages)]
-        time_embed_dim = enc_ch[-1]  # As wide as the widest encoder stage
+        time_embed_dim = n_filt0 * 2 ** (n_stages - 1)  # As wide as the widest encoder stage
         self.n_filt0, self.time_embed_dim, self.max_groups = n_filt0, time_embed_dim, max_groups
         self.kernel_stem, self.kernel_coder = tuple(kernel_stem), tuple(kernel_coder)
-        block_kw = dict(
-            kernel1=self.kernel_coder,
+
+        self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
+        self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
+
+        self.unet = UNet3d(
+            n_filt0,
+            n_stages,
+            self.kernel_coder,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
             time_embed_dim=time_embed_dim,
             architecture=block_architecture,
+            upsample_mode=upsample_mode,
+            attention_stages=attention_stages,
         )
-
-        self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
-        self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
-
-        # Encoder: stage 0 keeps the stem's shape, later stages halve every axis.
-        self.encoder = nn.ModuleList()
-        prev = n_filt0
-        for i, ch in enumerate(enc_ch):
-            self.encoder.append(
-                nn.ModuleList(
-                    [
-                        ResidualBlock(prev, ch, downsample=i > 0, **block_kw),
-                        ResidualBlock(ch, ch, downsample=False, **block_kw),
-                    ]
-                )
-            )
-            prev = ch
-
-        # Decoder: upsample, concat the matching encoder skip, reduce 2C -> C.
-        self.upsamples = nn.ModuleList()
-        self.decoder = nn.ModuleList()
-        for j in range(n_stages - 1):
-            in_ch, out_ch = enc_ch[n_stages - 1 - j], enc_ch[n_stages - 2 - j]
-            self.upsamples.append(Upsample(in_ch, out_ch, kernel1=self.kernel_coder, mode=upsample_mode))
-            self.decoder.append(
-                nn.ModuleList(
-                    [
-                        DeconvBlock(2 * out_ch, out_ch, upsample=True, **block_kw),
-                        DeconvBlock(out_ch, out_ch, upsample=False, **block_kw),
-                    ]
-                )
-            )
-
-        # Self-attention after each listed stage's residual blocks, in the encoder and in the decoder stage at the
-        # same resolution (decoder stage j is at encoder stage n_stages - 2 - j); nn.Identity at every other stage
-        attention_stages = set(attention_stages)
-        if not attention_stages <= set(range(n_stages)):
-            raise ValueError(f"attention_stages {sorted(attention_stages)} must be within 0..{n_stages - 1}")
-        self.encoder_attention = nn.ModuleList()
-        for i, ch in enumerate(enc_ch):
-            if i in attention_stages:
-                self.encoder_attention.append(SelfAttention3d(ch, max_groups=max_groups))
-            else:
-                self.encoder_attention.append(nn.Identity())
-        self.decoder_attention = nn.ModuleList()
-        for j in range(n_stages - 1):
-            stage = n_stages - 2 - j
-            if stage in attention_stages:
-                self.decoder_attention.append(SelfAttention3d(enc_ch[stage], max_groups=max_groups))
-            else:
-                self.decoder_attention.append(nn.Identity())
 
         self.head = MapHead(
             n_filt0,
@@ -290,21 +235,7 @@ class DenoisingUNet3d(nn.Module):
         y_vol = y_vol.unsqueeze(2).expand(-1, -1, n_spec, -1, -1)
         h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
 
-        # Keep every encoder output except the deepest; the decoder pops them in reverse order, so each
-        # decoder stage pairs with the encoder stage at the same resolution.
-        skips = []
-        for i, ((b1, b2), attention) in enumerate(zip(self.encoder, self.encoder_attention)):
-            h = b2(b1(h, t_emb), t_emb)
-            h = attention(h)
-            if i < self.n_stages - 1:
-                skips.append(h)
-
-        for up, (b1, b2), attention in zip(self.upsamples, self.decoder, self.decoder_attention):
-            skip = skips.pop()
-            h = torch.cat([_match_spatial(up(h), skip), skip], dim=1)
-            h = b2(b1(h, t_emb), t_emb)
-            h = attention(h)
-
+        h, _ = self.unet(h, t_emb)
         return self.head(h, y_t, t_emb)
 
 
