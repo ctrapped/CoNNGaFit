@@ -99,7 +99,7 @@ def parse_args():
         "--compare-examples",
         type=int,
         default=4,
-        help="Images of each set in each --compare-every comparison, spread evenly through it. Default: %(default)s",
+        help="Number of images in each --compare-every epochs, spread evenly through the image set. Default: %(default)s",
     )
     add_logging_arguments(parser)
     return parser.parse_args()
