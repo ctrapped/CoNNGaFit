@@ -4,8 +4,8 @@ import pytest
 import torch
 from torch import nn
 
+from conngafit.mc_dropout import predict_with_mc_dropout
 from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
-from conngafit.models.mc_dropout import predict_with_mc_dropout
 
 HEADS = {
     unet3d_resblock: ("fc", "conv", "conv_halfres"),
