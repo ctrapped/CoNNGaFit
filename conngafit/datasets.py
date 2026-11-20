@@ -261,8 +261,7 @@ class CoNNGaFitImageDataset:
             augment,
         )
 
-        # Ring masses per file, for mass_weights with radial curves. Mass maps aren't cached: each DataLoader worker
-        # would keep its own cache, growing every epoch toward a copy of every training file's map per worker
+        # Ring masses per file, for mass_weights with radial curves.
         self.ring_masses = {}
 
         if radial_bins is not None:
@@ -299,20 +298,15 @@ class CoNNGaFitImageDataset:
         with h5py.File(self.img_paths[file_idx], "r") as hf:
             return self._label(hf, file_idx).astype("float")
 
-    def mass_weights(self, idx, power, hf=None):
+    def mass_weights(self, idx, power, hf):
         """Sample idx's loss weights, mass ** power per pixel (or ring) normalized to a mean of 1 per image, shaped
         (1, nY, nX) (or (1, radial_bins)) to multiply every target's map (or curve).
 
-        hf: sample idx's image file, already open (as in __getitem__), to read its mass map from; if None, it's
-        opened here. Radial curves' ring masses come from the file the curve is measured on, cached per file.
+        hf: sample idx's image h5py.File to read its mass map from.
         """
         file_idx, aug_idx = divmod(idx, len(self.augmentations))  # Sample idx's file and augmentation (see __init__)
         if self.radial_bins is None:
-            if hf is None:
-                with h5py.File(self.img_paths[file_idx], "r") as image_file:
-                    mass = image_file["mass_annotation"][()]
-            else:
-                mass = hf["mass_annotation"][()]
+            mass = hf["mass_annotation"][()]
             weights = augment_array(mass**power, *self.augmentations[aug_idx])  # Rotated/flipped like the label
         else:
             if file_idx not in self.ring_masses:  # The mass in each ring, from the file the curve is measured on
