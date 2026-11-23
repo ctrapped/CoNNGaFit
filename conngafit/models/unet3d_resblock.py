@@ -18,7 +18,7 @@ from conngafit.models.blocks import (
     check_stage_compatibility,
 )
 from conngafit.models.diagnostics import save_summed_spectral_channels
-from conngafit.models.unet import UNet3d
+from conngafit.models.unet import UNet
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class NeuralNetwork(nn.Module):
     Architecture:
       - Stem (blocks.Stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing
         every axis to exactly ceil(N/4).
-      - U-Net (unet.UNet3d), with BatchNorm in every block:
+      - U-Net (unet.UNet), with BatchNorm in every block:
         Encoder: `n_stages` stages of two ResidualBlocks each. Stage 0 keeps the stem's
         shape and channel count; every later stage brings each axis to ceil(N/2) and
         doubles the channel count (n_filt0 * 2**i at stage i).
@@ -178,10 +178,11 @@ class NeuralNetwork(nn.Module):
         self.n_filt0 = n_filt0
         self.kernel_stem = tuple(kernel_stem)
         self.kernel_coder = tuple(kernel_coder)
-        self.unet = UNet3d(
+        self.unet = UNet(
             n_filt0,
             n_stages,
             kernel_coder,
+            n_dims=3,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             architecture=block_architecture,

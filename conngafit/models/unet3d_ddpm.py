@@ -5,12 +5,12 @@ import torch.nn.functional as F
 from torch import nn
 
 from conngafit.models.blocks import ResidualBlock, SpectralAttentionPool, Stem, check_stage_compatibility
-from conngafit.models.unet import UNet3d
+from conngafit.models.unet import UNet
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
 # Learns p(maps | cube): one or more 2-d target maps (e.g. mass and rotational momentum) are diffused with
-# Gaussian noise and a 3-d residual U-Net, the shared UNet3d of unet.py, learns to remove it
+# Gaussian noise and a 3-d residual U-Net, the shared UNet of unet.py, learns to remove it
 # while looking at the datacube. Sampling many maps per cube gives their joint posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
@@ -124,7 +124,7 @@ class DenoisingUNet3d(nn.Module):
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
       stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
-      unet   - UNet3d: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
+      unet   - UNet: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
                stage 0), n_stages-1 decoder stages of Upsample -> concat skip -> 2 DeconvBlocks, and
                SelfAttention after every stage in attention_stages
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
@@ -197,10 +197,11 @@ class DenoisingUNet3d(nn.Module):
         self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
         self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
-        self.unet = UNet3d(
+        self.unet = UNet(
             n_filt0,
             n_stages,
             self.kernel_coder,
+            n_dims=3,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,

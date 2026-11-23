@@ -1,5 +1,6 @@
-"""Shared building blocks for the CoNNGaFit 3-d networks:
-   Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
+"""Shared building blocks for the CoNNGaFit networks (3-d cubes and 2-d maps):
+   Stem                                       - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
+   ResidualBlock, Upsample, DeconvBlock       - unet.UNet (ResidualBlock also in the 2-d map heads)
    SelfAttention                              - self-attention over every position of a coarse feature map
    DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
    SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
