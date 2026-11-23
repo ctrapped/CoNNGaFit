@@ -3,9 +3,10 @@
    ResidualBlock, Upsample, DeconvBlock       - unet.UNet (ResidualBlock also in the 2-d map heads)
    SelfAttention                              - self-attention over every position of a coarse feature map
    DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
-   SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
+   SpectralAttentionPool                      - MapHead3d and HalfResConvHead
    MapHead2d                                  - 2-d features -> maps, for the 2-d spectral networks
-   ConvMapHead                                - head='conv' option of both regression networks
+   MapHead3d                                  - 3-d features -> maps: head='conv' of ResNets and
+                                                the DDPM's head
    HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
    SpectralEncoder                            - datacube -> per-pixel features for spectral_unet2d.py
 Plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
@@ -668,59 +669,30 @@ class SpectralAttentionPool(nn.Module):
         return (x * w).sum(dim=2)  # (B, C, X, Y)
 
 
-class ConvMapHead(nn.Module):
-    """Fully convolutional head: 3-d features (nBatch, C, S, X, Y) -> 2-d maps (nBatch, out_channels, H, W).
-
-    Collapses the spectral axis with SpectralAttentionPool, resizes bilinearly to the target map grid
-    (H, W), refines with `n_blocks` 2-d ResidualBlocks and projects with a 3x3 conv. This ensures each output
-    pixel is predicted from the features at and around that pixel.
+class MapHead3d(MapHead2d):
+    """3-d features (nBatch, channels, S, X, Y) -> maps (nBatch, out_channels, H, W): SpectralAttentionPool collapses
+    the spectral axis, the result is resized bilinearly to the map grid and optional extra maps (the DDPM's noisy
+    maps y_t) are concatenated, then MapHead2d.
 
     Parameters:
         channels: feature channels coming out of the network body.
-        out_channels: output maps, e.g. 1 (mean) or 2 (mean + log-variance).
-        n_blocks: number of 2-d ResidualBlocks (>= 0).
-        activation: zero-arg callable returning an nn.Module.
-        dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
-        architecture: architecture of every ResidualBlock, 'post_activation' (default) or 'identity_skip'.
+        out_channels: output maps, e.g. n_maps, or 2 * n_maps for mean + log-variance.
+        extra_channels: channels of the extra maps (0 for none).
+        Every other argument: as in MapHead2d.
     """
 
-    def __init__(
-        self,
-        channels,
-        out_channels=1,
-        n_blocks=2,
-        activation=nn.ReLU,
-        dropout_rate=0.0,
-        architecture="post_activation",
-    ):
-        super().__init__()
-        if n_blocks < 0:
-            raise ValueError("n_blocks must be >= 0")
+    def __init__(self, channels, out_channels=1, extra_channels=0, **kwargs):
+        super().__init__(channels + extra_channels, channels, out_channels, **kwargs)
         self.pool = SpectralAttentionPool(channels)
-        self.blocks = nn.ModuleList(
-            [
-                ResidualBlock(
-                    channels,
-                    channels,
-                    downsample=False,
-                    kernel1=(3, 3),
-                    n_dims=2,
-                    activation=activation,
-                    architecture=architecture,
-                )
-                for _ in range(n_blocks)
-            ]
-        )
-        self.dropout = nn.Dropout2d(p=dropout_rate)
-        self.out = nn.Conv2d(channels, out_channels, 3, padding=1)
 
-    def forward(self, x, map_shape):
-        """x: (nBatch, C, S, X, Y) -> (nBatch, out_channels, *map_shape)."""
+    def forward(self, x, map_shape, extra=None, t_emb=None):
+        """x: (nBatch, channels, S, X, Y); map_shape: (H, W); extra: (nBatch, extra_channels, H, W) or None;
+        t_emb: (nBatch, time_embed_dim) or None."""
         h = self.pool(x)  # (B, C, X, Y)
         h = F.interpolate(h, size=tuple(map_shape), mode="bilinear", align_corners=False)
-        for blk in self.blocks:
-            h = blk(h)
-        return self.out(self.dropout(h))
+        if extra is not None:
+            h = torch.cat([h, extra], dim=1)  # (B, C + extra_channels, H, W)
+        return super().forward(h, t_emb)
 
 
 class HalfResConvHead(nn.Module):

@@ -9,9 +9,9 @@ import torch
 from torch import nn
 
 from conngafit.models.blocks import (
-    ConvMapHead,
     DeconvBlock,
     HalfResConvHead,
+    MapHead3d,
     Stem,
     Upsample,
     _match_spatial,
@@ -46,7 +46,7 @@ class NeuralNetwork(nn.Module):
         `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
+        'conv': MapHead3d (see blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
         'conv_halfres': one more decoder stage up to the stem conv's half resolution (with a
@@ -104,7 +104,7 @@ class NeuralNetwork(nn.Module):
                 n_fc_layers. Its output Linear has (n_fc, or n_filt0 * prod(fc_pool_shape) with no hidden
                 layers) * n_maps * prod(output_shape) weights, so it grows with the map size: best for radial curves
                 and small images.
-            'conv' - ConvMapHead, with n_head_blocks 2-d residual blocks.
+            'conv' - MapHead3d, with n_head_blocks 2-d residual blocks.
             'conv_halfres' - one more decoder stage to half resolution, then HalfResConvHead with head_channels.
             The conv heads' sizes don't depend on the map size, and they ignore fc_pool_shape, n_fc and
             n_fc_layers.
@@ -217,7 +217,7 @@ class NeuralNetwork(nn.Module):
 
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
-            self.conv_head = ConvMapHead(
+            self.conv_head = MapHead3d(
                 n_filt0,
                 out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,

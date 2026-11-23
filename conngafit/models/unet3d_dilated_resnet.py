@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from conngafit.models.blocks import ConvMapHead, DilatedResidualBlock, _ceil_conv_pad
+from conngafit.models.blocks import DilatedResidualBlock, MapHead3d, _ceil_conv_pad
 from conngafit.models.diagnostics import save_summed_spectral_channels
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class NeuralNetwork(nn.Module):
         `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
+        'conv': MapHead3d (see blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
 
@@ -157,7 +157,7 @@ class NeuralNetwork(nn.Module):
             set by fc_pool_shape/n_fc/n_fc_layers; its output Linear has
             n_filt0 * prod(fc_pool_shape) * n_maps * prod(output_shape) weights, so it grows with the map
             size and number of maps.
-            'conv' - ConvMapHead: spectral attention pool -> bilinear resize to output_shape ->
+            'conv' - MapHead3d: spectral attention pool -> bilinear resize to output_shape ->
             n_head_blocks 2-d residual blocks -> 3x3 conv, with a parameter count independent of
             the input and map size (fc_pool_shape, n_fc and n_fc_layers are then unused).
         output_shape: shape of each predicted output: (H, W) for maps (default: (nX, nY) from input),
@@ -251,7 +251,7 @@ class NeuralNetwork(nn.Module):
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
             self.fc_widths = []
-            self.conv_head = ConvMapHead(
+            self.conv_head = MapHead3d(
                 n_filt0,
                 out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,
