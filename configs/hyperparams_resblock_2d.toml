@@ -1,0 +1,72 @@
+# Spectral 2-d ResNet hyperparameters for train_model_unet.py (tuned for rotational_velocity)
+# Pass a different file with --hyperparams. Every key below is required unless marked optional.
+
+network = "resblock_2d"  # The spectral encoder + 2-d residual U-Net in spectral_unet2d.py
+
+learning_rate = 1e-4
+weight_decay = 1e-3
+# Optional (default "adam"): "adam" adds weight_decay to the gradient as an L2 term on every parameter; "adamw"
+# decays only the conv and linear weights, decoupled from the gradient step (Loshchilov & Hutter 2019), and
+# typically needs a larger weight_decay (1e-2, PyTorch's default).
+optimizer = "adam"
+# Optional (default 0.999): evaluate, sample and save an exponential moving average (EMA) of the weights, which
+# smooths out step-to-step training noise. It averages over ~1 / (1 - ema_decay) optimizer steps, so keep that
+# well below the total number of steps (epochs * batches per epoch); 0 uses the raw weights.
+ema_decay = 0.999
+# Clip the total gradient norm to this before each optimizer step (all gradients rescaled together, so their
+# direction is kept); 0 turns clipping off. The training log reports each epoch's mean gradient norm.
+max_grad_norm = 1.0
+epochs = 300
+n_filt0 = 6   # Filters in the spectral encoder's first layer and in the U-Net's first stage; doubles at each later one
+k0 = 9        # Spectral kernel size of the spectral encoder's convs
+k1 = 3        # Spatial kernel size of every conv (the encoder's x and y axes, and the 2-d U-Net and head)
+# Optional (default 3): spectral encoder layers, each halving the spectral axis and doubling the channels, before a
+# learned attention pool over what is left of it gives each pixel's features.
+n_spectral_layers = 3
+# Optional (default 5): stages of the 2-d U-Net, which works at the full map resolution; each later stage halves
+# both map axes, so nX and nY must allow n_stages - 1 halvings.
+n_stages = 5
+# Optional (default 2): 2-d residual blocks in the output head, before its 3x3 output conv.
+n_head_blocks = 2
+
+dropout_rate = 0.3  # Dropout in the output head, to regularize it
+# Disabled by default. Applies channel-wise dropout (nn.Dropout2d) inside every residual block of the 2-d U-Net -
+# a much broader regularizer than dropout_rate. Only enable this if dropout_rate alone isn't closing the
+# train/validation gap; start low (~0.1-0.15).
+block_dropout_rate = 0.0
+# Optional (default "post_activation"): architecture of every residual block. "identity_skip" adds each block's
+# correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
+# the addition. See blocks.ResidualBlock.
+block_architecture = "post_activation"
+# Optional (default []): list of U-Net stages (0 = the full map resolution) followed by self-attention over every
+# pixel, in the encoder and in the decoder stage at the same resolution, e.g. [2,3]. Cost grows as the stage's pixel
+# count squared: a 128x128 map has 16384 pixels at stage 0 and 1024 at stage 2.
+attention_stages = []
+
+# Label scaling, computed once from every training label and saved with the model:
+#   "none"      - train on labels in physical units
+#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. radial momentum)
+#   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
+label_scaling = "none"
+
+# Weight each pixel's loss (MSE, or Gaussian NLL with predict_variance) by its mass ** mass_weight_power,
+# normalized to mean 1 per image, so the loss isn't dominated by faint halo gas; meant for velocity targets.
+# Pixels with no mass aren't trained (mean or 1σ).
+#   0   - unweighted (default)
+#   0.5 - square root of mass, so the densest pixels don't dominate either
+#   1   - mass-weighted
+mass_weight_power = 0
+
+# Predict a per-pixel uncertainty along with each value: the network outputs a mean and a
+# log-variance, trained with a Gaussian negative log-likelihood instead of MSE.
+# Requires label_scaling = "symmetric" or "one-sided", since the loss floors the variance at
+# 1e-6 in the units of the labels it trains on.
+predict_variance = false
+
+# Predict (and so score the accuracy and MSE of) the training and validation sets every
+# predict_every epochs, and on the final epoch; the loss is computed every epoch.
+predict_every = 1
+
+# Random seed for weight initialization, dropout and the order of training batches. Runs with the same
+# seed, data and hyperparameters on the same machine give the same network.
+seed = 0

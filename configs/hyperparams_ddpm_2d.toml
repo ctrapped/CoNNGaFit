@@ -1,0 +1,72 @@
+# Conditional diffusion model (DDPM) with the spectral 2-d denoiser: hyperparameters for train_model_unet.py.
+# Pass this file with --hyperparams. Every key below is required unless marked optional.
+
+network = "ddpm_2d"  # The diffusion model with the spectral encoder + 2-d U-Net denoiser in spectral_unet2d.py
+
+learning_rate = 1e-4
+weight_decay = 1e-3
+# Optional (default "adam"): "adam" adds weight_decay to the gradient as an L2 term on every parameter; "adamw"
+# decays only the conv and linear weights, decoupled from the gradient step (Loshchilov & Hutter 2019), and
+# typically needs a larger weight_decay (1e-2, PyTorch's default).
+optimizer = "adam"
+# Optional (default 0.999): evaluate, sample and save an exponential moving average (EMA) of the weights, which
+# smooths out step-to-step training noise. It averages over ~1 / (1 - ema_decay) optimizer steps, so keep that
+# well below the total number of steps (epochs * batches per epoch); 0 uses the raw weights.
+ema_decay = 0.999
+# Clip the total gradient norm to this before each optimizer step (all gradients rescaled together, so their
+# direction is kept); 0 turns clipping off. The training log reports each epoch's mean gradient norm.
+max_grad_norm = 1.0  # Ho et al. 2020's code release (grad_clip=1.)
+epochs = 4000 # Number of training epochs
+n_filt0 = 6   # Filters in the spectral encoder's first layer and in the U-Net's first stage; doubles at each later one
+k0 = 9        # Spectral kernel size of the spectral encoder's convs
+k1 = 3        # Spatial kernel size of every conv (the encoder's x and y axes, and the 2-d U-Net and head)
+# Optional (default 3): spectral encoder layers, each halving the spectral axis and doubling the channels, before a
+# learned attention pool over what is left of it gives each pixel's features.
+n_spectral_layers = 3
+# Optional (default 5): stages of the 2-d U-Net, which works at the full map resolution; each later stage halves
+# both map axes, so nX and nY must allow n_stages - 1 halvings.
+n_stages = 5
+# Optional (default 2): 2-d residual blocks in the output head, before its 3x3 output conv (zero at the start, so
+# the network starts by predicting no noise).
+n_head_blocks = 2
+block_dropout_rate = 0.0  # Channel-wise dropout inside every 2-d U-Net block
+# Optional (default 128, as in Ho et al. 2020): width of the fixed sinusoidal timestep encoding, giving
+# time_encoding_dim // 2 frequencies spaced geometrically from 1 to 1/10000 rad per step. The learned embedding it
+# feeds is as wide as the widest U-Net stage.
+time_encoding_dim = 128
+# Optional (default "post_activation"): architecture of every residual block. "identity_skip" adds each block's
+# correction to an unchanged skip and starts every block as its skip; "post_activation" applies an activation after
+# the addition. See blocks.ResidualBlock.
+block_architecture = "post_activation"
+# Optional (default []): list of U-Net stages (0 = the full map resolution) followed by self-attention over every
+# pixel, in the encoder and in the decoder stage at the same resolution, e.g. [2,3]. Cost grows as the stage's pixel
+# count squared: a 128x128 map has 16384 pixels at stage 0 and 1024 at stage 2.
+attention_stages = [2]
+
+# Diffusion: the denoiser learns to remove Gaussian noise added via the schedular to the label map
+# over n_timesteps steps
+n_timesteps = 1000
+schedule = "cosine"  # Noise schedule: "cosine" or "linear"
+
+# Each inference prediction is the mean and standard deviation of n_samples maps sampled from the
+# posterior. Meaning we infer predicted maps n_samples times from a random Gaussian noise map.
+# Each sample map is inferred by taking n_timesteps passes of the denoiser.
+n_samples = 30
+
+# Predict (and so score the accuracy and MSE of) the training and validation sets every
+# predict_every epochs, and on the final epoch; the loss is computed every epoch.
+# Each prediction costs n_samples * n_timesteps denoiser passes per cube (very expensive)..
+# Set it to epochs or more to predict on the final epoch only
+predict_every = 500
+
+# Label scaling, computed once from every training label and saved with the model.
+# For DDPM scaling must be [-1,1] to match the Gaussian noise distribution.
+# Sampled maps are clipped to [-1, 1] unless "none":
+#   "none"      - train on labels in physical units
+#   "symmetric" - divide by max(|label|), to [-1, 1] (e.g. mass flux)
+#   "one-sided" - map [min(label), max(label)] to [-1, 1] (e.g. rotational velocity)
+label_scaling = "symmetric"
+
+# Random seed for weight initialization, dropout, the order of training batches and the diffusion noise. Runs with
+# the same seed, data and hyperparameters on the same machine give the same network.
+seed = 0
