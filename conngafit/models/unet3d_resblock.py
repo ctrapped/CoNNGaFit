@@ -91,7 +91,7 @@ class NeuralNetwork(nn.Module):
             head='conv', nn.LeakyReLU otherwise.
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         upsample_mode: how each decoder stage upsamples (blocks.Upsample): 'conv_transpose' (default, a
-            learned stride-2 ConvTranspose3d) or 'trilinear' (trilinear interpolation, then a 1x1x1 Conv3d).
+            learned stride-2 ConvTranspose3d) or 'interpolation' (trilinear interpolation, then a 1x1x1 Conv3d).
         predict_variance: if False (default), the head has a single output Linear and
             forward() returns one tensor of shape (nBatch, n_maps, *output_shape). If True,
             a second output Linear is added predicting a per-element log-variance, and

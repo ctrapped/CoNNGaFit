@@ -328,13 +328,13 @@ class Upsample(nn.Module):
     """Spatially upsample by ~2x per axis, then project to out_channels. Two
     implementations, selected by `mode`:
 
-      - 'conv_transpose' (default): a single stride-2 ConvTranspose3d does the spatial
+      - 'conv_transpose' (default): a single stride-2 transposed conv does the spatial
         upsample and the channel projection together, in one learned operation.
         Cheap, but can be prone to checkerboard artifacts (https://distill.pub/2016/deconv-checkerboard/).
 
-      - 'trilinear': nn.Upsample(scale_factor=2, mode='trilinear') doubles the spatial size
-        (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1x1 Conv3d that
-        projects in_channels -> out_channels.
+      - 'interpolation': nn.Upsample(scale_factor=2) with linear interpolation (trilinear for cubes, bilinear for
+        maps) doubles the spatial size (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1
+        conv that projects in_channels -> out_channels.
 
     The small 2*N vs 2*N-1 difference between the two modes is accounted for downstream.
     NeuralNetwork.forward realigns the result to the matching encoder skip map's exact shape via
@@ -342,32 +342,39 @@ class Upsample(nn.Module):
 
     Parameters:
         in_channels, out_channels: channel counts in and out.
-        kernel1: 3-tuple kernel size; only used when mode='conv_transpose'.
-        mode: 'conv_transpose' (default) or 'trilinear'.
+        kernel1: n_dims-tuple kernel size; only used when mode='conv_transpose'.
+        n_dims: 3 for 3-d layers on cubes, 2 for 2-d layers on maps.
+        mode: 'conv_transpose' (default) or 'interpolation'.
     """
 
-    def __init__(self, in_channels, out_channels, kernel1, mode="conv_transpose"):
+    def __init__(self, in_channels, out_channels, kernel1, n_dims=3, mode="conv_transpose"):
         super().__init__()
-        if mode not in ("conv_transpose", "trilinear"):
-            raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'trilinear'")
+        if mode not in ("conv_transpose", "interpolation"):
+            raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'interpolation'")
+        if n_dims == 3:
+            conv, conv_transpose, interpolation = nn.Conv3d, nn.ConvTranspose3d, "trilinear"
+        elif n_dims == 2:
+            conv, conv_transpose, interpolation = nn.Conv2d, nn.ConvTranspose2d, "bilinear"
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.mode = mode
         if mode == "conv_transpose":
             padding, output_padding = _doubling_deconv_pads(kernel1)
-            self.upconv1 = nn.ConvTranspose3d(
+            self.upconv1 = conv_transpose(
                 in_channels,
                 out_channels,
                 kernel_size=kernel1,
-                stride=(2, 2, 2),
+                stride=(2,) * n_dims,
                 padding=padding,
                 output_padding=output_padding,
             )
         else:
-            self.resize = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
-            self.project = nn.Conv3d(in_channels, out_channels, kernel_size=1)
+            self.resize = nn.Upsample(scale_factor=2, mode=interpolation, align_corners=False)
+            self.project = conv(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
-        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, ~2D, ~2H, ~2W) -
-        exactly 2D-1 etc. for mode='conv_transpose', exactly 2D etc. for mode='trilinear'."""
+        """x: (nBatch, in_channels, *spatial) -> (nBatch, out_channels, ~2x every spatial axis) - exactly 2N-1
+        for mode='conv_transpose', exactly 2N for mode='interpolation'."""
         if self.mode == "conv_transpose":
             return self.upconv1(x)
         return self.project(self.resize(x))

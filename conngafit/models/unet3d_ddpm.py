@@ -145,7 +145,7 @@ class DenoisingUNet3d(nn.Module):
         n_head_blocks: number of full-resolution 2-d blocks in the head.
         block_dropout_rate: channel-wise dropout inside every 3-d block.
         stem_activation, block_activation: zero-arg callables returning nn.Modules.
-        upsample_mode: 'trilinear' (default; no checkerboard artifacts, which would look like
+        upsample_mode: 'interpolation' (default; no checkerboard artifacts, which would look like
             structured noise to the model) or 'conv_transpose'.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
         output_shape: (H, W) of each map (default (nX, nY) from input).
@@ -168,7 +168,7 @@ class DenoisingUNet3d(nn.Module):
         block_dropout_rate=0.0,
         stem_activation=nn.LeakyReLU,
         block_activation=nn.SiLU,
-        upsample_mode="trilinear",
+        upsample_mode="interpolation",
         max_groups=8,
         output_shape=None,
         n_maps=1,

@@ -25,7 +25,7 @@ class UNet3d(nn.Module):
         max_groups: upper bound on GroupNorm groups, in the blocks (with time_embed_dim) and in SelfAttention3d.
         time_embed_dim: width of the timestep embedding t_emb; None disables time conditioning.
         architecture: architecture of every block, 'post_activation' or 'identity_skip'.
-        upsample_mode: Upsample mode of the decoder, 'trilinear' or 'conv_transpose'.
+        upsample_mode: Upsample mode of the decoder, 'interpolation' or 'conv_transpose'.
         attention_stages: encoder stage indices (0 to n_stages - 1) followed by self-attention.
     """
 
@@ -39,7 +39,7 @@ class UNet3d(nn.Module):
         max_groups=8,
         time_embed_dim=None,
         architecture="post_activation",
-        upsample_mode="trilinear",
+        upsample_mode="interpolation",
         attention_stages=(),
     ):
         super().__init__()
