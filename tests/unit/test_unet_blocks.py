@@ -9,7 +9,7 @@ from conngafit.models.blocks import (
     ConvMapHead,
     DilatedResidualBlock,
     HalfResConvHead,
-    ResBlock2d,
+    ResidualBlock,
     SpectralAttentionPool,
     _ceil_conv_pad,
     _doubling_deconv_pads,
@@ -88,13 +88,13 @@ def test_spectral_attention_pool_weights_sum_to_one():
 
 
 @pytest.mark.parametrize("out_channels", [CHANNELS, 2 * CHANNELS])
-def test_resblock2d_shape(out_channels):
-    block = ResBlock2d(CHANNELS, out_channels)
+def test_residual_block_2d_shape(out_channels):
+    block = ResidualBlock(CHANNELS, out_channels, downsample=False, kernel1=(3, 3), n_dims=2)
     assert block(torch.randn(BATCH, CHANNELS, 5, 6)).shape == (BATCH, out_channels, 5, 6)
 
 
-def test_resblock2d_is_independent_of_batch():
-    block = ResBlock2d(CHANNELS, CHANNELS)
+def test_residual_block_2d_is_independent_of_batch_in_eval():
+    block = ResidualBlock(CHANNELS, CHANNELS, downsample=False, kernel1=(3, 3), n_dims=2).eval()
     x = torch.randn(BATCH, CHANNELS, 5, 6)
     torch.testing.assert_close(block(x[:1]), block(x)[:1])
 

@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from conngafit.models.blocks import ResBlock2d, SpectralAttentionPool, Stem, check_stage_compatibility
+from conngafit.models.blocks import ResidualBlock, SpectralAttentionPool, Stem, check_stage_compatibility
 from conngafit.models.unet import UNet3d
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
@@ -88,11 +88,14 @@ class MapHead(nn.Module):
         self.pool = SpectralAttentionPool(channels)
         self.blocks = nn.ModuleList(
             [
-                ResBlock2d(
+                ResidualBlock(
                     channels + n_maps if i == 0 else channels,
                     channels,
-                    activation,
-                    max_groups,
+                    downsample=False,
+                    kernel1=(3, 3),
+                    n_dims=2,
+                    activation=activation,
+                    max_groups=max_groups,
                     time_embed_dim=time_embed_dim,
                     architecture=architecture,
                 )
