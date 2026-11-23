@@ -1,11 +1,14 @@
 """The networks train_model.train trains and use_model.py runs, named by the hyperparameters' network key:
-"resblock" - the residual U-Net in unet3d_resblock.py, predicting maps or radial curves
-"ddpm"     - the conditional diffusion model in unet3d_ddpm.py, predicting maps
+"resblock"    - the residual U-Net in unet3d_resblock.py, predicting maps or radial curves
+"ddpm"        - the conditional diffusion model in unet3d_ddpm.py, predicting maps
+"resblock_2d" - the spectral encoder + 2-d residual U-Net in spectral_unet2d.py, predicting maps
+"ddpm_2d"     - the diffusion model with spectral_unet2d.py's spectral encoder + 2-d U-Net denoiser, predicting maps
 """
 
 import torch
 import torchinfo
 
+from conngafit.models.spectral_unet2d import SpectralDenoisingUNet2d, SpectralResNet2d
 from conngafit.models.unet3d_ddpm import DenoisingUNet3d, GaussianDiffusion
 from conngafit.models.unet3d_resblock import NeuralNetwork
 
@@ -28,16 +31,55 @@ SHARED_KEYS = {
 HYPERPARAM_KEYS = {
     "resblock": SHARED_KEYS | {"dropout_rate", "output_head", "predict_variance"},
     "ddpm": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
+    "resblock_2d": SHARED_KEYS | {"dropout_rate", "predict_variance"},
+    "ddpm_2d": SHARED_KEYS | {"n_timesteps", "schedule", "n_samples"},
 }
 OPTIONAL_HYPERPARAM_KEYS = {
-    "resblock": {"n_fc", "mass_weight_power", "optimizer", "block_architecture", "attention_stages"},
-    "ddpm": {"optimizer", "time_encoding_dim", "block_architecture", "attention_stages"},
+    "resblock": {
+        "n_fc",
+        "mass_weight_power",
+        "optimizer",
+        "block_architecture",
+        "attention_stages",
+        "n_stages",
+        "n_head_blocks",
+    },
+    "ddpm": {"optimizer", "time_encoding_dim", "block_architecture", "attention_stages", "n_stages", "n_head_blocks"},
+    "resblock_2d": {
+        "mass_weight_power",
+        "optimizer",
+        "block_architecture",
+        "attention_stages",
+        "n_spectral_layers",
+        "n_stages",
+        "n_head_blocks",
+    },
+    "ddpm_2d": {
+        "optimizer",
+        "time_encoding_dim",
+        "block_architecture",
+        "attention_stages",
+        "n_spectral_layers",
+        "n_stages",
+        "n_head_blocks",
+    },
 }
 # Optional keys passed straight to each network's constructor; any left out take its defaults
 NETWORK_KEYS = {
-    "resblock": ("n_fc", "block_architecture", "attention_stages"),
-    "ddpm": ("time_encoding_dim", "block_architecture", "attention_stages"),
+    "resblock": ("n_fc", "block_architecture", "attention_stages", "n_stages", "n_head_blocks"),
+    "ddpm": ("time_encoding_dim", "block_architecture", "attention_stages", "n_stages", "n_head_blocks"),
+    "resblock_2d": ("block_architecture", "attention_stages", "n_spectral_layers", "n_stages", "n_head_blocks"),
+    "ddpm_2d": (
+        "time_encoding_dim",
+        "block_architecture",
+        "attention_stages",
+        "n_spectral_layers",
+        "n_stages",
+        "n_head_blocks",
+    ),
 }
+# The networks trained by denoising and predicted by sampling, rather than regressed
+DIFFUSION_NETWORKS = {"ddpm", "ddpm_2d"}
 
 
 def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
@@ -45,6 +87,9 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
     or a radial curve of output_shape (n_bins,) (resblock only), for each of n_maps targets."""
     kernel_stem = (hyperparams["k0"],) * 3
     kernel_coder = (hyperparams["k1"],) * 3
+    # The 2-d networks: k0 is the spectral encoder's spectral kernel, k1 every spatial kernel
+    kernel_encoder = (hyperparams["k0"], hyperparams["k1"], hyperparams["k1"])
+    kernel_size = (hyperparams["k1"],) * 2
     network_kwargs = {key: hyperparams[key] for key in NETWORK_KEYS[network] if key in hyperparams}
     if network == "resblock":
         return NeuralNetwork(
@@ -63,17 +108,42 @@ def build_model(network, input_shape, hyperparams, output_shape=None, n_maps=1):
 
     if output_shape is not None:
         raise ValueError(
-            "the ddpm network predicts maps of size equal to the input pixel shape (nY, nX). output_shape must be set to None."
+            f"the {network} network predicts maps of size equal to the input pixel shape (nY, nX). "
+            "output_shape must be set to None."
         )
-    denoiser = DenoisingUNet3d(
-        input_shape,
-        hyperparams["n_filt0"],
-        kernel_stem,
-        kernel_coder,
-        block_dropout_rate=hyperparams["block_dropout_rate"],
-        n_maps=n_maps,
-        **network_kwargs,
-    )
+    if network == "resblock_2d":
+        return SpectralResNet2d(
+            input_shape,
+            hyperparams["n_filt0"],
+            kernel_encoder,
+            kernel_size,
+            head_dropout_rate=hyperparams["dropout_rate"],
+            block_dropout_rate=hyperparams["block_dropout_rate"],
+            predict_variance=hyperparams["predict_variance"],
+            n_maps=n_maps,
+            **network_kwargs,
+        )
+
+    if network == "ddpm":
+        denoiser = DenoisingUNet3d(
+            input_shape,
+            hyperparams["n_filt0"],
+            kernel_stem,
+            kernel_coder,
+            block_dropout_rate=hyperparams["block_dropout_rate"],
+            n_maps=n_maps,
+            **network_kwargs,
+        )
+    else:
+        denoiser = SpectralDenoisingUNet2d(
+            input_shape,
+            hyperparams["n_filt0"],
+            kernel_encoder,
+            kernel_size,
+            block_dropout_rate=hyperparams["block_dropout_rate"],
+            n_maps=n_maps,
+            **network_kwargs,
+        )
     return GaussianDiffusion(
         denoiser,
         n_timesteps=hyperparams["n_timesteps"],
