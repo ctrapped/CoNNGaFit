@@ -4,6 +4,7 @@
    SelfAttention                              - self-attention over every position of a coarse feature map
    DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
    SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
+   MapHead2d                                  - 2-d features -> maps, for the 2-d spectral networks
    ConvMapHead                                - head='conv' option of both regression networks
    HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
    SpectralEncoder                            - datacube -> per-pixel features for spectral_unet2d.py
@@ -484,7 +485,7 @@ class DeconvBlock(nn.Module):
             return x + shortcut
 
 
-#### Self-attention over a 3-d feature map ####
+#### Self-attention over a feature map ####
 class SelfAttention(nn.Module):
     """Self-attention over every position (voxel of a cube, or pixel of a map) of a feature map:
     GroupNorm -> q, k, v (1x1 conv) -> scaled dot-product attention -> 1x1 output projection, added to the input.
@@ -590,6 +591,65 @@ class DilatedResidualBlock(nn.Module):
         out = out + skip
         out = self.final_act(out)
         return self.dropout(out)
+
+
+#### 2-d map head ####
+class MapHead2d(nn.Module):
+    """2-d features (nBatch, in_channels, H, W) -> maps (nBatch, out_channels, H, W): n_blocks 2-d ResidualBlocks
+    (the first maps in_channels -> channels), channel-wise dropout and a 3x3 output conv, so each output pixel is
+    predicted from the features at and around that pixel.
+
+    Parameters:
+        in_channels: channels of the input features.
+        channels: channels of every block.
+        out_channels: output maps, e.g. n_maps, or 2 * n_maps for mean + log-variance.
+        n_blocks: number of 2-d ResidualBlocks (>= 0).
+        activation, max_groups, time_embed_dim, architecture: as in ResidualBlock.
+        dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
+        zero_init_output: start the output conv at zero (the DDPM starts by predicting eps = 0).
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        channels,
+        out_channels=1,
+        n_blocks=2,
+        activation=nn.ReLU,
+        max_groups=8,
+        time_embed_dim=None,
+        architecture="post_activation",
+        dropout_rate=0.0,
+        zero_init_output=False,
+    ):
+        super().__init__()
+        if n_blocks < 0:
+            raise ValueError("n_blocks must be >= 0")
+        self.blocks = nn.ModuleList()
+        for i in range(n_blocks):
+            block = ResidualBlock(
+                in_channels if i == 0 else channels,
+                channels,
+                downsample=False,
+                kernel1=(3, 3),
+                n_dims=2,
+                activation=activation,
+                max_groups=max_groups,
+                time_embed_dim=time_embed_dim,
+                architecture=architecture,
+            )
+            self.blocks.append(block)
+        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.out = nn.Conv2d(channels if n_blocks else in_channels, out_channels, 3, padding=1)
+        if zero_init_output:
+            nn.init.zeros_(self.out.weight)
+            nn.init.zeros_(self.out.bias)
+
+    def forward(self, h, t_emb=None):
+        """h: (nBatch, in_channels, H, W); t_emb: (nBatch, time_embed_dim) or None."""
+        for block in self.blocks:
+            h = block(h, t_emb)
+        return self.out(self.dropout(h))
 
 
 #### 3-d -> 2-d convolutional head ####
