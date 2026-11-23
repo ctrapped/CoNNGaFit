@@ -11,7 +11,7 @@ import h5py
 import pytest
 import torch
 
-from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
+from conngafit.models import spectral_unet2d, unet3d_dilated_resnet, unet3d_resblock
 
 INPUT_SHAPE = (16, 16, 16)  # (nSpec, nX, nY)
 BATCH_SIZE = 2
@@ -33,11 +33,19 @@ TARGET = "rotational_velocity"  # The demo images carry mass and rotational velo
 with h5py.File(IMAGE, "r") as hf:
     IMAGE_SHAPE = hf["spectra"].shape  # (n_y, n_x, n_spec), as VOF writes it
 
-# Constructor arguments shared by every network, plus per-network arguments that keep it small
-COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, n_filt0=4, kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8)
+# Constructor arguments shared by every regression network, plus per-network arguments that keep it small
+COMMON_KWARGS = dict(input_shape=INPUT_SHAPE, n_filt0=4)
 SMALL_KWARGS = {
-    unet3d_resblock: dict(n_stages=3),
-    unet3d_dilated_resnet: dict(n_blocks=1, dilation_rates=(1, 2, 1)),
+    unet3d_resblock: dict(kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8, n_stages=3),
+    unet3d_dilated_resnet: dict(
+        kernel_stem=(3, 3, 3), kernel_coder=(3, 3, 3), n_fc=8, n_blocks=1, dilation_rates=(1, 2, 1)
+    ),
+    spectral_unet2d: dict(kernel_encoder=(3, 3, 3), kernel_size=(3, 3), n_stages=3),
+}
+NETWORK_CLASSES = {
+    unet3d_resblock: unet3d_resblock.NeuralNetwork,
+    unet3d_dilated_resnet: unet3d_dilated_resnet.NeuralNetwork,
+    spectral_unet2d: spectral_unet2d.SpectralResNet2d,
 }
 
 
@@ -46,18 +54,22 @@ def seed():
     torch.manual_seed(SEED)
 
 
-@pytest.fixture(params=list(SMALL_KWARGS), ids=lambda module: module.__name__)
+@pytest.fixture(params=[unet3d_resblock, unet3d_dilated_resnet], ids=lambda module: module.__name__)
 def network(request):
-    """Each network module in turn."""
+    """Each 3-d network module in turn, for the tests of their shared heads and shape checks."""
     return request.param
 
 
 @pytest.fixture
 def make_model():
-    """Factory for a small module.NeuralNetwork; keyword arguments override the defaults."""
+    """Factory for a small regression network of a module; head (None for a network with one fixed head) and the
+    keyword arguments override the defaults."""
 
-    def make(module, **overrides):
-        return module.NeuralNetwork(**{**COMMON_KWARGS, **SMALL_KWARGS[module], **overrides})
+    def make(module, head=None, **overrides):
+        kwargs = {**COMMON_KWARGS, **SMALL_KWARGS[module], **overrides}
+        if head is not None:
+            kwargs["head"] = head
+        return NETWORK_CLASSES[module](**kwargs)
 
     return make
 

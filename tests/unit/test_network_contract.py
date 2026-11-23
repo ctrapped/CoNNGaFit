@@ -5,11 +5,12 @@ import torch
 from torch import nn
 
 from conngafit.mc_dropout import predict_with_mc_dropout
-from conngafit.models import unet3d_dilated_resnet, unet3d_resblock
+from conngafit.models import spectral_unet2d, unet3d_dilated_resnet, unet3d_resblock
 
 HEADS = {
     unet3d_resblock: ("fc", "conv", "conv_halfres"),
     unet3d_dilated_resnet: ("fc", "conv"),
+    spectral_unet2d: (None,),  # one fixed map head
 }
 OUTPUT_SHAPE = (5,)  # output_shape of a 1-d output such as a radial curve
 N_MAPS = 3
@@ -18,7 +19,7 @@ N_SAMPLES = 8
 
 # Every (network, head) pair each network supports, and those with a conv head
 NETWORK_HEADS = [(module, head) for module, heads in HEADS.items() for head in heads]
-NETWORK_CONV_HEADS = [(module, head) for module, head in NETWORK_HEADS if head != "fc"]
+NETWORK_CONV_HEADS = [(module, head) for module, head in NETWORK_HEADS if head not in ("fc", None)]
 every_head = pytest.mark.parametrize(
     ("network", "head"), NETWORK_HEADS, ids=[f"{m.__name__}-{h}" for m, h in NETWORK_HEADS]
 )
