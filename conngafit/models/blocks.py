@@ -1,10 +1,12 @@
-"""Shared building blocks for the CoNNGaFit 3-d networks:
-   Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
-   SelfAttention3d                            - self-attention over every voxel of a coarse 3-d feature map
+"""Shared building blocks for the CoNNGaFit networks (3-d cubes and 2-d maps):
+   Stem                                       - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
+   ResidualBlock, Upsample, DeconvBlock       - unet.UNet (ResidualBlock also in the 2-d map heads)
+   SelfAttention                              - self-attention over every position of a coarse feature map
    DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
-   SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
-   ResBlock2d                                 - ConvMapHead and unet3d_ddpm's MapHead
-   ConvMapHead                                - head='conv' option of both regression networks
+   SpectralAttentionPool                      - MapHead3d and HalfResConvHead
+   MapHead2d                                  - 2-d features -> maps, for the 2-d spectral networks
+   MapHead3d                                  - 3-d features -> maps: head='conv' of ResNets and
+                                                the DDPM's head
    HalfResConvHead                            - head='conv_halfres' option of unet3d_resblock.NeuralNetwork
    SpectralEncoder                            - datacube -> per-pixel features for spectral_unet2d.py
 Plus the padding/alignment helpers these blocks need to keep every axis exact for any input size.
@@ -34,7 +36,7 @@ def _doubling_deconv_pads(kernel_size):
 
 
 def _near_same_deconv_pad(kernel_size):
-    """Per-axis padding (k-1)//2 for a stride-1 ConvTranspose3d."""
+    """Per-axis padding (k-1)//2 for a stride-1 transposed conv."""
     return tuple((k - 1) // 2 for k in kernel_size)
 
 
@@ -65,11 +67,16 @@ def _film(h, scale_shift):
     return h * (1 + scale.view(view)) + shift.view(view)
 
 
-def _norm3d(channels, max_groups):
-    """BatchNorm3d if max_groups is None, otherwise GroupNorm with gcd(channels, max_groups) groups
+def _norm(channels, max_groups, n_dims=3):
+    """BatchNorm{n_dims}d if max_groups is None, otherwise GroupNorm with gcd(channels, max_groups) groups
     (the largest group count <= max_groups that divides the channels)."""
     if max_groups is None:
-        return nn.BatchNorm3d(channels)
+        if n_dims == 3:
+            return nn.BatchNorm3d(channels)
+        elif n_dims == 2:
+            return nn.BatchNorm2d(channels)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
     return nn.GroupNorm(math.gcd(channels, max_groups), channels)
 
 
@@ -204,8 +211,11 @@ class ResidualBlock(nn.Module):
       - 'identity_skip': conv1 -> norm -> [FiLM(t)] -> activation -> dropout -> conv2 -> norm -> + skip.
         Initialize second norm's weight to zero (i.e. block starts at identity) for easy initial training.
 
-    When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis
-    to ceil(N/2) and the skip is projected through a strided 1x1x1 conv + norm to match.
+    When downsample=True, conv1 runs at stride 2 to bring every spatial/spectral axis to ceil(N/2). When
+    downsampling or changing the channel count, the skip is projected through a 1x1 conv + norm to match
+    (strided when downsampling); otherwise it is the identity.
+
+    n_dims sets 3-d (cubes) or 2-d (maps) layers; the input then has n_dims axes after the channels.
 
     FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
     given t_emb (as in the DDPM denoiser). With time_embed_dim=None (the default, used by the regression
@@ -213,9 +223,10 @@ class ResidualBlock(nn.Module):
 
     Parameters:
         in_channels, out_channels: channel counts of the block's input and output.
-        downsample: if True, halve every axis (ceil(N/2)) and use a projected skip.
-        kernel1: 3-tuple conv kernel size (used by conv1 and conv2).
-        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables it).
+        downsample: if True, halve every axis (ceil(N/2)).
+        kernel1: n_dims-tuple conv kernel size (used by conv1 and conv2).
+        n_dims: 3 for Conv3d layers on cubes, 2 for Conv2d layers on maps.
+        dropout_rate: probability for the channel-wise dropout (0.0 disables it).
         activation: zero-arg callable returning an nn.Module, e.g. nn.ReLU or lambda: nn.LeakyReLU(0.2).
         time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
             (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
@@ -231,6 +242,7 @@ class ResidualBlock(nn.Module):
         out_channels,
         downsample,
         kernel1,
+        n_dims=3,
         dropout_rate=0.0,
         activation=nn.ReLU,
         time_embed_dim=None,
@@ -239,27 +251,37 @@ class ResidualBlock(nn.Module):
     ):
         super().__init__()
         # Shared by every architecture
+        if n_dims == 3:
+            conv = nn.Conv3d
+            self.dropout = nn.Dropout3d(p=dropout_rate)
+        elif n_dims == 2:
+            conv = nn.Conv2d
+            self.dropout = nn.Dropout2d(p=dropout_rate)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.downsample = downsample
         if time_embed_dim is None:
             max_groups = None
         if downsample:
             # conv1 pads 0; forward() applies F.pad first so any kernel lands on ceil(N/2).
-            stride = (2, 2, 2)
+            stride = (2,) * n_dims
             self.down_pad = _ceil_conv_pad(kernel1, stride)
-            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
-            # a stride-2 1x1x1 conv already yields ceil(N/2), so the skip needs no padding.
+            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, stride=stride, padding=0)
+        else:
+            stride = 1
+            self.conv1 = conv(in_channels, out_channels, kernel_size=kernel1, padding="same")
+        if downsample or in_channels != out_channels:
+            # a stride-2 1x1 conv already yields ceil(N/2), so the skip needs no padding.
             self.shortcut = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(2, 2, 2)),
-                _norm3d(out_channels, max_groups),
+                conv(in_channels, out_channels, kernel_size=1, stride=stride),
+                _norm(out_channels, max_groups, n_dims),
             )
         else:
-            self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
             self.shortcut = nn.Sequential()
         # conv2 keeps the shape fixed
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding="same")
-        self.bn1 = _norm3d(out_channels, max_groups)
-        self.bn2 = _norm3d(out_channels, max_groups)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
+        self.conv2 = conv(out_channels, out_channels, kernel_size=kernel1, padding="same")
+        self.bn1 = _norm(out_channels, max_groups, n_dims)
+        self.bn2 = _norm(out_channels, max_groups, n_dims)
         self.act1 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
@@ -309,13 +331,13 @@ class Upsample(nn.Module):
     """Spatially upsample by ~2x per axis, then project to out_channels. Two
     implementations, selected by `mode`:
 
-      - 'conv_transpose' (default): a single stride-2 ConvTranspose3d does the spatial
+      - 'conv_transpose' (default): a single stride-2 transposed conv does the spatial
         upsample and the channel projection together, in one learned operation.
         Cheap, but can be prone to checkerboard artifacts (https://distill.pub/2016/deconv-checkerboard/).
 
-      - 'trilinear': nn.Upsample(scale_factor=2, mode='trilinear') doubles the spatial size
-        (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1x1 Conv3d that
-        projects in_channels -> out_channels.
+      - 'interpolation': nn.Upsample(scale_factor=2) with linear interpolation (trilinear for cubes, bilinear for
+        maps) doubles the spatial size (exactly 2*N, not 2*N-1) with no learned parameters, followed by a 1x1
+        conv that projects in_channels -> out_channels.
 
     The small 2*N vs 2*N-1 difference between the two modes is accounted for downstream.
     NeuralNetwork.forward realigns the result to the matching encoder skip map's exact shape via
@@ -323,32 +345,39 @@ class Upsample(nn.Module):
 
     Parameters:
         in_channels, out_channels: channel counts in and out.
-        kernel1: 3-tuple kernel size; only used when mode='conv_transpose'.
-        mode: 'conv_transpose' (default) or 'trilinear'.
+        kernel1: n_dims-tuple kernel size; only used when mode='conv_transpose'.
+        n_dims: 3 for 3-d layers on cubes, 2 for 2-d layers on maps.
+        mode: 'conv_transpose' (default) or 'interpolation'.
     """
 
-    def __init__(self, in_channels, out_channels, kernel1, mode="conv_transpose"):
+    def __init__(self, in_channels, out_channels, kernel1, n_dims=3, mode="conv_transpose"):
         super().__init__()
-        if mode not in ("conv_transpose", "trilinear"):
-            raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'trilinear'")
+        if mode not in ("conv_transpose", "interpolation"):
+            raise ValueError(f"unknown Upsample mode {mode!r}; use 'conv_transpose' or 'interpolation'")
+        if n_dims == 3:
+            conv, conv_transpose, interpolation = nn.Conv3d, nn.ConvTranspose3d, "trilinear"
+        elif n_dims == 2:
+            conv, conv_transpose, interpolation = nn.Conv2d, nn.ConvTranspose2d, "bilinear"
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.mode = mode
         if mode == "conv_transpose":
             padding, output_padding = _doubling_deconv_pads(kernel1)
-            self.upconv1 = nn.ConvTranspose3d(
+            self.upconv1 = conv_transpose(
                 in_channels,
                 out_channels,
                 kernel_size=kernel1,
-                stride=(2, 2, 2),
+                stride=(2,) * n_dims,
                 padding=padding,
                 output_padding=output_padding,
             )
         else:
-            self.resize = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
-            self.project = nn.Conv3d(in_channels, out_channels, kernel_size=1)
+            self.resize = nn.Upsample(scale_factor=2, mode=interpolation, align_corners=False)
+            self.project = conv(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
-        """x: (nBatch, in_channels, D, H, W) -> (nBatch, out_channels, ~2D, ~2H, ~2W) -
-        exactly 2D-1 etc. for mode='conv_transpose', exactly 2D etc. for mode='trilinear'."""
+        """x: (nBatch, in_channels, *spatial) -> (nBatch, out_channels, ~2x every spatial axis) - exactly 2N-1
+        for mode='conv_transpose', exactly 2N for mode='interpolation'."""
         if self.mode == "conv_transpose":
             return self.upconv1(x)
         return self.project(self.resize(x))
@@ -374,8 +403,9 @@ class DeconvBlock(nn.Module):
     Parameters:
         in_channels, out_channels: channel counts of the block's input and output.
         upsample: if True, project the skip to out_channels; if False, use an identity skip.
-        kernel1: 3-tuple conv kernel size.
-        dropout_rate: probability for the channel-wise nn.Dropout3d (0.0 disables).
+        kernel1: n_dims-tuple conv kernel size.
+        n_dims: 3 for Conv3d layers on cubes, 2 for Conv2d layers on maps.
+        dropout_rate: probability for the channel-wise dropout (0.0 disables).
         activation: zero-arg callable returning an nn.Module.
         max_groups, time_embed_dim, architecture: as in ResidualBlock.
     """
@@ -386,6 +416,7 @@ class DeconvBlock(nn.Module):
         out_channels,
         upsample,
         kernel1,
+        n_dims=3,
         dropout_rate=0.0,
         activation=nn.ReLU,
         max_groups=8,
@@ -394,25 +425,28 @@ class DeconvBlock(nn.Module):
     ):
         super().__init__()
         # Shared by every architecture
+        if n_dims == 3:
+            conv_transpose = nn.ConvTranspose3d
+            self.dropout = nn.Dropout3d(p=dropout_rate)
+        elif n_dims == 2:
+            conv_transpose = nn.ConvTranspose2d
+            self.dropout = nn.Dropout2d(p=dropout_rate)
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         if time_embed_dim is None:
             max_groups = None
         pad = _near_same_deconv_pad(kernel1)  # forward() trims any even-kernel overshoot
-        self.convtran1 = nn.ConvTranspose3d(
-            in_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
-        )
+        self.convtran1 = conv_transpose(in_channels, out_channels, kernel_size=kernel1, padding=pad)
         if upsample:
             self.shortcut = nn.Sequential(
-                nn.ConvTranspose3d(in_channels, out_channels, kernel_size=(1, 1, 1), stride=(1, 1, 1)),
-                _norm3d(out_channels, max_groups),
+                conv_transpose(in_channels, out_channels, kernel_size=1),
+                _norm(out_channels, max_groups, n_dims),
             )
         else:
             self.shortcut = nn.Sequential()
-        self.convtran2 = nn.ConvTranspose3d(
-            out_channels, out_channels, kernel_size=kernel1, stride=(1, 1, 1), padding=pad
-        )
-        self.bn1 = _norm3d(out_channels, max_groups)
-        self.bn2 = _norm3d(out_channels, max_groups)
-        self.dropout = nn.Dropout3d(p=dropout_rate)
+        self.convtran2 = conv_transpose(out_channels, out_channels, kernel_size=kernel1, padding=pad)
+        self.bn1 = _norm(out_channels, max_groups, n_dims)
+        self.bn2 = _norm(out_channels, max_groups, n_dims)
         self.act1 = activation()
         if time_embed_dim is not None:
             self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
@@ -452,53 +486,60 @@ class DeconvBlock(nn.Module):
             return x + shortcut
 
 
-#### Self-attention over a 3-d feature map ####
-class SelfAttention3d(nn.Module):
-    """Self-attention over every voxel of a 3-d feature map:
-    GroupNorm -> q, k, v (1x1x1 conv) -> scaled dot-product attention -> 1x1x1 output projection, added to the input.
+#### Self-attention over a feature map ####
+class SelfAttention(nn.Module):
+    """Self-attention over every position (voxel of a cube, or pixel of a map) of a feature map:
+    GroupNorm -> q, k, v (1x1 conv) -> scaled dot-product attention -> 1x1 output projection, added to the input.
 
-    Every voxel attends to every other, so the block links distant parts of the cube which cannot reach.
-    The output projection starts at zero, so the block starts as the identity. Memory/compute scale as N^2,
-    so use it only on coarse grids.
+    Every position attends to every other, so the block links distant parts of the cube or map which cannot reach.
+    The output projection starts at zero, so the block starts as the identity. Memory/compute scale as N^2 in the
+    number of positions N, so use it only on coarse grids.
 
     Parameters:
         channels: feature channels of the input and output.
         n_heads: number of attention heads; must divide channels.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+        n_dims: 3 for 3-d layers on cubes, 2 for 2-d layers on maps.
     """
 
-    def __init__(self, channels, n_heads=1, max_groups=8):
+    def __init__(self, channels, n_heads=1, max_groups=8, n_dims=3):
         super().__init__()
         if channels % n_heads:
             raise ValueError(f"n_heads={n_heads} must divide channels={channels}")
+        if n_dims == 3:
+            conv = nn.Conv3d
+        elif n_dims == 2:
+            conv = nn.Conv2d
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.n_heads = n_heads
         # Normalizes each sample's features, so dot products have a consistent scale
         self.norm = nn.GroupNorm(math.gcd(channels, max_groups), channels)
-        # Turn each voxel's features into a query, key, and value
+        # Turn each position's features into a query, key, and value
         # (what it looks for in others, what it offers to others,
         # what it passes on to others that attend to it)
-        self.qkv = nn.Conv3d(channels, 3 * channels, kernel_size=1)
+        self.qkv = conv(channels, 3 * channels, kernel_size=1)
         # Mixes the heads' outputs back into the feature channels
-        self.proj = nn.Conv3d(channels, channels, kernel_size=1)
+        self.proj = conv(channels, channels, kernel_size=1)
         # zero projection adds nothing to the input, so the block starts as the identity
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, x):
-        """x: (nBatch, channels, D, H, W) -> (nBatch, channels, D, H, W)."""
+        """x: (nBatch, channels, *spatial) -> (nBatch, channels, *spatial). *spatial is (D, H, W) for cubes or (H, W) for maps."""
         n_batch, channels = x.shape[:2]
         head_dim = channels // self.n_heads
 
-        qkv = self.qkv(self.norm(x))  # (nBatch, 3 * channels, D, H, W)
-        qkv = qkv.reshape(n_batch, 3, self.n_heads, head_dim, -1)  # (nBatch, 3, n_heads, head_dim, n_voxels)
-        qkv = qkv.transpose(-1, -2)  # (nBatch, 3, n_heads, n_voxels, head_dim): one row per voxel
-        q, k, v = qkv.unbind(dim=1)  # Each (nBatch, n_heads, n_voxels, head_dim)
+        qkv = self.qkv(self.norm(x))  # (nBatch, 3 * channels, *spatial)
+        qkv = qkv.reshape(n_batch, 3, self.n_heads, head_dim, -1)  # (nBatch, 3, n_heads, head_dim, n_positions)
+        qkv = qkv.transpose(-1, -2)  # (nBatch, 3, n_heads, n_positions, head_dim): one row per position
+        q, k, v = qkv.unbind(dim=1)  # Each (nBatch, n_heads, n_positions, head_dim)
 
-        h = F.scaled_dot_product_attention(q, k, v)  # (nBatch, n_heads, n_voxels, head_dim)
+        h = F.scaled_dot_product_attention(q, k, v)  # (nBatch, n_heads, n_positions, head_dim)
 
         # Back to a feature map, with the heads' outputs side by side along the channel axis
-        h = h.transpose(-1, -2)  # (nBatch, n_heads, head_dim, n_voxels)
-        h = h.reshape(x.shape)  # (nBatch, channels, D, H, W)
+        h = h.transpose(-1, -2)  # (nBatch, n_heads, head_dim, n_positions)
+        h = h.reshape(x.shape)  # (nBatch, channels, *spatial)
 
         # Residual: the projected attention output is added to the unchanged input
         return x + self.proj(h)
@@ -553,6 +594,65 @@ class DilatedResidualBlock(nn.Module):
         return self.dropout(out)
 
 
+#### 2-d map head ####
+class MapHead2d(nn.Module):
+    """2-d features (nBatch, in_channels, H, W) -> maps (nBatch, out_channels, H, W): n_blocks 2-d ResidualBlocks
+    (the first maps in_channels -> channels), channel-wise dropout and a 3x3 output conv, so each output pixel is
+    predicted from the features at and around that pixel.
+
+    Parameters:
+        in_channels: channels of the input features.
+        channels: channels of every block.
+        out_channels: output maps, e.g. n_maps, or 2 * n_maps for mean + log-variance.
+        n_blocks: number of 2-d ResidualBlocks (>= 0).
+        activation, max_groups, time_embed_dim, architecture: as in ResidualBlock.
+        dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
+        zero_init_output: start the output conv at zero (the DDPM starts by predicting eps = 0).
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        channels,
+        out_channels=1,
+        n_blocks=2,
+        activation=nn.ReLU,
+        max_groups=8,
+        time_embed_dim=None,
+        architecture="post_activation",
+        dropout_rate=0.0,
+        zero_init_output=False,
+    ):
+        super().__init__()
+        if n_blocks < 0:
+            raise ValueError("n_blocks must be >= 0")
+        self.blocks = nn.ModuleList()
+        for i in range(n_blocks):
+            block = ResidualBlock(
+                in_channels if i == 0 else channels,
+                channels,
+                downsample=False,
+                kernel1=(3, 3),
+                n_dims=2,
+                activation=activation,
+                max_groups=max_groups,
+                time_embed_dim=time_embed_dim,
+                architecture=architecture,
+            )
+            self.blocks.append(block)
+        self.dropout = nn.Dropout2d(p=dropout_rate)
+        self.out = nn.Conv2d(channels if n_blocks else in_channels, out_channels, 3, padding=1)
+        if zero_init_output:
+            nn.init.zeros_(self.out.weight)
+            nn.init.zeros_(self.out.bias)
+
+    def forward(self, h, t_emb=None):
+        """h: (nBatch, in_channels, H, W); t_emb: (nBatch, time_embed_dim) or None."""
+        for block in self.blocks:
+            h = block(h, t_emb)
+        return self.out(self.dropout(h))
+
+
 #### 3-d -> 2-d convolutional head ####
 class SpectralAttentionPool(nn.Module):
     """Collapse the spectral axis with learned, per-pixel softmax weights.
@@ -569,128 +669,30 @@ class SpectralAttentionPool(nn.Module):
         return (x * w).sum(dim=2)  # (B, C, X, Y)
 
 
-class ResBlock2d(nn.Module):
-    """2-d residual block with a skip (1x1 conv when the channel count changes), in one of two architectures:
-
-      - 'post_activation' (default): conv -> GroupNorm -> [FiLM(t)] -> act -> conv -> GroupNorm -> act, plus the
-        skip.
-
-      - 'identity_skip': conv -> GroupNorm -> [FiLM(t)] -> act -> conv -> GroupNorm, plus the skip, so the main path
-        adds a signed correction. The second GroupNorm's weight starts at zero, so the block starts as its skip.
-
-    GroupNorm normalizes each sample on its own, so the block behaves the same at batch size 1 (inference,
-    MC dropout) as in training.
-
-    FiLM time conditioning is applied only when the block is built with time_embed_dim AND forward() is
-    given t_emb.
-
-    Parameters:
-        in_channels, out_channels: channel counts of the block's input and output.
-        activation: zero-arg callable returning an nn.Module.
-        max_groups: upper bound on GroupNorm groups (actual = gcd(out_channels, max_groups)).
-        kernel_size: kernel size of both 2-d convs.
-        time_embed_dim: width of the timestep embedding t_emb. If set, a time_proj layer
-            (SiLU -> Linear(time_embed_dim, 2*out_channels)) is built to turn t_emb into the FiLM scale/shift
-            applied after norm1. None disables time conditioning.
-        architecture: 'post_activation' or 'identity_skip', as described above.
-    """
-
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        activation=nn.ReLU,
-        max_groups=8,
-        kernel_size=3,
-        time_embed_dim=None,
-        architecture="post_activation",
-    ):
-        super().__init__()
-        # Shared by every architecture
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, padding="same")
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, padding="same")
-        self.norm1 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        self.norm2 = nn.GroupNorm(math.gcd(out_channels, max_groups), out_channels)
-        if time_embed_dim is not None:
-            self.time_proj = nn.Sequential(nn.SiLU(), nn.Linear(time_embed_dim, 2 * out_channels))
-        self.act1 = activation()
-        self.shortcut = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
-
-        self.architecture = architecture
-        if architecture == "post_activation":
-            self.act2 = activation()
-        elif architecture == "identity_skip":
-            nn.init.zeros_(self.norm2.weight)  # The block starts as its skip
-        else:
-            raise ValueError(f"unknown architecture {architecture!r}; use 'post_activation' or 'identity_skip'")
-
-    def forward(self, x, t_emb=None):
-        """x: (nBatch, in_channels, H, W) -> (nBatch, out_channels, H, W).
-
-        t_emb: (nBatch, time_embed_dim) timestep embedding. If given, FiLM is applied after norm1 (requires the
-        block to be built with time_embed_dim). If None, the block runs without time conditioning.
-        """
-        if self.architecture == "post_activation":
-            h = self.norm1(self.conv1(x))
-            if t_emb is not None:
-                h = _film(h, self.time_proj(t_emb))
-            h = self.act1(h)
-            h = self.act2(self.norm2(self.conv2(h)))
-            return h + self.shortcut(x)
-
-        if self.architecture == "identity_skip":
-            h = self.norm1(self.conv1(x))
-            if t_emb is not None:
-                h = _film(h, self.time_proj(t_emb))
-            h = self.act1(h)
-            h = self.norm2(self.conv2(h))
-            return h + self.shortcut(x)
-
-
-class ConvMapHead(nn.Module):
-    """Fully convolutional head: 3-d features (nBatch, C, S, X, Y) -> 2-d maps (nBatch, out_channels, H, W).
-
-    Collapses the spectral axis with SpectralAttentionPool, resizes bilinearly to the target map grid
-    (H, W), refines with `n_blocks` ResBlock2d and projects with a 3x3 conv. This ensures each output
-    pixel is predicted from the features at and around that pixel.
+class MapHead3d(MapHead2d):
+    """3-d features (nBatch, channels, S, X, Y) -> maps (nBatch, out_channels, H, W): SpectralAttentionPool collapses
+    the spectral axis, the result is resized bilinearly to the map grid and optional extra maps (the DDPM's noisy
+    maps y_t) are concatenated, then MapHead2d.
 
     Parameters:
         channels: feature channels coming out of the network body.
-        out_channels: output maps, e.g. 1 (mean) or 2 (mean + log-variance).
-        n_blocks: number of ResBlock2d (>= 0).
-        activation: zero-arg callable returning an nn.Module.
-        dropout_rate: channel-wise nn.Dropout2d before the output conv (0.0 disables).
-        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
-        architecture: architecture of every ResBlock2d, 'post_activation' (default) or 'identity_skip'.
+        out_channels: output maps, e.g. n_maps, or 2 * n_maps for mean + log-variance.
+        extra_channels: channels of the extra maps (0 for none).
+        Every other argument: as in MapHead2d.
     """
 
-    def __init__(
-        self,
-        channels,
-        out_channels=1,
-        n_blocks=2,
-        activation=nn.ReLU,
-        dropout_rate=0.0,
-        max_groups=8,
-        architecture="post_activation",
-    ):
-        super().__init__()
-        if n_blocks < 0:
-            raise ValueError("n_blocks must be >= 0")
+    def __init__(self, channels, out_channels=1, extra_channels=0, **kwargs):
+        super().__init__(channels + extra_channels, channels, out_channels, **kwargs)
         self.pool = SpectralAttentionPool(channels)
-        self.blocks = nn.ModuleList(
-            [ResBlock2d(channels, channels, activation, max_groups, architecture=architecture) for _ in range(n_blocks)]
-        )
-        self.dropout = nn.Dropout2d(p=dropout_rate)
-        self.out = nn.Conv2d(channels, out_channels, 3, padding=1)
 
-    def forward(self, x, map_shape):
-        """x: (nBatch, C, S, X, Y) -> (nBatch, out_channels, *map_shape)."""
+    def forward(self, x, map_shape, extra=None, t_emb=None):
+        """x: (nBatch, channels, S, X, Y); map_shape: (H, W); extra: (nBatch, extra_channels, H, W) or None;
+        t_emb: (nBatch, time_embed_dim) or None."""
         h = self.pool(x)  # (B, C, X, Y)
         h = F.interpolate(h, size=tuple(map_shape), mode="bilinear", align_corners=False)
-        for blk in self.blocks:
-            h = blk(h)
-        return self.out(self.dropout(h))
+        if extra is not None:
+            h = torch.cat([h, extra], dim=1)  # (B, C + extra_channels, H, W)
+        return super().forward(h, t_emb)
 
 
 class HalfResConvHead(nn.Module):

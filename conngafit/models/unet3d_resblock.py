@@ -9,16 +9,16 @@ import torch
 from torch import nn
 
 from conngafit.models.blocks import (
-    ConvMapHead,
     DeconvBlock,
     HalfResConvHead,
+    MapHead3d,
     Stem,
     Upsample,
     _match_spatial,
     check_stage_compatibility,
 )
 from conngafit.models.diagnostics import save_summed_spectral_channels
-from conngafit.models.unet import UNet3d
+from conngafit.models.unet import UNet
 
 logger = logging.getLogger(__name__)
 
@@ -32,21 +32,21 @@ class NeuralNetwork(nn.Module):
     Architecture:
       - Stem (blocks.Stem): stride-2 Conv3d + stride-2 MaxPool3d + activation, reducing
         every axis to exactly ceil(N/4).
-      - U-Net (unet.UNet3d), with BatchNorm in every block:
+      - U-Net (unet.UNet), with BatchNorm in every block:
         Encoder: `n_stages` stages of two ResidualBlocks each. Stage 0 keeps the stem's
         shape and channel count; every later stage brings each axis to ceil(N/2) and
         doubles the channel count (n_filt0 * 2**i at stage i).
         Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
         `upsample_mode`), realigns the result to the matching encoder skip map with _match_spatial,
         concatenates channel-wise, then a DeconvBlock pair halves the channel count.
-        Attention: SelfAttention3d after the residual blocks of every stage in `attention_stages`, in the
+        Attention: SelfAttention after the residual blocks of every stage in `attention_stages`, in the
         encoder and in the decoder stage at the same resolution.
       - Head, chosen by `head`:
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to
         `fc_pool_shape`, so the flattened size is fixed regardless of input shape or depth; then
         `n_fc_layers` hidden Linear->activation->dropout blocks feed the output Linear and an
         optional output activation.
-        'conv': ConvMapHead (see blocks.py) - spectral attention pool, bilinear resize to
+        'conv': MapHead3d (see blocks.py) - spectral attention pool, bilinear resize to
         `output_shape`, 2-d residual blocks and a 3x3 output conv; its size does not grow with
         the input or map size.
         'conv_halfres': one more decoder stage up to the stem conv's half resolution (with a
@@ -91,7 +91,7 @@ class NeuralNetwork(nn.Module):
             head='conv', nn.LeakyReLU otherwise.
         output_activation: activation on the output Linear (default nn.Identity, i.e. none).
         upsample_mode: how each decoder stage upsamples (blocks.Upsample): 'conv_transpose' (default, a
-            learned stride-2 ConvTranspose3d) or 'trilinear' (trilinear interpolation, then a 1x1x1 Conv3d).
+            learned stride-2 ConvTranspose3d) or 'interpolation' (trilinear interpolation, then a 1x1x1 Conv3d).
         predict_variance: if False (default), the head has a single output Linear and
             forward() returns one tensor of shape (nBatch, n_maps, *output_shape). If True,
             a second output Linear is added predicting a per-element log-variance, and
@@ -104,7 +104,7 @@ class NeuralNetwork(nn.Module):
                 n_fc_layers. Its output Linear has (n_fc, or n_filt0 * prod(fc_pool_shape) with no hidden
                 layers) * n_maps * prod(output_shape) weights, so it grows with the map size: best for radial curves
                 and small images.
-            'conv' - ConvMapHead, with n_head_blocks 2-d residual blocks.
+            'conv' - MapHead3d, with n_head_blocks 2-d residual blocks.
             'conv_halfres' - one more decoder stage to half resolution, then HalfResConvHead with head_channels.
             The conv heads' sizes don't depend on the map size, and they ignore fc_pool_shape, n_fc and
             n_fc_layers.
@@ -178,10 +178,11 @@ class NeuralNetwork(nn.Module):
         self.n_filt0 = n_filt0
         self.kernel_stem = tuple(kernel_stem)
         self.kernel_coder = tuple(kernel_coder)
-        self.unet = UNet3d(
+        self.unet = UNet(
             n_filt0,
             n_stages,
             kernel_coder,
+            n_dims=3,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             architecture=block_architecture,
@@ -216,7 +217,7 @@ class NeuralNetwork(nn.Module):
 
         if head == "conv":
             # Head: spectral attention pool -> resize to output_shape -> 2-d res blocks -> conv.
-            self.conv_head = ConvMapHead(
+            self.conv_head = MapHead3d(
                 n_filt0,
                 out_channels=2 * n_maps if predict_variance else n_maps,
                 n_blocks=n_head_blocks,

@@ -4,13 +4,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from conngafit.models.blocks import ResBlock2d, SpectralAttentionPool, Stem, check_stage_compatibility
-from conngafit.models.unet import UNet3d
+from conngafit.models.blocks import MapHead3d, Stem, check_stage_compatibility
+from conngafit.models.unet import UNet
 
 # Conditional Denoising Diffusion Probabilistic Model (DDPM) for HI 21cm spectral datacubes.
 # Architecture inspired from Xu et al. (2023).
 # Learns p(maps | cube): one or more 2-d target maps (e.g. mass and rotational momentum) are diffused with
-# Gaussian noise and a 3-d residual U-Net, the shared UNet3d of unet.py, learns to remove it
+# Gaussian noise and a 3-d residual U-Net, the shared UNet of unet.py, learns to remove it
 # while looking at the datacube. Sampling many maps per cube gives their joint posterior (mean + uncertainty).
 #
 #   DenoisingUNet3d   - the noise-prediction network eps_theta(cube, y_t, t)
@@ -65,55 +65,6 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
-#### 3-d -> 2-d head ####
-class MapHead(nn.Module):
-    """Turn 3-d decoder features into 2-d noise predictions, one per map, at the target map resolution.
-
-    The stem works at 1/4 resolution, but eps is pixel-scale white noise, so the noisy maps y_t
-    are re-injected here at full resolution. The U-Net supplies the physics (what the cube says
-    about each pixel); this skip supplies the pixel-level noise pattern to subtract.
-    """
-
-    def __init__(
-        self,
-        channels,
-        time_embed_dim,
-        n_blocks=2,
-        activation=nn.SiLU,
-        max_groups=8,
-        n_maps=1,
-        architecture="post_activation",
-    ):
-        super().__init__()
-        self.pool = SpectralAttentionPool(channels)
-        self.blocks = nn.ModuleList(
-            [
-                ResBlock2d(
-                    channels + n_maps if i == 0 else channels,
-                    channels,
-                    activation,
-                    max_groups,
-                    time_embed_dim=time_embed_dim,
-                    architecture=architecture,
-                )
-                for i in range(n_blocks)
-            ]
-        )
-        self.out = nn.Conv2d(channels, n_maps, 3, padding=1)
-        nn.init.zeros_(self.out.weight)  # start by predicting eps = 0 -> stable early training
-        nn.init.zeros_(self.out.bias)
-
-    def forward(self, feats, y_t, t_emb):
-        h = self.pool(feats)  # (B, C, x', y')
-        h = F.interpolate(
-            h, size=y_t.shape[-2:], mode="bilinear", align_corners=False
-        )  # interpolate the pooled features to the full map resolution
-        h = torch.cat([h, y_t], dim=1)  # full-res skip of y_t (B, C+n_maps, H, W)
-        for blk in self.blocks:
-            h = blk(h, t_emb)  # first block (B, C+n_maps, H, W) -> (B, C, H, W), every later block keeps (B, C, H, W)
-        return self.out(h)  # (B, n_maps, H, W)
-
-
 #### Noise-prediction network ####
 class DenoisingUNet3d(nn.Module):
     """eps_theta(cube, y_t, t): predicts the noise added to n_maps 2-d maps, conditioned on a 3-d cube.
@@ -121,10 +72,11 @@ class DenoisingUNet3d(nn.Module):
     Layout mirrors unet3d_resblock.NeuralNetwork, minus its fixed-size FC head:
       input  - cube (1 ch) + noisy maps resized to (nX, nY) and tiled along nSpec (n_maps ch)
       stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
-      unet   - UNet3d: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
+      unet   - UNet: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
                stage 0), n_stages-1 decoder stages of Upsample -> concat skip -> 2 DeconvBlocks, and
-               SelfAttention3d after every stage in attention_stages
-      head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
+               SelfAttention after every stage in attention_stages
+      head   - MapHead3d: spectral attention pool -> resize to map size -> concat y_t at full resolution ->
+               2-d res blocks -> eps
     Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
     FiLM-conditioned on the timestep embedding, which is as wide as the widest encoder stage
     (n_filt0 * 2**(n_stages - 1)) so it can set the scale and shift of every channel there. The cube and map sizes
@@ -142,7 +94,7 @@ class DenoisingUNet3d(nn.Module):
         n_head_blocks: number of full-resolution 2-d blocks in the head.
         block_dropout_rate: channel-wise dropout inside every 3-d block.
         stem_activation, block_activation: zero-arg callables returning nn.Modules.
-        upsample_mode: 'trilinear' (default; no checkerboard artifacts, which would look like
+        upsample_mode: 'interpolation' (default; no checkerboard artifacts, which would look like
             structured noise to the model) or 'conv_transpose'.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
         output_shape: (H, W) of each map (default (nX, nY) from input).
@@ -165,7 +117,7 @@ class DenoisingUNet3d(nn.Module):
         block_dropout_rate=0.0,
         stem_activation=nn.LeakyReLU,
         block_activation=nn.SiLU,
-        upsample_mode="trilinear",
+        upsample_mode="interpolation",
         max_groups=8,
         output_shape=None,
         n_maps=1,
@@ -194,10 +146,11 @@ class DenoisingUNet3d(nn.Module):
         self.time_embed = TimestepEmbedding(time_encoding_dim, time_embed_dim)
         self.stem = Stem(n_filt0, self.kernel_stem, stem_activation, in_channels=1 + n_maps)
 
-        self.unet = UNet3d(
+        self.unet = UNet(
             n_filt0,
             n_stages,
             self.kernel_coder,
+            n_dims=3,
             dropout_rate=block_dropout_rate,
             activation=block_activation,
             max_groups=max_groups,
@@ -207,14 +160,19 @@ class DenoisingUNet3d(nn.Module):
             attention_stages=attention_stages,
         )
 
-        self.head = MapHead(
+        # The stem works at 1/4 resolution, but eps is pixel-scale white noise, so the head re-injects the noisy
+        # maps y_t at full resolution: the U-Net supplies what the cube says about each pixel, this skip the
+        # pixel-level noise pattern to subtract.
+        self.head = MapHead3d(
             n_filt0,
-            time_embed_dim,
-            n_head_blocks,
-            block_activation,
-            max_groups,
-            n_maps=n_maps,
+            out_channels=n_maps,
+            extra_channels=n_maps,
+            n_blocks=n_head_blocks,
+            activation=block_activation,
+            max_groups=max_groups,
+            time_embed_dim=time_embed_dim,
             architecture=block_architecture,
+            zero_init_output=True,
         )
 
     def forward(self, cube, y_t, t):
@@ -236,7 +194,7 @@ class DenoisingUNet3d(nn.Module):
         h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
 
         h, _ = self.unet(h, t_emb)
-        return self.head(h, y_t, t_emb)
+        return self.head(h, y_t.shape[-2:], extra=y_t, t_emb=t_emb)
 
 
 #### Diffusion process ####

@@ -6,10 +6,10 @@ import torch.nn.functional as F
 from torch import nn
 
 from conngafit.models.blocks import (
-    ConvMapHead,
     DilatedResidualBlock,
     HalfResConvHead,
-    ResBlock2d,
+    MapHead3d,
+    ResidualBlock,
     SpectralAttentionPool,
     _ceil_conv_pad,
     _doubling_deconv_pads,
@@ -88,13 +88,13 @@ def test_spectral_attention_pool_weights_sum_to_one():
 
 
 @pytest.mark.parametrize("out_channels", [CHANNELS, 2 * CHANNELS])
-def test_resblock2d_shape(out_channels):
-    block = ResBlock2d(CHANNELS, out_channels)
+def test_residual_block_2d_shape(out_channels):
+    block = ResidualBlock(CHANNELS, out_channels, downsample=False, kernel1=(3, 3), n_dims=2)
     assert block(torch.randn(BATCH, CHANNELS, 5, 6)).shape == (BATCH, out_channels, 5, 6)
 
 
-def test_resblock2d_is_independent_of_batch():
-    block = ResBlock2d(CHANNELS, CHANNELS)
+def test_residual_block_2d_is_independent_of_batch_in_eval():
+    block = ResidualBlock(CHANNELS, CHANNELS, downsample=False, kernel1=(3, 3), n_dims=2).eval()
     x = torch.randn(BATCH, CHANNELS, 5, 6)
     torch.testing.assert_close(block(x[:1]), block(x)[:1])
 
@@ -102,8 +102,8 @@ def test_resblock2d_is_independent_of_batch():
 @pytest.mark.parametrize("n_blocks", [0, 2])
 @pytest.mark.parametrize("map_shape", [(5, 6), (12, 12)])
 @pytest.mark.parametrize("out_channels", [1, 2])
-def test_conv_map_head_shape(n_blocks, map_shape, out_channels):
-    head = ConvMapHead(CHANNELS, out_channels=out_channels, n_blocks=n_blocks)
+def test_map_head_3d_shape(n_blocks, map_shape, out_channels):
+    head = MapHead3d(CHANNELS, out_channels=out_channels, n_blocks=n_blocks)
     out = head(torch.randn(BATCH, CHANNELS, 7, 4, 4), map_shape)
     assert out.shape == (BATCH, out_channels, *map_shape)
 
@@ -119,6 +119,6 @@ def test_half_res_conv_head_shape(predict_variance, n_maps):
         assert out.shape == (BATCH, n_maps, *map_shape)  # one map per target
 
 
-def test_conv_map_head_rejects_negative_blocks():
+def test_map_head_3d_rejects_negative_blocks():
     with pytest.raises(ValueError, match="n_blocks"):
-        ConvMapHead(CHANNELS, n_blocks=-1)
+        MapHead3d(CHANNELS, n_blocks=-1)

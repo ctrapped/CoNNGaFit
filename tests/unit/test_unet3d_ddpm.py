@@ -84,7 +84,7 @@ def test_timestep_embedding_shape_and_dependence_on_t(dim):
 
 
 #### Denoising network ####
-@pytest.mark.parametrize("upsample_mode", ["trilinear", "conv_transpose"])
+@pytest.mark.parametrize("upsample_mode", ["interpolation", "conv_transpose"])
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
