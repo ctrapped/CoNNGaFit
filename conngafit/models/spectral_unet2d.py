@@ -1,14 +1,18 @@
 """Networks that compress each pixel's spectrum first and then work in 2-d at full map resolution: a SpectralEncoder
 turns the datacube into per-pixel features, a 2-d UNet refines them and a MapHead2d predicts the output maps.
 
-  SpectralResNet2d - residual U-Net predicting the maps (and their log-variance) directly, like
-                     unet3d_resblock.NeuralNetwork
+  SpectralResNet2d        - residual U-Net predicting the maps (and their log-variance) directly, like
+                            unet3d_resblock.NeuralNetwork
+  SpectralDenoisingUNet2d - noise-prediction network for the DDPM (wrapped by unet3d_ddpm.GaussianDiffusion),
+                            like unet3d_ddpm.DenoisingUNet3d
 """
 
+import torch
 from torch import nn
 
 from conngafit.models.blocks import MapHead2d, SpectralEncoder, check_stage_compatibility
 from conngafit.models.unet import UNet
+from conngafit.models.unet3d_ddpm import TimestepEmbedding
 
 
 def _check_input_shape(input_shape, n_stages):
@@ -119,3 +123,104 @@ class SpectralResNet2d(nn.Module):
         if self.predict_variance:
             return mean, out[:, self.n_maps :]
         return mean
+
+
+class SpectralDenoisingUNet2d(nn.Module):
+    """eps_theta(cube, y_t, t): predicts the noise added to n_maps maps on the cube's (nX, nY) grid, conditioned on the
+    cube.
+
+    Layout:
+      encoder    - SpectralEncoder: n_spectral_layers strided 3-d convs halving the spectral axis, then a
+                   per-pixel attention pool over it -> (C_enc, nX, nY)
+      input      - the noisy maps y_t concatenated at full resolution -> (C_enc + n_maps, nX, nY)
+      input_conv - 3x3 Conv2d to n_filt0 channels
+      unet       - UNet(n_dims=2) with n_stages stages
+      head       - MapHead2d: n_head_blocks 2-d residual blocks and a 3x3 conv that starts at zero, so the network
+                   starts by predicting eps = 0
+    Every U-Net and head block uses GroupNorm and is FiLM-conditioned on the timestep embedding, which is as wide as
+    the widest U-Net stage (n_filt0 * 2**(n_stages - 1)).
+
+    Parameters:
+        input_shape: (nSpec, nX, nY) of the cube; nX and nY must allow n_stages - 1 halvings.
+        n_filt0: channels of the encoder's first layer, of the U-Net's first stage and of the head.
+        kernel_encoder: 3-tuple (spectral, x, y) kernel of the encoder's convs.
+        kernel_size: 2-tuple kernel of the U-Net's convs.
+        n_spectral_layers: encoder layers, each halving the spectral axis and doubling the channels.
+        n_stages: U-Net encoder stages (the last is the bottleneck).
+        n_maps: number of maps denoised together.
+        n_head_blocks: residual blocks in the head (>= 0).
+        time_encoding_dim: width of the fixed sinusoidal timestep encoding.
+        block_dropout_rate: channel-wise dropout inside every U-Net block.
+        block_architecture: architecture of every residual block, 'post_activation' or 'identity_skip'.
+        attention_stages: U-Net stage indices followed by self-attention.
+        upsample_mode: Upsample mode of the U-Net's decoder, 'interpolation' or 'conv_transpose'.
+        activation: zero-arg callable returning an nn.Module, used throughout.
+        max_groups: upper bound on GroupNorm groups.
+    """
+
+    def __init__(
+        self,
+        input_shape,
+        n_filt0,
+        kernel_encoder,
+        kernel_size,
+        n_spectral_layers=3,
+        n_stages=5,
+        n_maps=1,
+        n_head_blocks=2,
+        time_encoding_dim=128,
+        block_dropout_rate=0.0,
+        block_architecture="post_activation",
+        attention_stages=(),
+        upsample_mode="interpolation",
+        activation=nn.SiLU,
+        max_groups=8,
+    ):
+        super().__init__()
+        self.input_shape = _check_input_shape(input_shape, n_stages)
+        self.output_shape = self.input_shape[1:]
+        self.n_maps = n_maps
+        self.time_embed_dim = n_filt0 * 2 ** (n_stages - 1)  # As wide as the widest U-Net stage
+
+        self.time_embed = TimestepEmbedding(time_encoding_dim, self.time_embed_dim)
+        self.encoder = SpectralEncoder(n_filt0, n_spectral_layers, kernel_encoder, activation, max_groups)
+        self.input_conv = nn.Conv2d(self.encoder.out_channels + n_maps, n_filt0, kernel_size, padding="same")
+        self.unet = UNet(
+            n_filt0,
+            n_stages,
+            kernel_size,
+            n_dims=2,
+            dropout_rate=block_dropout_rate,
+            activation=activation,
+            max_groups=max_groups,
+            time_embed_dim=self.time_embed_dim,
+            architecture=block_architecture,
+            upsample_mode=upsample_mode,
+            attention_stages=attention_stages,
+        )
+        self.head = MapHead2d(
+            n_filt0,
+            n_filt0,
+            out_channels=n_maps,
+            n_blocks=n_head_blocks,
+            activation=activation,
+            max_groups=max_groups,
+            time_embed_dim=self.time_embed_dim,
+            architecture=block_architecture,
+            zero_init_output=True,
+        )
+
+    def forward(self, cube, y_t, t):
+        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, nX, nY) noisy maps;
+        t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, nX, nY)."""
+        maps_shape = (self.n_maps, *self.output_shape)
+        if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
+            raise ValueError(
+                f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
+                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
+            )
+        t_emb = self.time_embed(t)
+        h = self.encoder(cube.unsqueeze(1))  # (B, C_enc, nX, nY)
+        h = self.input_conv(torch.cat([h, y_t], dim=1))  # (B, n_filt0, nX, nY)
+        h, _ = self.unet(h, t_emb)
+        return self.head(h, t_emb)  # (B, n_maps, nX, nY)
