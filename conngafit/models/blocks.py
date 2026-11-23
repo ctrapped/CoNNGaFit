@@ -1,6 +1,6 @@
 """Shared building blocks for the CoNNGaFit 3-d networks:
    Stem, ResidualBlock, Upsample, DeconvBlock - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
-   SelfAttention3d                            - self-attention over every voxel of a coarse 3-d feature map
+   SelfAttention                              - self-attention over every position of a coarse feature map
    DilatedResidualBlock                       - unet3d_dilated_resnet.NeuralNetwork
    SpectralAttentionPool                      - the conv heads below and unet3d_ddpm's MapHead
    ConvMapHead                                - head='conv' option of both regression networks
@@ -484,52 +484,59 @@ class DeconvBlock(nn.Module):
 
 
 #### Self-attention over a 3-d feature map ####
-class SelfAttention3d(nn.Module):
-    """Self-attention over every voxel of a 3-d feature map:
-    GroupNorm -> q, k, v (1x1x1 conv) -> scaled dot-product attention -> 1x1x1 output projection, added to the input.
+class SelfAttention(nn.Module):
+    """Self-attention over every position (voxel of a cube, or pixel of a map) of a feature map:
+    GroupNorm -> q, k, v (1x1 conv) -> scaled dot-product attention -> 1x1 output projection, added to the input.
 
-    Every voxel attends to every other, so the block links distant parts of the cube which cannot reach.
-    The output projection starts at zero, so the block starts as the identity. Memory/compute scale as N^2,
-    so use it only on coarse grids.
+    Every position attends to every other, so the block links distant parts of the cube or map which cannot reach.
+    The output projection starts at zero, so the block starts as the identity. Memory/compute scale as N^2 in the
+    number of positions N, so use it only on coarse grids.
 
     Parameters:
         channels: feature channels of the input and output.
         n_heads: number of attention heads; must divide channels.
         max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+        n_dims: 3 for 3-d layers on cubes, 2 for 2-d layers on maps.
     """
 
-    def __init__(self, channels, n_heads=1, max_groups=8):
+    def __init__(self, channels, n_heads=1, max_groups=8, n_dims=3):
         super().__init__()
         if channels % n_heads:
             raise ValueError(f"n_heads={n_heads} must divide channels={channels}")
+        if n_dims == 3:
+            conv = nn.Conv3d
+        elif n_dims == 2:
+            conv = nn.Conv2d
+        else:
+            raise ValueError(f"n_dims must be 2 or 3; got {n_dims}")
         self.n_heads = n_heads
         # Normalizes each sample's features, so dot products have a consistent scale
         self.norm = nn.GroupNorm(math.gcd(channels, max_groups), channels)
-        # Turn each voxel's features into a query, key, and value
+        # Turn each position's features into a query, key, and value
         # (what it looks for in others, what it offers to others,
         # what it passes on to others that attend to it)
-        self.qkv = nn.Conv3d(channels, 3 * channels, kernel_size=1)
+        self.qkv = conv(channels, 3 * channels, kernel_size=1)
         # Mixes the heads' outputs back into the feature channels
-        self.proj = nn.Conv3d(channels, channels, kernel_size=1)
+        self.proj = conv(channels, channels, kernel_size=1)
         # zero projection adds nothing to the input, so the block starts as the identity
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, x):
-        """x: (nBatch, channels, D, H, W) -> (nBatch, channels, D, H, W)."""
+        """x: (nBatch, channels, *spatial) -> (nBatch, channels, *spatial). *spatial is (D, H, W) for cubes or (H, W) for maps."""
         n_batch, channels = x.shape[:2]
         head_dim = channels // self.n_heads
 
-        qkv = self.qkv(self.norm(x))  # (nBatch, 3 * channels, D, H, W)
-        qkv = qkv.reshape(n_batch, 3, self.n_heads, head_dim, -1)  # (nBatch, 3, n_heads, head_dim, n_voxels)
-        qkv = qkv.transpose(-1, -2)  # (nBatch, 3, n_heads, n_voxels, head_dim): one row per voxel
-        q, k, v = qkv.unbind(dim=1)  # Each (nBatch, n_heads, n_voxels, head_dim)
+        qkv = self.qkv(self.norm(x))  # (nBatch, 3 * channels, *spatial)
+        qkv = qkv.reshape(n_batch, 3, self.n_heads, head_dim, -1)  # (nBatch, 3, n_heads, head_dim, n_positions)
+        qkv = qkv.transpose(-1, -2)  # (nBatch, 3, n_heads, n_positions, head_dim): one row per position
+        q, k, v = qkv.unbind(dim=1)  # Each (nBatch, n_heads, n_positions, head_dim)
 
-        h = F.scaled_dot_product_attention(q, k, v)  # (nBatch, n_heads, n_voxels, head_dim)
+        h = F.scaled_dot_product_attention(q, k, v)  # (nBatch, n_heads, n_positions, head_dim)
 
         # Back to a feature map, with the heads' outputs side by side along the channel axis
-        h = h.transpose(-1, -2)  # (nBatch, n_heads, head_dim, n_voxels)
-        h = h.reshape(x.shape)  # (nBatch, channels, D, H, W)
+        h = h.transpose(-1, -2)  # (nBatch, n_heads, head_dim, n_positions)
+        h = h.reshape(x.shape)  # (nBatch, channels, *spatial)
 
         # Residual: the projected attention output is added to the unchanged input
         return x + self.proj(h)

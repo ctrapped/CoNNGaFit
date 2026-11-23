@@ -39,7 +39,7 @@ class NeuralNetwork(nn.Module):
         Decoder: `n_stages - 1` stages. Each upsamples ~2x per axis with blocks.Upsample (set by
         `upsample_mode`), realigns the result to the matching encoder skip map with _match_spatial,
         concatenates channel-wise, then a DeconvBlock pair halves the channel count.
-        Attention: SelfAttention3d after the residual blocks of every stage in `attention_stages`, in the
+        Attention: SelfAttention after the residual blocks of every stage in `attention_stages`, in the
         encoder and in the decoder stage at the same resolution.
       - Head, chosen by `head`:
         'fc' (default): nn.AdaptiveAvgPool3d collapses the surviving spatial shape to

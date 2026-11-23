@@ -126,7 +126,7 @@ class DenoisingUNet3d(nn.Module):
       stem   - Stem with 1 + n_maps input channels, every axis -> ceil(N/4)
       unet   - UNet3d: n_stages encoder stages of 2 ResidualBlocks (channels n_filt0 * 2**i, axes halve after
                stage 0), n_stages-1 decoder stages of Upsample -> concat skip -> 2 DeconvBlocks, and
-               SelfAttention3d after every stage in attention_stages
+               SelfAttention after every stage in attention_stages
       head   - MapHead: spectral attention pool -> resize to map size -> 2-d res blocks -> eps
     Every block uses GroupNorm (BatchNorm would mix samples at different noise levels) and is
     FiLM-conditioned on the timestep embedding, which is as wide as the widest encoder stage

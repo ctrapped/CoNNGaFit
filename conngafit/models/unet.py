@@ -5,14 +5,14 @@ UNet3d - unet3d_resblock.NeuralNetwork and unet3d_ddpm.DenoisingUNet3d
 import torch
 from torch import nn
 
-from conngafit.models.blocks import DeconvBlock, ResidualBlock, SelfAttention3d, Upsample, _match_spatial
+from conngafit.models.blocks import DeconvBlock, ResidualBlock, SelfAttention, Upsample, _match_spatial
 
 
 class UNet3d(nn.Module):
     """3-d residual U-Net: n_stages encoder stages of two ResidualBlocks (each stage after the first halving every
     axis to ceil(N/2) and doubling the channels), and a mirrored decoder in which each stage upsamples, concatenates
     the encoder output at the same resolution and applies two DeconvBlocks. Stages listed in attention_stages are
-    followed by SelfAttention3d, in the encoder and in the decoder stage at the same resolution.
+    followed by SelfAttention, in the encoder and in the decoder stage at the same resolution.
 
     Without time_embed_dim the blocks use BatchNorm; with it they use GroupNorm and are FiLM-conditioned on t_emb.
 
@@ -22,7 +22,7 @@ class UNet3d(nn.Module):
         kernel_size: 3-tuple kernel of every block conv.
         dropout_rate: probability of the channel-wise dropout inside every block.
         activation: zero-arg callable returning an nn.Module.
-        max_groups: upper bound on GroupNorm groups, in the blocks (with time_embed_dim) and in SelfAttention3d.
+        max_groups: upper bound on GroupNorm groups, in the blocks (with time_embed_dim) and in SelfAttention.
         time_embed_dim: width of the timestep embedding t_emb; None disables time conditioning.
         architecture: architecture of every block, 'post_activation' or 'identity_skip'.
         upsample_mode: Upsample mode of the decoder, 'interpolation' or 'conv_transpose'.
@@ -85,14 +85,14 @@ class UNet3d(nn.Module):
         self.encoder_attention = nn.ModuleList()
         for i, ch in enumerate(stage_channels):
             if i in attention_stages:
-                self.encoder_attention.append(SelfAttention3d(ch, max_groups=max_groups))
+                self.encoder_attention.append(SelfAttention(ch, max_groups=max_groups, n_dims=3))
             else:
                 self.encoder_attention.append(nn.Identity())
         self.decoder_attention = nn.ModuleList()
         for j in range(n_stages - 1):
             stage = n_stages - 2 - j
             if stage in attention_stages:
-                self.decoder_attention.append(SelfAttention3d(stage_channels[stage], max_groups=max_groups))
+                self.decoder_attention.append(SelfAttention(stage_channels[stage], max_groups=max_groups, n_dims=3))
             else:
                 self.decoder_attention.append(nn.Identity())
 
