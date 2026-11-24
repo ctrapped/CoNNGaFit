@@ -106,7 +106,7 @@ def test_untrained_denoiser_predicts_zero_noise(make_denoiser):
     assert not make_denoiser()(*denoiser_inputs()).any()
 
 
-@pytest.mark.parametrize("option", [dict(n_stages=1), dict(n_head_blocks=0), dict(input_shape=OUTPUT_SHAPE)])
+@pytest.mark.parametrize("option", [dict(n_stages=1), dict(n_head_blocks=-1), dict(input_shape=OUTPUT_SHAPE)])
 def test_denoiser_rejects_invalid_settings(make_denoiser, option):
     with pytest.raises(ValueError):
         make_denoiser(**option)

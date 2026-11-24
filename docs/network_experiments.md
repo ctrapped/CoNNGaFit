@@ -106,7 +106,7 @@ only: no radial curves, no `mass_weight_power`, no `predict_variance`.
 | `time_encoding_dim` **(main)** | 128 | Width of the sinusoidal timestep encoding | On `main` the learned embedding is as wide as the widest encoder stage |
 | `block_architecture`, `attention_stages` **(main)** | as for resblock | | `hyperparams_ddpm.toml` on `main` sets `attention_stages = [2]` |
 | `n_stages` | int ≥ 2 (default 4) | Denoiser depth | |
-| `n_head_blocks` | int ≥ 1 (default 2) | Full-resolution 2-d blocks in the head (`MapHead3d`) | |
+| `n_head_blocks` | int ≥ 0 (default 2) | Full-resolution 2-d blocks in the head (`MapHead3d`) | |
 
 ### Constructor only
 
