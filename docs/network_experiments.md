@@ -133,7 +133,7 @@ only: no radial curves, no `mass_weight_power`, no `predict_variance`.
 `n_spectral_layers` strided 3-d convs with kernel `(k0, k1, k1)`, each halving the spectral axis and doubling the
 channels, then a `SpectralAttentionPool` over what is left of it. A 3×3 conv brings the features to `n_filt0`
 channels, a 2-d `UNet` of `n_stages` stages refines them at the **full map resolution**, and `MapHead2d` predicts the
-maps. The U-Net and head use BatchNorm (no time conditioning); the encoder uses GroupNorm. Maps only, with the same
+maps. Every layer, the encoder included, uses BatchNorm (no time conditioning). Maps only, with the same
 `predict_variance` and MC dropout as the ResBlock U-Net.
 
 For a 128³ cube with the config: encoder 128 → 64 → 32 → 16 spectral channels at 128×128, pooled to
@@ -165,7 +165,7 @@ channels.
 |---|---|---|
 | `upsample_mode` | `"conv_transpose"` | Or `"interpolation"` (bilinear interpolation + 1×1 conv) |
 | `activation` | `nn.ReLU` | Every layer's activation |
-| `max_groups` | 8 | Upper bound on GroupNorm groups in the encoder and in self-attention |
+| `max_groups` | 8 | Upper bound on GroupNorm groups in self-attention |
 | `output_activation` | `nn.Identity` | As for resblock |
 
 `forward(x, save_latent_images=True)` is not supported.

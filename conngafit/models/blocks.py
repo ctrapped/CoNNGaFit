@@ -715,7 +715,7 @@ class HalfResConvHead(nn.Module):
 
 #### Spectral encoder: datacube -> per-pixel features ####
 class SpectralEncoder(nn.Module):
-    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> GroupNorm ->
+    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> norm ->
     activation, each halving the spectral axis (to ceil(S/2)) and keeping X and Y, then a SpectralAttentionPool that
     collapses what is left of the spectral axis. Each layer doubles the channels.
 
@@ -724,7 +724,8 @@ class SpectralEncoder(nn.Module):
         n_layers: number of conv layers.
         kernel_size: 3-tuple (spectral, x, y) kernel of every conv.
         activation: zero-arg callable returning an nn.Module.
-        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)); None selects BatchNorm3d,
+            as the blocks use without time conditioning.
     """
 
     def __init__(self, channels, n_layers, kernel_size, activation=nn.SiLU, max_groups=8):
@@ -738,7 +739,7 @@ class SpectralEncoder(nn.Module):
             self.layers.append(
                 nn.Sequential(
                     nn.Conv3d(layer_in, layer_out, kernel_size=kernel_size, stride=stride),
-                    nn.GroupNorm(math.gcd(layer_out, max_groups), layer_out),
+                    _norm(layer_out, max_groups, n_dims=3),
                     activation(),
                 )
             )

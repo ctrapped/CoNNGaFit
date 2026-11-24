@@ -32,7 +32,7 @@ class SpectralResNet2d(nn.Module):
       encoder    - SpectralEncoder: n_spectral_layers strided 3-d convs halving the spectral axis, then a
                    per-pixel attention pool over it -> (C_enc, nX, nY)
       input_conv - 3x3 Conv2d to n_filt0 channels
-      unet       - UNet(n_dims=2) with n_stages stages, BatchNorm in every block
+      unet       - UNet(n_dims=2) with n_stages stages
       head       - MapHead2d: n_head_blocks 2-d residual blocks, dropout and a 3x3 conv
 
     Parameters:
@@ -52,7 +52,7 @@ class SpectralResNet2d(nn.Module):
         attention_stages: U-Net stage indices followed by self-attention.
         upsample_mode: Upsample mode of the U-Net's decoder, 'conv_transpose' or 'interpolation'.
         activation: zero-arg callable returning an nn.Module, used throughout.
-        max_groups: upper bound on GroupNorm groups in the encoder and in self-attention.
+        max_groups: upper bound on GroupNorm groups in self-attention.
     """
 
     def __init__(
@@ -81,7 +81,8 @@ class SpectralResNet2d(nn.Module):
         self.n_maps = n_maps
         self.predict_variance = predict_variance
 
-        self.encoder = SpectralEncoder(n_filt0, n_spectral_layers, kernel_encoder, activation, max_groups)
+        # No time conditioning, so BatchNorm in the encoder, as in the U-Net and head
+        self.encoder = SpectralEncoder(n_filt0, n_spectral_layers, kernel_encoder, activation, max_groups=None)
         self.input_conv = nn.Conv2d(self.encoder.out_channels, n_filt0, kernel_size, padding="same")
         self.unet = UNet(
             n_filt0,
