@@ -6,15 +6,33 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- `blocks.SelfAttention3d`: self-attention over every voxel of a 3-d feature map (GroupNorm, 1x1x1 q/k/v,
-  scaled dot-product attention and a zero-initialised output projection added to the input). The DDPM and the
-  ResBlock U-Net add it after the residual blocks of the encoder and decoder stages listed in the optional
-  `attention_stages` hyperparameter (default `[]`); the DDPM and ResBlock configs set `[2]`.
-- `ResidualBlock`, `DeconvBlock` and `ResBlock2d` take an `architecture` argument: `"post_activation"` (default,
-  the existing layout) or `"identity_skip"`, which adds each block's correction to an unchanged skip and
-  zero-initialises its last norm so the block starts as its skip. The DDPM and the ResBlock U-Net (including
-  `ConvMapHead`'s 2-d blocks) set it for every block with the optional `block_architecture` hyperparameter
-  (default `"post_activation"`). Models saved without the key rebuild with `"post_activation"`.
+- `blocks.SelfAttention`: self-attention over every position of a feature map, voxels of a cube or pixels of a map
+  (GroupNorm, 1x1 q/k/v, scaled dot-product attention and a zero-initialised output projection added to the input).
+  The `resblock`, `ddpm`, `resblock_2d` and `ddpm_2d` networks add it after the residual blocks of the encoder and
+  decoder stages listed in the optional `attention_stages` hyperparameter (default `[]`); the `ddpm` and `ddpm_2d`
+  configs set `[2]`.
+- `ResidualBlock` and `DeconvBlock` take an `architecture` argument: `"post_activation"` (default, the existing
+  layout) or `"identity_skip"`, which adds each block's correction to an unchanged skip and zero-initialises its
+  last norm so the block starts as its skip. The four networks of `networks.py` (including their map heads' 2-d
+  blocks) set it for every block with the optional `block_architecture` hyperparameter (default
+  `"post_activation"`). Models saved without the key rebuild with `"post_activation"`.
+- Two networks that compress each pixel's spectrum first and then work in 2-d at full map resolution, in
+  `conngafit/models/spectral_unet2d.py`: `network = "resblock_2d"` (`SpectralResNet2d`, maps with an optional 1σ,
+  like `resblock`) and `network = "ddpm_2d"` (`SpectralDenoisingUNet2d`, the denoiser of the diffusion model, like
+  `ddpm`). Each is a `blocks.SpectralEncoder` (`n_spectral_layers` strided 3-d convs halving the spectral axis,
+  then a per-pixel attention pool over it), a 2-d `UNet` and a `MapHead2d`; `k0` is the encoder's spectral kernel
+  and `k1` every spatial kernel. Configs `configs/hyperparams_resblock_2d.toml` (with gradient clipping at 1.0) and
+  `configs/hyperparams_ddpm_2d.toml`, and experiments `experiments/resnet_2d_velocity_map/` and
+  `experiments/ddpm_2d_velocity_map/`. `networks.DIFFUSION_NETWORKS` lists the networks trained by denoising.
+- `conngafit/models/unet.py`: `UNet`, the residual U-Net body (encoder, decoder with skips, self-attention) of
+  the four networks, for cubes (`n_dims=3`) or maps (`n_dims=2`). Its `forward` returns the output and every stage's
+  output.
+- `ResidualBlock`, `DeconvBlock`, `Upsample` and `SelfAttention` take `n_dims` (3 for cubes, the default; 2 for
+  maps), and `ResidualBlock` projects its skip whenever the channel count changes.
+- `blocks.MapHead2d`, the map head on 2-d features (2-d residual blocks, dropout and a 3x3 output conv), and
+  `blocks.MapHead3d`, which first pools the spectral axis, resizes to the map grid and concatenates any extra maps.
+- Optional `n_stages` and `n_head_blocks` hyperparameters for all four networks (U-Net stages and map-head blocks).
+- `check_stage_compatibility` takes `stem_reduction` (1 for networks without a stem) and 2-d map shapes.
 - Several targets at once: `target` in the datasets file may be a list (e.g. `["mass", "rotational_momentum"]`),
   and the ResBlock U-Net (and the dilated ResNet, through its new `n_maps` argument) predicts a map or radial
   curve of each from one shared network. The DDPM denoises the maps of every target together, so each sample is
@@ -107,9 +125,22 @@ All notable changes to this project are documented here. The format follows
   `conngafit.networks.model_summary(model, input_shape)`, a `torchinfo.summary` table of the layers, their output
   shapes and parameter counts (`torchinfo` is a new dependency). Training logs it at the start of each run, and
   `examples/model_summaries.ipynb` prints it for each network.
-- **Breaking:** the ResBlock U-Net's and dilated ResNet's `predict_with_uncertainty` is renamed
-  `predict_with_mc_dropout`, to distinguish its Monte Carlo dropout spread from the 1σ trained with `predict_variance`
-  and from the DDPM's posterior sampling (`GaussianDiffusion.predict_with_uncertainty`, unchanged).
+- **Breaking:** the ResBlock U-Net's and dilated ResNet's `predict_with_uncertainty` method is replaced by the
+  function `conngafit.mc_dropout.predict_with_mc_dropout(model, x, n_samples)`, which serves every regression
+  network; the name distinguishes its Monte Carlo dropout spread from the 1σ trained with `predict_variance` and
+  from the DDPM's posterior sampling (`GaussianDiffusion.predict_with_uncertainty`, unchanged).
+- **Breaking:** the U-Net body of `resblock` and `ddpm` is the shared `unet.UNet`, so its parameters are named
+  `unet.encoder.*`, `unet.decoder.*` (the ResBlock U-Net's `dc_layers`), `unet.upsamples.*` and
+  `unet.encoder_attention.*` / `unet.decoder_attention.*`. Networks of the same seed and settings are unchanged, but
+  checkpoints saved before no longer load. The committed demo network is retrained.
+- **Breaking:** the map heads' 2-d blocks are `ResidualBlock(n_dims=2)` instead of `ResBlock2d`: without time
+  conditioning (the `conv` head) they use BatchNorm2d instead of GroupNorm, every block applies its activation after
+  the skip addition, and a projected skip has a norm. `ConvMapHead` and the DDPM's `MapHead` are merged into
+  `blocks.MapHead3d` with the same parameter names, so `conv`-head and DDPM checkpoints saved before the block
+  change no longer load.
+- **Breaking:** `Upsample`'s `"trilinear"` mode is renamed `"interpolation"`, since it is bilinear for maps.
+- `DeconvBlock` picks BatchNorm without time conditioning and GroupNorm with it, as `ResidualBlock` does, instead of
+  relying on its caller to pass `max_groups=None`.
 - **Breaking:** the ResBlock U-Net's and dilated ResNet's `fc_dropout_rate`, `fc_activation` and `pool_output`
   arguments are renamed `head_dropout_rate`, `head_activation` and `fc_pool_shape` (the ResBlock U-Net's only), since
   the first two also apply to the conv heads. `head_activation` now also sets the `conv` head's activation; its
@@ -166,6 +197,8 @@ All notable changes to this project are documented here. The format follows
 - Radial-curve comparison plots are plotted against radius in kpc, with a labeled colorbar.
 
 ### Removed
+- `blocks.ResBlock2d` and `blocks.ConvMapHead` (replaced by `ResidualBlock(n_dims=2)` and `MapHead3d`), and
+  `blocks.stem_out_shape`, whose only caller was `check_stage_compatibility`.
 - `inference_test_validation_set.py`, which ran a network on the validation set listed in an annotations CSV; the
   datasets no longer use annotation CSVs. Run `use_model.run_inferences` on the validation images instead.
 
