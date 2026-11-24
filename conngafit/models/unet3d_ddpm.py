@@ -91,7 +91,7 @@ class DenoisingUNet3d(nn.Module):
         kernel_stem, kernel_coder: 3-tuple kernel sizes for the stem and all encoder/decoder blocks.
         n_stages: encoder depth (>= 2).
         time_encoding_dim: width of the fixed sinusoidal timestep encoding (default 128, as in Ho et al. 2020).
-        n_head_blocks: number of full-resolution 2-d blocks in the head.
+        n_head_blocks: number of full-resolution 2-d blocks in the head (>= 0).
         block_dropout_rate: channel-wise dropout inside every 3-d block.
         stem_activation, block_activation: zero-arg callables returning nn.Modules.
         upsample_mode: 'interpolation' (default; no checkerboard artifacts, which would look like
@@ -127,8 +127,6 @@ class DenoisingUNet3d(nn.Module):
         super().__init__()
         if n_stages < 2:
             raise ValueError("n_stages must be >= 2 (need at least one skip connection)")
-        if n_head_blocks < 1:
-            raise ValueError("n_head_blocks must be >= 1 (the first block maps C+n_maps -> C channels)")
         input_shape = tuple(int(v) for v in input_shape)
         if len(input_shape) != 3:
             raise ValueError(f"input_shape must be (nSpec, nX, nY); got {input_shape}")

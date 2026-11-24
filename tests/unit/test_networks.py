@@ -5,16 +5,28 @@ import tomllib
 import pytest
 from conftest import CONFIG_DIR
 
+from conngafit.models.spectral_unet2d import SpectralResNet2d
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
 from conngafit.models.unet3d_resblock import NeuralNetwork
-from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
+from conngafit.networks import (
+    DIFFUSION_NETWORKS,
+    HYPERPARAM_KEYS,
+    OPTIONAL_HYPERPARAM_KEYS,
+    build_model,
+    model_summary,
+)
 
 CONFIG_FILES = sorted(CONFIG_DIR.glob("hyperparams_*.toml"))
 # Big enough for the default four encoder stages, which the config files don't override
 BUILD_SHAPE = (32, 32, 32)  # (nSpec, nY, nX)
 # Overrides that make each config file's network small enough to build in a moment
 SMALL_HYPERPARAMS = dict(n_filt0=2, k0=3, k1=3, n_fc=8, n_timesteps=10)
-NETWORK_CLASSES = {"resblock": NeuralNetwork, "ddpm": GaussianDiffusion}
+NETWORK_CLASSES = {
+    "resblock": NeuralNetwork,
+    "ddpm": GaussianDiffusion,
+    "resblock_2d": SpectralResNet2d,
+    "ddpm_2d": GaussianDiffusion,
+}
 
 
 @pytest.mark.parametrize("path", CONFIG_FILES, ids=lambda path: path.name)
@@ -54,5 +66,6 @@ def test_model_summary_counts_every_parameter(path):
     with open(path, "rb") as f:
         hyperparams = {**tomllib.load(f), **SMALL_HYPERPARAMS}
     model = build_model(hyperparams["network"], BUILD_SHAPE, hyperparams)
-    summarized = model.denoiser if hyperparams["network"] == "ddpm" else model  # The DDPM's table is its denoiser's
+    # A DDPM's table is its denoiser's
+    summarized = model.denoiser if hyperparams["network"] in DIFFUSION_NETWORKS else model
     assert model_summary(model, BUILD_SHAPE).total_params == sum(p.numel() for p in summarized.parameters())

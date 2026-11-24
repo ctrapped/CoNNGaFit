@@ -8,10 +8,10 @@ Training data comes from [VeryObservableFIRE](https://github.com/ctrapped/VeryOb
 
 ## Highlights
 
-- **Networks:** a 3-d residual U-Net (`conngafit/models/unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve, optionally with each value's 1σ. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves. A conditional diffusion model (DDPM, `conngafit/models/unet3d_ddpm.py`) instead samples maps from their posterior, giving each pixel's mean and standard deviation.
+- **Networks:** a 3-d residual U-Net (`conngafit/models/unet3d_resblock.py`) that reads a whole spectral datacube and predicts a map (one value per pixel) or a radial curve, optionally with each value's 1σ. Three output heads are available: two fully convolutional heads for large images, and a fully connected head for small images and radial curves. A conditional diffusion model (DDPM, `conngafit/models/unet3d_ddpm.py`) instead samples maps from their posterior, giving each pixel's mean and standard deviation. Both have a 2-d variant (`resblock_2d` and `ddpm_2d`, `conngafit/models/spectral_unet2d.py`) that first compresses each pixel's spectrum with a learned spectral encoder, then predicts the maps with a 2-d U-Net at full map resolution.
 - **Targets:** mass, radial / cylindrical-radial / rotational velocity, and radial / cylindrical-radial / rotational momentum (mass × velocity), all read from VOF's per-pixel annotations.
 - **Configuration:** hyperparameters and datasets live in two TOML files, so a training run is reproducible from its config, and every trained model stores both files alongside its weights.
-- **Development:** 278 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
+- **Development:** 253 automated tests on synthetic data, including end-to-end training runs; continuous integration (GitHub Actions) runs them on Python 3.11 and 3.12, plus [ruff](https://docs.astral.sh/ruff/) linting and formatting.
 
 ## Installation
 
@@ -62,6 +62,8 @@ The hyperparameters file's `network` key chooses the network, and so which other
 |---|---|---|
 | `"resblock"` | `configs/hyperparams_resblock.toml` (radial momentum), `configs/hyperparams_resblock_rc.toml` (rotational velocity) | maps or radial curves, with each value's 1σ if `predict_variance = true` |
 | `"ddpm"` | `configs/hyperparams_ddpm.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples |
+| `"resblock_2d"` | `configs/hyperparams_resblock_2d.toml` | maps only (`radial_bins = 0`), with each value's 1σ if `predict_variance = true` |
+| `"ddpm_2d"` | `configs/hyperparams_ddpm_2d.toml` | maps only (`radial_bins = 0`): the mean and standard deviation of `n_samples` posterior samples |
 
 ### Datasets file
 
@@ -95,21 +97,23 @@ Each path is a VOF output directory, containing one folder per inclination (`i45
 
 | Network | Key | Meaning |
 |---|---|---|
-| Both | `network` | `"resblock"` or `"ddpm"` (see above) |
+| All | `network` | `"resblock"`, `"ddpm"`, `"resblock_2d"` or `"ddpm_2d"` (see above) |
 | | `learning_rate`, `weight_decay`, `epochs` | Optimizer settings and training length |
 | | `optimizer` (optional) | `"adam"` (the default) or `"adamw"`, which decays only the conv and linear weights, decoupled from the gradient step, and typically needs a larger `weight_decay` (1e-2) |
-| | `n_filt0`, `k0`, `k1` | Filters in the first encoder stage (doubling at each later stage), stem kernel size, residual/deconv block kernel size |
+| | `n_filt0`, `k0`, `k1` | Filters in the first encoder stage (doubling at each later stage), stem kernel size, residual/deconv block kernel size. For the 2-d networks: filters in the spectral encoder's first layer and the U-Net's first stage, the encoder's spectral kernel size, and every spatial kernel size |
+| | `n_stages`, `n_head_blocks` (optional) | U-Net stages (the last is the bottleneck) and 2-d residual blocks in the map head; each network's class sets the defaults |
 | | `block_dropout_rate` | Channel-wise dropout inside every block (off by default) |
 | | `label_scaling` | `"none"`, `"symmetric"` (divide by max \|label\|) or `"one-sided"` (map [min, max] to [-1, 1]). The DDPM clips its samples to [-1, 1] unless `"none"` |
 | | `predict_every` | Predict the training and validation sets, and so score their accuracy and MSE, every `predict_every` epochs and on the final epoch; the loss is computed every epoch |
 | | `seed` | Random seed for weight initialization, dropout, batch order and the diffusion noise; the same seed, data and settings on the same machine give the same network |
-| ResBlock | `output_head` | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
-| | `n_fc` (optional) | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
+| ResBlock (`resblock` and `resblock_2d`) | `output_head` (`resblock` only) | `"conv_halfres"`, `"conv"` or `"fc"` (see the comments in the file) |
+| | `n_fc` (optional, `resblock` only) | Width of the fully connected head's hidden layers (`output_head = "fc"` only) |
 | | `dropout_rate` | Dropout before the output layer |
 | | `predict_variance` | `true` also predicts each value's 1σ uncertainty: the network outputs a mean and log-variance and trains with `nn.GaussianNLLLoss` instead of MSE. Needs `label_scaling = "symmetric"` or `"one-sided"` |
 | | `mass_weight_power` (optional) | Weights each pixel's (or ring's) loss by mass to this power, normalized per image (0: unweighted, the default; 0.5 is a good start). Meant for velocity targets; pixels with no mass aren't trained, so their predictions and 1σ aren't meaningful |
-| DDPM | `n_timesteps`, `schedule` | Diffusion steps, and the noise schedule: `"cosine"` or `"linear"` |
+| DDPM (`ddpm` and `ddpm_2d`) | `n_timesteps`, `schedule` | Diffusion steps, and the noise schedule: `"cosine"` or `"linear"` |
 | | `n_samples` | Posterior samples per prediction. Each sample takes `n_timesteps` denoiser passes, so set `predict_every` to keep predictions during training affordable |
+| 2-d (`resblock_2d` and `ddpm_2d`) | `n_spectral_layers` (optional) | Spectral encoder layers, each halving the spectral axis and doubling the channels, before a learned attention pool over what is left of it (default 3) |
 
 ### Command-line options
 
@@ -168,10 +172,13 @@ Predictions, labels and uncertainties in every saved output are in physical unit
 | Module | Description |
 |---|---|
 | `conngafit/train_model.py` | `train`, which trains any network from the hyperparameters and datasets, for `scripts/train_model_unet.py` and from Python |
-| `conngafit/networks.py` | Each network's hyperparameter keys, and `build_model`, which builds either network for `scripts/train_model_unet.py` and `conngafit/use_model.py` |
+| `conngafit/networks.py` | Each network's hyperparameter keys, and `build_model`, which builds any of them for `scripts/train_model_unet.py` and `conngafit/use_model.py` |
 | `conngafit/models/unet3d_resblock.py` | The residual U-Net, `network = "resblock"` |
 | `conngafit/models/unet3d_dilated_resnet.py` | A dilated residual network with no downsampling, with the same interface |
 | `conngafit/models/unet3d_ddpm.py` | A conditional diffusion model that samples maps from their posterior, `network = "ddpm"` |
+| `conngafit/models/spectral_unet2d.py` | The 2-d networks: a spectral encoder, then a 2-d U-Net and map head at full map resolution, `network = "resblock_2d"` and the denoiser of `network = "ddpm_2d"` |
+| `conngafit/models/unet.py` | `UNet`, the residual U-Net body of the four networks above, for cubes or maps |
+| `conngafit/mc_dropout.py` | `predict_with_mc_dropout`, the Monte Carlo dropout uncertainty of a regression network |
 | `conngafit/models/blocks.py`, `conngafit/models/diagnostics.py` | Shared building blocks, and PNG dumps of intermediate activations (latent images) |
 
 `conngafit.networks.model_summary(model, input_shape)` lists a network's layers with each one's output shape and parameter count (with [torchinfo](https://github.com/TylerYep/torchinfo)); training logs it at the start of every run. [`examples/model_summaries.ipynb`](examples/model_summaries.ipynb) prints it for each network.

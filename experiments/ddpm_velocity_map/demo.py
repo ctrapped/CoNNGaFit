@@ -51,7 +51,7 @@ from demo_utils import (  # noqa: E402
     train,
 )
 
-TARGET = "mass"  # The map the experiment predicts: "rotational_velocity" or "mass"
+TARGET = "rotational_velocity"  # The map the experiment predicts: "rotational_velocity" or "mass"
 CURVE_TARGET = "rotational_velocity"  # The target whose samples are binned into the rotation curve
 RUN_NAME = {"rotational_velocity": "ddpm_velocity", "mass": "ddpm_mass"}[TARGET]
 N_RINGS = 10  # Rings in the rotation curve
@@ -68,6 +68,7 @@ HYPERPARAMS = {
     # are predicted only every predict_every epochs
     "predict_every": 50,
     "ema_decay": 0.99,
+    "attention_stages": (1,),
 }
 EPOCHS = 200
 # The training objective's title, axis label and scale

@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 from torchvision.transforms import Compose, Normalize, ToTensor
 
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageInferenceDataset, ring_radii
-from conngafit.networks import build_model
+from conngafit.networks import DIFFUSION_NETWORKS, build_model
 from conngafit.plotting import make_image
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,10 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
 
     save_latent_images is not supported by the ddpm network.
     """
-    if save_latent_images and metadata["network"] == "ddpm":
+    if save_latent_images and metadata["network"] in DIFFUSION_NETWORKS:
         raise ValueError("save_latent_images needs the resblock network")
-    if return_samples and metadata["network"] != "ddpm":
-        raise ValueError("return_samples needs the ddpm network")
+    if return_samples and metadata["network"] not in DIFFUSION_NETWORKS:
+        raise ValueError("return_samples needs a ddpm network")
     image_mean, image_stdv = metadata["image_stats"]  # Normalized like the training images
     # One offset and scale per target, shaped to broadcast over each target's map (or radial curve)
     stats_shape = (-1, 1) if "radial_bins" in metadata else (-1, 1, 1)
@@ -78,7 +78,7 @@ def predict(model, metadata, image_paths, save_latent_images=False, return_std=F
         with torch.no_grad():
             if return_samples:
                 samples = model.sample(cube, int(metadata["n_samples"]))[:, 0]  # (n_samples, n_maps, nY, nX)
-            elif metadata["network"] == "ddpm":
+            elif metadata["network"] in DIFFUSION_NETWORKS:
                 mean, std = model.predict_with_uncertainty(cube, int(metadata["n_samples"]))
             else:
                 output = model(cube, save_latent_images)

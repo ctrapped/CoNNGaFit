@@ -101,43 +101,6 @@ def _match_spatial(x, ref):
     return x[tuple(slices)]
 
 
-#### Input-shape checks ####
-def _check_stage_compatibility(input_shape, n_stages):
-    """Raise ValueError unless the input survives n_stages-1 halvings after the stem.
-
-    The encoder has n_stages stages: the first keeps its shape, each later one
-    downsamples every axis to ceil(N/2). So after the stem there are n_stages-1
-    halvings, and an axis that reaches 1 before they are all done cannot be
-    downsampled again. The message reports the tightest axis and the largest
-    n_stages that axis allows. Returns the post-stem (nSpec, nX, nY) shape on success.
-    """
-    # The Stem is a stride-2 conv then a stride-2 maxpool, each padded by _ceil_conv_pad to give exactly
-    # ceil(N/2). Ceiling division composes, ceil(ceil(N/2)/2) = ceil(N/4), so every axis ends at ceil(N/4)
-    # for any kernel size. -(-n // 4) is integer ceil(n/4): floor division of -n rounds toward -inf.
-    stem_shape = tuple(-(-n // 4) for n in input_shape)
-    n_halvings = n_stages - 1
-    tightest = (1 << 30, "", 0, 0)  # (max_halvings, axis_name, input_len, post_stem_len)
-    for name, n0, n_stem in zip(("spectral", "x", "y"), input_shape, stem_shape):
-        if n_stem < 1:
-            raise ValueError(
-                f"input {name} axis = {n0} is too small: the stem reduces it to {n_stem} (< 1). Enlarge that axis."
-            )
-        cap, n = 0, n_stem  # count ceil-halvings this axis can take before hitting 1
-        while n >= 2:
-            n = -(-n // 2)  # ceil(n/2), the encoder's downsample
-            cap += 1
-        if cap < tightest[0]:
-            tightest = (cap, name, n0, n_stem)
-    if tightest[0] < n_halvings:
-        cap, name, n0, n_stem = tightest
-        raise ValueError(
-            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the "
-            f"{name} axis (input {n0}, {n_stem} after the stem) supports at most {cap}. "
-            f"Use n_stages <= {cap + 1} or enlarge that axis."
-        )
-    return stem_shape
-
-
 #### Input stem ####
 class Stem(nn.Module):
     """Reduces the raw input cube by a factor of 4 along every spatial/spectral axis, via a
@@ -180,14 +143,14 @@ class Stem(nn.Module):
 #### Input-shape checks ####
 def check_stage_compatibility(input_shape, n_stages, stem_reduction=4):
     """The encoder has n_stages stages: the first keeps its shape, each later one downsamples every axis to
-    ceil(N/2). Check that every axis can be halved n_stages - 1 times after the stem, which divides every axis by
-    stem_reduction (4 for the Stem, 1 for a 2-d map with no stem). input_shape is (nSpec, nX, nY), or (nX, nY) for
-    a map. If not, raise a ValueError naming the smallest axis and the largest n_stages it allows."""
-    stem_shape = tuple(math.ceil(n / stem_reduction) for n in input_shape)
+    ceil(N/2). Check that every axis can be halved n_stages - 1 times from the first stage's shape: the input
+    divided by stem_reduction (4 after the Stem, 1 for a 2-d map with no stem). input_shape is (nSpec, nX, nY), or
+    (nX, nY) for a map. If not, raise a ValueError naming the smallest axis and the largest n_stages it allows."""
+    first_shape = tuple(math.ceil(n / stem_reduction) for n in input_shape)
     n_halvings = n_stages - 1  # Encoder stage 0 keeps its input shape; each later stage halves every axis
     names = ("spectral", "x", "y")[-len(input_shape) :]
     max_halvings = []
-    for n in stem_shape:
+    for n in first_shape:
         count = 0  # ceil-halvings this axis can take before reaching 1
         while n > 1:
             n = math.ceil(n / 2)
@@ -196,8 +159,8 @@ def check_stage_compatibility(input_shape, n_stages, stem_reduction=4):
     i = int(np.argmin(max_halvings))  # the axis that allows the fewest halvings
     if max_halvings[i] < n_halvings:
         raise ValueError(
-            f"n_stages={n_stages} needs {n_halvings} downsamplings after the stem, but the {names[i]} axis "
-            f"(input {input_shape[i]}, {stem_shape[i]} after the stem) supports at most {max_halvings[i]}. "
+            f"n_stages={n_stages} needs {n_halvings} downsamplings, but the {names[i]} axis "
+            f"(input {input_shape[i]}, {first_shape[i]} at the first stage) supports at most {max_halvings[i]}. "
             f"Use n_stages <= {max_halvings[i] + 1} or enlarge that axis."
         )
 
@@ -752,7 +715,7 @@ class HalfResConvHead(nn.Module):
 
 #### Spectral encoder: datacube -> per-pixel features ####
 class SpectralEncoder(nn.Module):
-    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> GroupNorm ->
+    """Turn every pixel's spectrum into features at full spatial resolution: n_layers of Conv3d -> norm ->
     activation, each halving the spectral axis (to ceil(S/2)) and keeping X and Y, then a SpectralAttentionPool that
     collapses what is left of the spectral axis. Each layer doubles the channels.
 
@@ -761,7 +724,8 @@ class SpectralEncoder(nn.Module):
         n_layers: number of conv layers.
         kernel_size: 3-tuple (spectral, x, y) kernel of every conv.
         activation: zero-arg callable returning an nn.Module.
-        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)).
+        max_groups: upper bound on GroupNorm groups (actual = gcd(channels, max_groups)); None selects BatchNorm3d,
+            as the blocks use without time conditioning.
     """
 
     def __init__(self, channels, n_layers, kernel_size, activation=nn.SiLU, max_groups=8):
@@ -775,7 +739,7 @@ class SpectralEncoder(nn.Module):
             self.layers.append(
                 nn.Sequential(
                     nn.Conv3d(layer_in, layer_out, kernel_size=kernel_size, stride=stride),
-                    nn.GroupNorm(math.gcd(layer_out, max_groups), layer_out),
+                    _norm(layer_out, max_groups, n_dims=3),
                     activation(),
                 )
             )

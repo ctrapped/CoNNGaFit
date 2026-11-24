@@ -25,7 +25,13 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 from conngafit import plotting
 from conngafit.datasets import TARGET_SETTINGS, CoNNGaFitImageDataset, inclination_folders
 from conngafit.models.unet3d_ddpm import GaussianDiffusion
-from conngafit.networks import HYPERPARAM_KEYS, OPTIONAL_HYPERPARAM_KEYS, build_model, model_summary
+from conngafit.networks import (
+    DIFFUSION_NETWORKS,
+    HYPERPARAM_KEYS,
+    OPTIONAL_HYPERPARAM_KEYS,
+    build_model,
+    model_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -690,7 +696,7 @@ def train(
 
     # Loss and optimizer
     n_samples = hyperparams.get("n_samples")  # ddpm only: posterior samples per prediction
-    if network == "ddpm":
+    if network in DIFFUSION_NETWORKS:
         loss_label = "Denoising MSE"
     else:
         loss_label = ("Weighted " if mass_weight_power > 0 else "") + ("Gaussian NLL" if predict_variance else "MSE")
@@ -733,7 +739,7 @@ def train(
     # validation loss scores the same noisy maps and its changes reflect the model rather than the draw. The
     # validation dataloader is not shuffled, so batch i holds the same cubes every epoch.
     validation_draws = None
-    if network == "ddpm":
+    if network in DIFFUSION_NETWORKS:
         # One timestep per validation cube, stratified over the whole set (see GaussianDiffusion.sample_timesteps), so
         # the fixed draws cover the noise levels evenly; batch i takes the next len(batch) of them, in dataset order.
         validation_t = model.sample_timesteps(len(validation_data), device=device)
