@@ -106,6 +106,10 @@ All notable changes to this project are documented here. The format follows
   `tests/integration/test_pipeline_ddpm.py` (the DDPM's training and inference pipeline).
 
 ### Changed
+- The DDPM denoisers have `encode(cube)` and `denoise(features, y_t, t)` methods, and `forward` runs both.
+  `GaussianDiffusion.sample` encodes each cube once and runs only `denoise` at each reverse step. As a result,
+  `ddpm_2d` runs its spectral encoder once per cube instead of n_samples × T times, which makes sampling faster.
+   The samples are unchanged, and so is `ddpm`.
 - **Breaking:** the DDPM's timestep conditioning is wider. The sinusoidal encoding defaults to 128 dims (optional
   `time_encoding_dim` hyperparameter) instead of `n_filt0`, and the learned embedding passed to every block is as
   wide as the widest encoder stage instead of `4 * n_filt0`. The blocks' `t_dim` argument is renamed

@@ -140,7 +140,7 @@ class SpectralDenoisingUNet2d(nn.Module):
                    starts by predicting eps = 0
     Every U-Net and head block uses GroupNorm and is FiLM-conditioned on the timestep embedding, which is as wide as
     the widest U-Net stage (n_filt0 * 2**(n_stages - 1)).
-    The encoder sees only the spectral cube: encode() runs it spectral encoder, and denoise() runs the rest.
+    The encoder sees only the spectral cube: encode() runs its spectral encoder, and denoise() runs the rest.
 
     Parameters:
         input_shape: (nSpec, nX, nY) of the cube; nX and nY must allow n_stages - 1 halvings.

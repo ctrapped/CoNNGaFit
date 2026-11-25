@@ -178,7 +178,8 @@ channels.
 concatenated to the encoder features at full resolution, a 3×3 conv to `n_filt0`, a 2-d `UNet` and a `MapHead2d`
 whose output conv starts at zero. Every U-Net and head block uses GroupNorm and FiLM on the timestep embedding (as
 wide as the widest U-Net stage). Training and prediction are those of the DDPM. The head doesn't re-inject the noisy
-maps, since they already enter the U-Net at full resolution.
+maps, since they already enter the U-Net at full resolution. The encoder sees only the cube, so sampling runs it
+once per cube.
 
 ### Config
 
