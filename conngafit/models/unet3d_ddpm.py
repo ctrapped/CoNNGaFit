@@ -173,26 +173,40 @@ class DenoisingUNet3d(nn.Module):
             zero_init_output=True,
         )
 
-    def forward(self, cube, y_t, t):
-        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with
-        (H, W) = output_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
-        maps_shape = (self.n_maps, *self.output_shape)
-        if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
+    def encode(self, cube):
+        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape. Returns the cube with a channel axis,
+        (B, 1, nSpec, nX, nY): the stem sees the noisy maps alongside the cube."""
+        if tuple(cube.shape[1:]) != self.input_shape:
             raise ValueError(
-                f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
-                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
+                f"cube {tuple(cube.shape[1:])} doesn't match the input_shape {self.input_shape} this model was built for"
             )
-        _, n_spec, n_x, n_y = cube.shape
+        return cube.unsqueeze(1)
+
+    def denoise(self, features, y_t, t):
+        """features: encode()'s output; y_t: (B, n_maps, H, W) noisy maps, with (H, W) = output_shape;
+        t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
+        maps_shape = (self.n_maps, *self.output_shape)
+        if tuple(y_t.shape[1:]) != maps_shape:
+            raise ValueError(
+                f"maps {tuple(y_t.shape[1:])} don't match the (n_maps, *output_shape) {maps_shape} this model was "
+                "built for"
+            )
+        _, _, n_spec, n_x, n_y = features.shape
         t_emb = self.time_embed(t)
 
         # Put the noisy maps on the cube grid (a no-op when map_shape == (nX, nY)) and tile them along
         # the spectral axis, so the stem sees the cube and the current maps at every voxel.
         y_vol = F.interpolate(y_t, size=(n_x, n_y), mode="bilinear", align_corners=False)
         y_vol = y_vol.unsqueeze(2).expand(-1, -1, n_spec, -1, -1)
-        h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
+        h = self.stem(torch.cat([features, y_vol], dim=1))
 
         h, _ = self.unet(h, t_emb)
         return self.head(h, y_t.shape[-2:], extra=y_t, t_emb=t_emb)
+
+    def forward(self, cube, y_t, t):
+        """cube: (B, nSpec, nX, nY); y_t: (B, n_maps, H, W) noisy maps; t: (B,) timesteps.
+        Returns predicted noise, shape (B, n_maps, H, W)."""
+        return self.denoise(self.encode(cube), y_t, t)
 
 
 #### Diffusion process ####

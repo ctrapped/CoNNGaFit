@@ -140,6 +140,7 @@ class SpectralDenoisingUNet2d(nn.Module):
                    starts by predicting eps = 0
     Every U-Net and head block uses GroupNorm and is FiLM-conditioned on the timestep embedding, which is as wide as
     the widest U-Net stage (n_filt0 * 2**(n_stages - 1)).
+    The encoder sees only the spectral cube: encode() runs it spectral encoder, and denoise() runs the rest.
 
     Parameters:
         input_shape: (nSpec, nX, nY) of the cube; nX and nY must allow n_stages - 1 halvings.
@@ -211,17 +212,30 @@ class SpectralDenoisingUNet2d(nn.Module):
             zero_init_output=True,
         )
 
-    def forward(self, cube, y_t, t):
-        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, nX, nY) noisy maps;
-        t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, nX, nY)."""
-        maps_shape = (self.n_maps, *self.output_shape)
-        if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
+    def encode(self, cube):
+        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape. Returns the encoder's features,
+        (B, C_enc, nX, nY)."""
+        if tuple(cube.shape[1:]) != self.input_shape:
             raise ValueError(
-                f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
-                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
+                f"cube {tuple(cube.shape[1:])} doesn't match the input_shape {self.input_shape} this model was built for"
+            )
+        return self.encoder(cube.unsqueeze(1))
+
+    def denoise(self, features, y_t, t):
+        """features: encode()'s output; y_t: (B, n_maps, nX, nY) noisy maps; t: (B,) timesteps.
+        Returns predicted noise, shape (B, n_maps, nX, nY)."""
+        maps_shape = (self.n_maps, *self.output_shape)
+        if tuple(y_t.shape[1:]) != maps_shape:
+            raise ValueError(
+                f"maps {tuple(y_t.shape[1:])} don't match the (n_maps, *output_shape) {maps_shape} this model was "
+                "built for"
             )
         t_emb = self.time_embed(t)
-        h = self.encoder(cube.unsqueeze(1))  # (B, C_enc, nX, nY)
-        h = self.input_conv(torch.cat([h, y_t], dim=1))  # (B, n_filt0, nX, nY)
+        h = self.input_conv(torch.cat([features, y_t], dim=1))  # (B, n_filt0, nX, nY)
         h, _ = self.unet(h, t_emb)
         return self.head(h, t_emb)  # (B, n_maps, nX, nY)
+
+    def forward(self, cube, y_t, t):
+        """cube: (B, nSpec, nX, nY); y_t: (B, n_maps, nX, nY) noisy maps; t: (B,) timesteps.
+        Returns predicted noise, shape (B, n_maps, nX, nY)."""
+        return self.denoise(self.encode(cube), y_t, t)
