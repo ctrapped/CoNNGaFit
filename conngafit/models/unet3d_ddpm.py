@@ -305,21 +305,25 @@ class GaussianDiffusion(nn.Module):
         """
         n_batch = cube.shape[0]
         shape = (self.n_maps, *self.output_shape)
-        cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
-        chunk = max_batch or cubes.shape[0]
-        out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
+        chunk = max_batch or n_batch * n_samples
+        # Each cube's features don't depend on the timestep or the noisy maps, so they are computed once
+        features = torch.cat([self.denoiser.encode(c) for c in cube.float().split(chunk)])
+        features = torch.cat([features] * n_samples)  # one copy per sample
+        out = torch.cat([self._reverse(f, shape) for f in features.split(chunk)])
         return out.view(n_samples, n_batch, *shape)
 
-    def _reverse(self, cube, shape):
-        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step
-        draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's estimate of y_0."""
-        y = torch.randn(cube.shape[0], *shape, device=cube.device)
+    def _reverse(self, features, shape):
+        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of the denoiser's cube features, one step per
+        timestep: each step draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's
+        estimate of y_0."""
+        n_batch = features.shape[0]
+        y = torch.randn(n_batch, *shape, device=features.device)
         for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
             ab_prev = self.alpha_bar_prev[t]
             alpha = ab / ab_prev  # alpha_t = 1 - beta_t
 
-            eps = self.denoiser(cube, y, torch.full((cube.shape[0],), t, device=cube.device))
+            eps = self.denoiser.denoise(features, y, torch.full((n_batch,), t, device=features.device))
             # Invert the forward process y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)
             # for the current guess of the clean map.
             y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()
