@@ -173,26 +173,40 @@ class DenoisingUNet3d(nn.Module):
             zero_init_output=True,
         )
 
-    def forward(self, cube, y_t, t):
-        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape; y_t: (B, n_maps, H, W) noisy maps, with
-        (H, W) = output_shape; t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
-        maps_shape = (self.n_maps, *self.output_shape)
-        if tuple(cube.shape[1:]) != self.input_shape or tuple(y_t.shape[1:]) != maps_shape:
+    def encode(self, cube):
+        """cube: (B, nSpec, nX, nY), with (nSpec, nX, nY) = input_shape. Returns the cube with a channel axis,
+        (B, 1, nSpec, nX, nY): the stem sees the noisy maps alongside the cube."""
+        if tuple(cube.shape[1:]) != self.input_shape:
             raise ValueError(
-                f"cube {tuple(cube.shape[1:])} and maps {tuple(y_t.shape[1:])} don't match the shapes this model "
-                f"was built for: input_shape {self.input_shape}, (n_maps, *output_shape) {maps_shape}"
+                f"cube {tuple(cube.shape[1:])} doesn't match the input_shape {self.input_shape} this model was built for"
             )
-        _, n_spec, n_x, n_y = cube.shape
+        return cube.unsqueeze(1)
+
+    def denoise(self, features, y_t, t):
+        """features: encode()'s output; y_t: (B, n_maps, H, W) noisy maps, with (H, W) = output_shape;
+        t: (B,) timesteps. Returns predicted noise, shape (B, n_maps, H, W)."""
+        maps_shape = (self.n_maps, *self.output_shape)
+        if tuple(y_t.shape[1:]) != maps_shape:
+            raise ValueError(
+                f"maps {tuple(y_t.shape[1:])} don't match the (n_maps, *output_shape) {maps_shape} this model was "
+                "built for"
+            )
+        _, _, n_spec, n_x, n_y = features.shape
         t_emb = self.time_embed(t)
 
         # Put the noisy maps on the cube grid (a no-op when map_shape == (nX, nY)) and tile them along
         # the spectral axis, so the stem sees the cube and the current maps at every voxel.
         y_vol = F.interpolate(y_t, size=(n_x, n_y), mode="bilinear", align_corners=False)
         y_vol = y_vol.unsqueeze(2).expand(-1, -1, n_spec, -1, -1)
-        h = self.stem(torch.cat([cube.unsqueeze(1), y_vol], dim=1))
+        h = self.stem(torch.cat([features, y_vol], dim=1))
 
         h, _ = self.unet(h, t_emb)
         return self.head(h, y_t.shape[-2:], extra=y_t, t_emb=t_emb)
+
+    def forward(self, cube, y_t, t):
+        """cube: (B, nSpec, nX, nY); y_t: (B, n_maps, H, W) noisy maps; t: (B,) timesteps.
+        Returns predicted noise, shape (B, n_maps, H, W)."""
+        return self.denoise(self.encode(cube), y_t, t)
 
 
 #### Diffusion process ####
@@ -291,21 +305,25 @@ class GaussianDiffusion(nn.Module):
         """
         n_batch = cube.shape[0]
         shape = (self.n_maps, *self.output_shape)
-        cubes = cube.float().repeat(n_samples, 1, 1, 1)  # one copy per sample
-        chunk = max_batch or cubes.shape[0]
-        out = torch.cat([self._reverse(c, shape) for c in cubes.split(chunk)])
+        chunk = max_batch or n_batch * n_samples
+        # Each cube's features don't depend on the timestep or the noisy maps, so they are computed once
+        features = torch.cat([self.denoiser.encode(c) for c in cube.float().split(chunk)])
+        features = torch.cat([features] * n_samples)  # one copy per sample
+        out = torch.cat([self._reverse(f, shape) for f in features.split(chunk)])
         return out.view(n_samples, n_batch, *shape)
 
-    def _reverse(self, cube, shape):
-        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of cubes, one step per timestep: each step
-        draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's estimate of y_0."""
-        y = torch.randn(cube.shape[0], *shape, device=cube.device)
+    def _reverse(self, features, shape):
+        """Reverse diffusion from y_T ~ N(0, I) to y_0 for one batch of the denoiser's cube features, one step per
+        timestep: each step draws y_{t-1} from the Gaussian posterior q(y_{t-1} | y_t, y_0) around the denoiser's
+        estimate of y_0."""
+        n_batch = features.shape[0]
+        y = torch.randn(n_batch, *shape, device=features.device)
         for t in reversed(range(self.n_timesteps)):
             ab = self.alpha_bar[t]
             ab_prev = self.alpha_bar_prev[t]
             alpha = ab / ab_prev  # alpha_t = 1 - beta_t
 
-            eps = self.denoiser(cube, y, torch.full((cube.shape[0],), t, device=cube.device))
+            eps = self.denoiser.denoise(features, y, torch.full((n_batch,), t, device=features.device))
             # Invert the forward process y_t = sqrt(abar_t) y_0 + sqrt(1 - abar_t) eps (Ho et al. 2020, Eq. 4)
             # for the current guess of the clean map.
             y0 = (y - (1 - ab).sqrt() * eps) / ab.sqrt()

@@ -215,7 +215,13 @@ def test_predict_with_uncertainty_shapes(make_diffusion, n_maps):
 def test_sampling_denoises_every_sample_at_every_timestep(make_diffusion):
     diffusion = make_diffusion()
     timesteps = []
-    diffusion.denoiser.register_forward_hook(lambda m, inputs, out: timesteps.append(inputs[2].tolist()))
+    denoise = diffusion.denoiser.denoise
+
+    def recording_denoise(features, y_t, t):
+        timesteps.append(t.tolist())
+        return denoise(features, y_t, t)
+
+    diffusion.denoiser.denoise = recording_denoise
     diffusion.predict_with_uncertainty(torch.randn(BATCH_SIZE, *INPUT_SHAPE), N_SAMPLES)
     # one call per timestep, from T - 1 down to 0, each denoising every sample of every cube
     assert timesteps == [[t] * N_SAMPLES * BATCH_SIZE for t in reversed(range(N_TIMESTEPS))]
